@@ -53,6 +53,8 @@ textarea{resize:vertical;min-height:60px}
 .metric{background:var(--bg);padding:12px;border-radius:6px;text-align:center}
 .metric .value{font-size:24px;font-weight:bold;color:var(--accent)}
 .inline{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.upload-zone{border:2px dashed rgba(255,255,255,.15);border-radius:6px;padding:12px;text-align:center;color:var(--muted);font-size:12px;cursor:pointer;transition:border-color .2s}
+.upload-zone:hover,.upload-zone.dragover{border-color:var(--accent);color:var(--accent)}
 </style>
 </head>
 <body>
@@ -263,11 +265,25 @@ textarea{resize:vertical;min-height:60px}
     <h3>Add Tenant</h3>
     <form onsubmit="addTenant(event)">
       <input id="t-name" placeholder="Name" required>
+      <div style="margin-bottom:8px">
+        <textarea id="t-paste" placeholder="Paste OCI config here (optional)&#10;[DEFAULT]&#10;user=ocid1.user.oc1..xxx&#10;fingerprint=xx:xx:xx:...&#10;tenancy=ocid1.tenancy.oc1..xxx&#10;region=us-ashburn-1&#10;key_file=~/.oci/key.pem" style="min-height:80px;font-size:12px" oninput="parseOCIConfig()"></textarea>
+      </div>
       <input id="t-ocid" placeholder="Tenancy OCID" required>
       <input id="t-user" placeholder="User OCID" required>
       <input id="t-region" placeholder="Region" required>
       <input id="t-fp" placeholder="Fingerprint" required>
-      <input id="t-key" placeholder="Key Filename (e.g. key.pem)" required>
+      <div style="margin-bottom:8px">
+        <label style="display:block;margin-bottom:4px;color:var(--muted);font-size:12px">Private Key (.pem)</label>
+        <div style="display:flex;gap:6px">
+          <select id="t-key-sel" onchange="onKeySelect()" style="flex:1;margin:0"><option value="">Choose uploaded key...</option></select>
+          <button class="btn btn-ghost" type="button" style="white-space:nowrap" onclick="$('t-key-file').click()">Upload</button>
+          <button class="btn btn-ghost" type="button" style="white-space:nowrap" onclick="$('t-key-batch').click()">Batch</button>
+        </div>
+        <input id="t-key-file" type="file" accept=".pem" style="display:none" onchange="onKeyFilePicked()">
+        <input id="t-key-batch" type="file" accept=".pem" multiple style="display:none" onchange="onBatchKeysPicked()">
+        <div id="t-key-drop" class="upload-zone" style="margin-top:6px">Drop .pem file here</div>
+        <div id="t-key-info" style="font-size:12px;margin-top:4px;color:var(--green);display:none"></div>
+      </div>
       <button class="btn btn-s">Save</button>
       <button class="btn" type="button" onclick="closeModal('tenant-modal')">Cancel</button>
     </form>
@@ -381,14 +397,127 @@ async function loadTenants() {
 
 async function addTenant(e) {
   e.preventDefault();
+  let keyFile = '';
+  // use dropdown if selected, else uploaded file name
+  const sel = $('t-key-sel').value;
+  const infoDiv = $('t-key-info');
+  if (sel) {
+    keyFile = sel;
+  } else if (infoDiv.style.display !== 'none' && infoDiv.textContent) {
+    // file was just uploaded, name stored in data attribute
+    keyFile = infoDiv.dataset.name || '';
+  }
+  if (!keyFile) { alert('Please select or upload a .pem key file'); return; }
   const body = JSON.stringify({
     name: $('t-name').value, tenancyOcid: $('t-ocid').value, userOcid: $('t-user').value,
-    region: $('t-region').value, fingerprint: $('t-fp').value, keyFile: $('t-key').value
+    region: $('t-region').value, fingerprint: $('t-fp').value, keyFile: keyFile
   });
   await api('/api/tenants', {method:'POST', body});
   closeModal('tenant-modal');
   loadTenants();
 }
+
+// Parse OCI config paste
+function parseOCIConfig() {
+  const txt = $('t-paste').value.trim(); if (!txt) return;
+  const m = {};
+  txt.split('\n').forEach(line => {
+    line = line.trim();
+    if (!line || line.startsWith('[')) return;
+    const eq = line.indexOf('=');
+    if (eq < 0) return;
+    const k = line.substring(0, eq).trim().toLowerCase();
+    const v = line.substring(eq+1).trim();
+    m[k] = v;
+  });
+  if (m.user) $('t-user').value = m.user;
+  if (m.tenancy) $('t-ocid').value = m.tenancy;
+  if (m.region) $('t-region').value = m.region;
+  if (m.fingerprint) $('t-fp').value = m.fingerprint;
+  if (m.key_file) {
+    const bn = m.key_file.replace(/\\/g,'/').split('/').pop();
+    $('t-key-sel').value = '';
+    const infoDiv = $('t-key-info');
+    infoDiv.style.display = 'block';
+    infoDiv.textContent = 'Will use: ' + bn + ' (upload it if not yet on server)';
+    infoDiv.dataset.name = bn;
+    infoDiv.style.color = 'var(--warn)';
+  }
+}
+
+// Key file management
+async function loadKeys() {
+  const r = await api('/api/keys'); if (!r) return;
+  const keys = await r.json();
+  const sel = $('t-key-sel');
+  sel.innerHTML = '<option value="">Choose uploaded key...</option>' +
+    keys.map(k => `<option value="${esc(k.name)}">${esc(k.name)} (${(k.size/1024).toFixed(1)}KB, ${k.time})</option>`).join('');
+}
+
+function onKeySelect() {
+  const v = $('t-key-sel').value;
+  const infoDiv = $('t-key-info');
+  if (v) {
+    infoDiv.style.display = 'block';
+    infoDiv.textContent = 'Using server key: ' + v;
+    infoDiv.style.color = 'var(--green)';
+    infoDiv.dataset.name = v;
+  } else {
+    infoDiv.style.display = 'none';
+    infoDiv.dataset.name = '';
+  }
+}
+
+async function onKeyFilePicked() {
+  const file = $('t-key-file').files[0];
+  if (!file) return;
+  await uploadKeyFile(file);
+}
+
+async function onBatchKeysPicked() {
+  const files = $('t-key-batch').files;
+  if (!files.length) return;
+  const fd = new FormData();
+  for (const f of files) fd.append('files', f);
+  await api('/api/keys', {method:'POST', body:fd});
+  $('t-key-batch').value = '';
+  loadKeys();
+}
+
+async function uploadKeyFile(file) {
+  if (!file.name.endsWith('.pem')) { alert('Only .pem files allowed'); return; }
+  const fd = new FormData();
+  fd.append('files', file);
+  const r = await api('/api/keys', {method:'POST', body:fd});
+  if (!r) return;
+  const result = await r.json();
+  const infoDiv = $('t-key-info');
+  infoDiv.style.display = 'block';
+  infoDiv.textContent = 'Uploaded: ' + result.saved.join(', ');
+  infoDiv.style.color = 'var(--green)';
+  infoDiv.dataset.name = result.saved[0] || '';
+  $('t-key-file').value = '';
+  loadKeys();
+}
+
+// Drag-drop on upload zone
+(function(){
+  const zone = document.getElementById('t-key-drop');
+  if (!zone) return;
+  zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('dragover'); });
+  zone.addEventListener('dragleave', () => zone.classList.remove('dragover'));
+  zone.addEventListener('drop', e => {
+    e.preventDefault();
+    zone.classList.remove('dragover');
+    const files = e.dataTransfer.files;
+    if (files.length === 1) { uploadKeyFile(files[0]); return; }
+    // batch
+    const fd = new FormData();
+    for (const f of files) fd.append('files', f);
+    api('/api/keys', {method:'POST', body:fd}).then(() => { loadKeys(); });
+  });
+  zone.addEventListener('click', () => $('t-key-file').click());
+})();
 
 async function delTenant(id) { if(confirm('Delete tenant #'+id+' and all instances?')){await api('/api/tenants/'+id,{method:'DELETE'});loadTenants();loadInstances();} }
 async function syncTenant(id) { await api('/api/sync/'+id); loadInstances(); loadTasks(); }
@@ -756,7 +885,7 @@ async function loadAudit() {
 // Helpers
 function $(id) { return document.getElementById(id); }
 function esc(s) { return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;').replace(/\\/g,'&#92;'); }
-function openModal(id) { document.getElementById(id).classList.add('open'); }
+function openModal(id) { document.getElementById(id).classList.add('open'); if (id==='tenant-modal') loadKeys(); }
 function closeModal(id) { document.getElementById(id).classList.remove('open'); }
 </script>
 </body>

@@ -1,32 +1,24 @@
-# syntax=docker/dockerfile:1.7
+FROM node:22-alpine AS frontend
+WORKDIR /src
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci
+COPY frontend/ ./
+RUN npm run build
 
 FROM golang:1.26-alpine AS builder
-
-RUN apk add --no-cache git ca-certificates
-
-# prepare passwd/group for scratch
-RUN mkdir -p /app/oci-helper/keys && \
-    chmod 777 /app/oci-helper /app/oci-helper/keys && \
-    echo "nobody:x:65534:65534:nobody:/:/sbin/nologin" > /etc/passwd && \
-    echo "nobody:x:65534:" > /etc/group
-
-WORKDIR /src
+RUN apk add --no-cache gcc musl-dev
+WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
-
 COPY . .
-RUN --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" \
-    -o /oci-helper ./cmd/server
+COPY --from=frontend /src/dist internal/handler/dist
+RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o oci-helper ./cmd/server
 
 FROM scratch
-
-COPY --from=builder /oci-helper /oci-helper
-COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
-COPY --from=builder /etc/passwd /etc/group /etc/
-COPY --from=builder /app/oci-helper /app/oci-helper
-
-USER 65534
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+COPY --from=builder /etc/passwd /etc/passwd
+COPY --from=builder /app/oci-helper /oci-helper
+RUN mkdir -p /app/oci-helper/keys && chmod 777 /app/oci-helper /app/oci-helper/keys
+USER nobody
 EXPOSE 8818
-ENV PORT=8818
-ENTRYPOINT ["/oci-helper"]
+CMD ["/oci-helper"]

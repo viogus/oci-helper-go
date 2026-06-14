@@ -50,7 +50,7 @@ func New(cfg *config.Config, store *db.Store) *Server {
 }
 
 func (s *Server) routes() {
-	// API
+	// API — exact paths
 	s.mux.HandleFunc("/api/login", s.handleLogin)
 	s.mux.HandleFunc("/api/logout", s.handleLogout)
 	s.mux.HandleFunc("/api/config", s.withAuth(s.handleConfig))
@@ -60,19 +60,14 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/mfa/verify", s.withAuth(s.handleMFAVerify))
 	s.mux.HandleFunc("/api/mfa/disable", s.withAuth(s.handleMFADisable))
 	s.mux.HandleFunc("/api/tenants", s.withAuth(s.handleTenants))
-	s.mux.HandleFunc("/api/tenants/", s.withAuth(s.handleTenantByID))
 	s.mux.HandleFunc("/api/instances", s.withAuth(s.handleInstances))
-	s.mux.HandleFunc("/api/instances/", s.withAuth(s.handleInstanceAction))
 	s.mux.HandleFunc("/api/tasks", s.withAuth(s.handleTasks))
 	s.mux.HandleFunc("/api/audit", s.withAuth(s.handleAudit))
 	s.mux.HandleFunc("/api/ai/chat", s.withAuth(s.handleAIChat))
-	s.mux.HandleFunc("/api/shell/", s.withAuth(s.handleShell))
-	s.mux.HandleFunc("/api/cloudflare/", s.withAuth(s.handleCloudflare))
 	s.mux.HandleFunc("/api/telegram/webhook", s.handleTelegramWebhook)
 	s.mux.HandleFunc("/api/backup", s.withAuth(s.handleBackup))
 	s.mux.HandleFunc("/api/restore", s.withAuth(s.handleRestore))
 	s.mux.HandleFunc("/api/public-ips", s.withAuth(s.handlePublicIPs))
-	s.mux.HandleFunc("/api/public-ips/", s.withAuth(s.handlePublicIPByID))
 	s.mux.HandleFunc("/api/images", s.withAuth(s.handleListImages))
 	s.mux.HandleFunc("/api/shapes", s.withAuth(s.handleListShapes))
 	s.mux.HandleFunc("/api/vcns", s.withAuth(s.handleListVCNs))
@@ -81,8 +76,47 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/instances/batch-start", s.withAuth(s.handleBatchStart))
 	s.mux.HandleFunc("/api/metrics", s.withAuth(s.handleMetrics))
 	s.mux.HandleFunc("/api/boot-volumes", s.withAuth(s.handleBootVolumes))
-	s.mux.HandleFunc("/api/boot-volumes/", s.withAuth(s.handleBootVolumeByID))
 	s.mux.HandleFunc("/api/keys", s.withAuth(s.handleKeys))
+
+	// NEW exact-path routes
+	// instance mutations
+	s.mux.HandleFunc("/api/instances/change-shape", s.withAuth(s.handleChangeShape))
+	s.mux.HandleFunc("/api/instances/change-boot-volume", s.withAuth(s.handleChangeBootVolume))
+	s.mux.HandleFunc("/api/instances/attach-ipv6", s.withAuth(s.handleAttachIPv6))
+	s.mux.HandleFunc("/api/instances/update-name", s.withAuth(s.handleUpdateInstanceName))
+	s.mux.HandleFunc("/api/instances/change-ip", s.withAuth(s.handleChangeIP))
+	s.mux.HandleFunc("/api/instances/check-alive", s.withAuth(s.handleCheckAlive))
+	s.mux.HandleFunc("/api/instances/one-click-500m", s.withAuth(s.handleOneClick500M))
+	s.mux.HandleFunc("/api/instances/one-click-close-500m", s.withAuth(s.handleOneClickClose500M))
+	s.mux.HandleFunc("/api/instances/auto-rescue", s.withAuth(s.handleAutoRescue))
+	s.mux.HandleFunc("/api/instances/update-shape", s.withAuth(s.handleUpdateShape))
+
+	// security rules
+	s.mux.HandleFunc("/api/security-rules", s.withAuth(s.handleSecurityRules))
+
+	// traffic & monitoring
+	s.mux.HandleFunc("/api/traffic", s.withAuth(s.handleTraffic))
+	s.mux.HandleFunc("/api/limits", s.withAuth(s.handleLimits))
+	s.mux.HandleFunc("/api/logs", s.withAuth(s.handleLogs))
+
+	// batch create tasks
+	s.mux.HandleFunc("/api/instances/batch-create", s.withAuth(s.handleBatchCreate))
+	s.mux.HandleFunc("/api/create-tasks", s.withAuth(s.handleCreateTasks))
+
+	// in-memory tasks
+	s.mux.HandleFunc("/api/mem-tasks/change-ip", s.withAuth(s.handleMemTasksChangeIP))
+	s.mux.HandleFunc("/api/mem-tasks/update-cfg", s.withAuth(s.handleMemTasksUpdateCfg))
+
+	// ip-info (no auth)
+	s.mux.HandleFunc("/api/ip-info", s.handleIPInfo)
+
+	// Wildcard routes (must come after exact paths)
+	s.mux.HandleFunc("/api/tenants/", s.withAuth(s.handleTenantByID))
+	s.mux.HandleFunc("/api/instances/", s.withAuth(s.handleInstanceAction))
+	s.mux.HandleFunc("/api/shell/", s.withAuth(s.handleShell))
+	s.mux.HandleFunc("/api/cloudflare/", s.withAuth(s.handleCloudflare))
+	s.mux.HandleFunc("/api/public-ips/", s.withAuth(s.handlePublicIPByID))
+	s.mux.HandleFunc("/api/boot-volumes/", s.withAuth(s.handleBootVolumeByID))
 	s.mux.HandleFunc("/api/keys/", s.withAuth(s.handleKeyByID))
 	s.mux.HandleFunc("/api/sync/", s.withAuth(s.handleSync))
 
@@ -1346,6 +1380,66 @@ func (s *Server) handleKeyByID(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+// --- Phase 1 stubs (implemented in later phases) ---
+
+func (s *Server) handleChangeShape(w http.ResponseWriter, r *http.Request) {
+	jsonOK(w, map[string]string{"status": "not implemented"})
+}
+func (s *Server) handleChangeBootVolume(w http.ResponseWriter, r *http.Request) {
+	jsonOK(w, map[string]string{"status": "not implemented"})
+}
+func (s *Server) handleAttachIPv6(w http.ResponseWriter, r *http.Request) {
+	jsonOK(w, map[string]string{"status": "not implemented"})
+}
+func (s *Server) handleUpdateInstanceName(w http.ResponseWriter, r *http.Request) {
+	jsonOK(w, map[string]string{"status": "not implemented"})
+}
+func (s *Server) handleChangeIP(w http.ResponseWriter, r *http.Request) {
+	jsonOK(w, map[string]string{"status": "not implemented"})
+}
+func (s *Server) handleCheckAlive(w http.ResponseWriter, r *http.Request) {
+	jsonOK(w, map[string]string{"status": "not implemented"})
+}
+func (s *Server) handleOneClick500M(w http.ResponseWriter, r *http.Request) {
+	jsonOK(w, map[string]string{"status": "not implemented"})
+}
+func (s *Server) handleOneClickClose500M(w http.ResponseWriter, r *http.Request) {
+	jsonOK(w, map[string]string{"status": "not implemented"})
+}
+func (s *Server) handleAutoRescue(w http.ResponseWriter, r *http.Request) {
+	jsonOK(w, map[string]string{"status": "not implemented"})
+}
+func (s *Server) handleUpdateShape(w http.ResponseWriter, r *http.Request) {
+	jsonOK(w, map[string]string{"status": "not implemented"})
+}
+func (s *Server) handleSecurityRules(w http.ResponseWriter, r *http.Request) {
+	jsonOK(w, map[string]string{"status": "not implemented"})
+}
+func (s *Server) handleTraffic(w http.ResponseWriter, r *http.Request) {
+	jsonOK(w, map[string]string{"status": "not implemented"})
+}
+func (s *Server) handleLimits(w http.ResponseWriter, r *http.Request) {
+	jsonOK(w, map[string]string{"status": "not implemented"})
+}
+func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
+	jsonOK(w, map[string]string{"status": "not implemented"})
+}
+func (s *Server) handleBatchCreate(w http.ResponseWriter, r *http.Request) {
+	jsonOK(w, map[string]string{"status": "not implemented"})
+}
+func (s *Server) handleCreateTasks(w http.ResponseWriter, r *http.Request) {
+	jsonOK(w, map[string]string{"status": "not implemented"})
+}
+func (s *Server) handleMemTasksChangeIP(w http.ResponseWriter, r *http.Request) {
+	jsonOK(w, map[string]string{"status": "not implemented"})
+}
+func (s *Server) handleMemTasksUpdateCfg(w http.ResponseWriter, r *http.Request) {
+	jsonOK(w, map[string]string{"status": "not implemented"})
+}
+func (s *Server) handleIPInfo(w http.ResponseWriter, r *http.Request) {
+	jsonOK(w, map[string]string{"ip": r.RemoteAddr})
 }
 
 func jsonOK(w http.ResponseWriter, v interface{}) {

@@ -84,6 +84,18 @@ func (s *Store) DeleteInstancesByTenant(tenantID int64) error {
 	return err
 }
 
+// Instance by OCID
+
+func (s *Store) GetInstanceByID(id string) (*Instance, error) {
+	var i Instance
+	err := s.db.QueryRow(`SELECT id, tenant_id, name, ocid, shape, ocpu, memory_gb, boot_volume_gb, public_ip, private_ip, state, availability_domain, fault_domain, image_id, subnet_id, created_at, synced_at FROM instances WHERE id=?`, id).
+		Scan(&i.ID, &i.TenantID, &i.Name, &i.OCID, &i.Shape, &i.OCPU, &i.MemoryGB, &i.BootVolumeGB, &i.PublicIP, &i.PrivateIP, &i.State, &i.AvailabilityDomain, &i.FaultDomain, &i.ImageID, &i.SubnetID, &i.CreatedAt, &i.SyncedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	return &i, err
+}
+
 // Task
 
 func (s *Store) CreateTask(t *Task) error {
@@ -137,6 +149,28 @@ func (s *Store) ListAudit(limit int) ([]AuditLog, error) {
 		list = append(list, l)
 	}
 	return list, rows.Err()
+}
+
+// Import helpers (no auto-increment)
+
+func (s *Store) CreateTenantImport(name, userOCID, tenancyOCID, region, fingerprint, keyFile string) error {
+	_, err := s.db.Exec(
+		`INSERT INTO tenants (name, user_ocid, tenancy_ocid, region, fingerprint, key_file)
+		 VALUES (?,?,?,?,?,?)`,
+		name, userOCID, tenancyOCID, region, fingerprint, keyFile)
+	return err
+}
+
+func (s *Store) UpsertInstanceImport(id string, tenantID int64, name, ocid, shape, state, publicIP, privateIP string, ocpu, memoryGB float64, bootVolumeGB int64) error {
+	_, err := s.db.Exec(
+		`INSERT INTO instances (id, tenant_id, name, ocid, shape, ocpu, memory_gb, boot_volume_gb, public_ip, private_ip, state, synced_at)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
+		 ON CONFLICT(id) DO UPDATE SET
+		   name=excluded.name, shape=excluded.shape, ocpu=excluded.ocpu, memory_gb=excluded.memory_gb,
+		   state=excluded.state, public_ip=excluded.public_ip, private_ip=excluded.private_ip,
+		   synced_at=CURRENT_TIMESTAMP`,
+		id, tenantID, name, ocid, shape, ocpu, memoryGB, bootVolumeGB, publicIP, privateIP, state)
+	return err
 }
 
 // Config

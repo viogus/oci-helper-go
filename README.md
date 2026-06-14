@@ -30,11 +30,17 @@ oci-helper-go/
 │   │   ├── sqlite.go            # SQLite 连接 + 自动迁移 (pure Go, no CGO)
 │   │   └── queries.go           # CRUD 操作
 │   ├── oci/client.go            # OCI Go SDK v65 封装
-│   │                            #   compute / network / identity / blockstorage
-│   ├── auth/auth.go             # bcrypt 密码 + HttpOnly session cookie
+│   │                            #   compute / network / identity / blockstorage / monitoring
+│   ├── auth/auth.go             # bcrypt + session + TOTP
+│   ├── cloudflare/client.go     # Cloudflare DNS API
+│   ├── telegram/bot.go          # Telegram Bot 客户端
+│   ├── ai/assistant.go          # SiliconFlow AI 客户端
+│   ├── i18n/i18n.go             # 多语言 (zh_CN/en)
 │   └── handler/
-│       ├── handler.go           # REST API + 内嵌前端路由
-│       └── dist/index.html      # SPA 前端 (内嵌到二进制)
+│       ├── handler.go           # REST API + 路由
+│       ├── worker.go            # 后台任务队列
+│       ├── backup.go            # 加密备份/恢复 (AES-256-GCM)
+│       └── dist/index.html      # SPA 全功能前端 (内嵌到二进制)
 ├── Dockerfile                   # golang:alpine → FROM scratch
 ├── docker-compose.yml           # 单容器 128MB 限制
 └── .github/workflows/build.yml  # CI: amd64+arm64, ghcr.io
@@ -55,32 +61,28 @@ oci-helper-go/
 
 ### 已完成
 
-- [x] Web 面板登录（bcrypt + session）
+- [x] Web 面板登录（bcrypt + session + MFA）
 - [x] 多租户配置管理（CRUD）
 - [x] 实例同步（list instances + upsert to DB）
+- [x] 实例操作（开/关/重启/终止）
+- [x] 实例创建（选 image/shape/subnet/AD）
+- [x] 公网 IP 管理（分配/释放）
+- [x] 启动卷操作（扩容/挂载/卸载）
+- [x] 批量开机（后台任务队列 + 断点续传）
+- [x] 实时流量/CPU/内存统计（OCI Monitoring）
+- [x] Cloudflare DNS 联动（IP 轮换自动更新记录）
+- [x] MFA（TOTP）
+- [x] Google OAuth 登录
+- [x] Telegram Bot
+- [x] AI 助手（SiliconFlow API）
+- [x] Cloud Shell（Web 终端）
+- [x] 加密备份/恢复（AES-256-GCM）
+- [x] 多语言（zh_CN/en）
 - [x] 审计日志
 - [x] Docker 单容器部署（FROM scratch, 65534）
 - [x] CI/CD（push 自动构建 amd64+arm64）
 - [x] 健康检查（healthcheck mode）
-
-### 待实现
-
-- [ ] 实例操作（开/关/重启/终止）
-- [ ] 实例创建（选 image/shape/subnet/AD）
-- [ ] 公网 IP 管理（分配/释放/轮换）
-- [ ] 启动卷操作（扩容/缩容/救砖）
-- [ ] 批量开机（后台任务队列）
-- [ ] 任务队列（断点续传，progress tracking）
-- [ ] 实时流量统计
-- [ ] Cloudflare DNS 联动（IP 轮换自动更新记录）
-- [ ] MFA（TOTP）
-- [ ] Google OAuth 登录
-- [ ] Telegram Bot
-- [ ] AI 助手（SiliconFlow API）
-- [ ] Cloud Shell（Web 终端）
-- [ ] 加密备份/恢复
-- [ ] 多语言（zh_CN/en）
-- [ ] 前端优化（React/Svelte 重写）
+- [x] 全功能 SPA 前端
 
 ## 部署
 
@@ -138,21 +140,84 @@ docker run -d \
 | `GOOGLE_CLIENT_SECRET` | — | Google OAuth 密钥 |
 | `GOOGLE_REDIRECT_URL` | — | Google OAuth 回调地址 |
 
+以下配置在 Web 面板中设置，存入 SQLite：
+- Cloudflare API Token
+- SiliconFlow API Key
+- Telegram Bot Token
+- MFA Secret (TOTP)
+
 ## API
+
+### 认证
 
 | Method | Path | Auth | 说明 |
 |--------|------|:---:|------|
-| POST | `/api/login` | — | Basic Auth 登录 |
+| POST | `/api/login` | Basic | 登录（MFA: X-TOTP header） |
 | POST | `/api/logout` | — | 登出 |
+| GET | `/api/oauth/google/login` | — | Google OAuth 登录跳转 |
+| GET | `/api/oauth/google/callback` | — | Google OAuth 回调 |
+
+### 租户 & 实例
+
+| Method | Path | Auth | 说明 |
+|--------|------|:---:|------|
 | GET | `/api/config` | ✓ | 获取配置 |
-| GET | `/api/tenants` | ✓ | 租户列表 |
-| POST | `/api/tenants` | ✓ | 添加租户 |
-| GET | `/api/tenants/:id` | ✓ | 租户详情 |
-| DELETE | `/api/tenants/:id` | ✓ | 删除租户 |
-| GET | `/api/instances` | ✓ | 实例列表 |
-| GET | `/api/tasks` | ✓ | 任务列表 |
-| GET | `/api/audit` | ✓ | 审计日志 |
+| GET/POST | `/api/tenants` | ✓ | 租户列表 / 添加 |
+| GET/DELETE | `/api/tenants/:id` | ✓ | 租户详情 / 删除 |
+| GET/POST | `/api/instances` | ✓ | 实例列表 / 创建实例 |
+| POST | `/api/instances/:id/action` | ✓ | 实例操作 (start/stop/reboot/terminate) |
+| POST | `/api/instances/batch-start` | ✓ | 批量开机 |
 | POST | `/api/sync/:tenantId` | ✓ | 同步实例 |
+| GET | `/api/metrics` | ✓ | 实例监控指标 (CPU/Mem/Network) |
+
+### 参考数据
+
+| Method | Path | Auth | 说明 |
+|--------|------|:---:|------|
+| GET | `/api/images` | ✓ | 镜像列表 (?tenant_id=X&os=) |
+| GET | `/api/shapes` | ✓ | Shape 列表 (?tenant_id=X&image_id=Y) |
+| GET | `/api/vcns` | ✓ | VCN 列表 (?tenant_id=X) |
+| GET | `/api/subnets` | ✓ | Subnet 列表 (?tenant_id=X&vcn_id=Y) |
+| GET | `/api/availability-domains` | ✓ | AD 列表 (?tenant_id=X) |
+
+### 网络 & 存储
+
+| Method | Path | Auth | 说明 |
+|--------|------|:---:|------|
+| GET/POST | `/api/public-ips` | ✓ | 公网 IP 列表 / 预留 |
+| DELETE | `/api/public-ips/:id` | ✓ | 释放公网 IP |
+| GET | `/api/boot-volumes` | ✓ | 启动卷列表 |
+| POST | `/api/boot-volumes/:id/resize` | ✓ | 扩容启动卷 |
+| POST | `/api/boot-volumes/:id/attach` | ✓ | 挂载到实例 |
+| POST | `/api/boot-volumes/:id/detach` | ✓ | 卸载启动卷 |
+
+### 任务 & 审计
+
+| Method | Path | Auth | 说明 |
+|--------|------|:---:|------|
+| GET | `/api/tasks` | ✓ | 任务队列 |
+| GET | `/api/audit` | ✓ | 审计日志 |
+
+### MFA & 安全
+
+| Method | Path | Auth | 说明 |
+|--------|------|:---:|------|
+| GET | `/api/mfa/setup` | ✓ | 生成 TOTP 密钥 |
+| POST | `/api/mfa/verify` | ✓ | 验证 TOTP 并启用 |
+| POST | `/api/mfa/disable` | ✓ | 禁用 MFA |
+| POST | `/api/backup` | ✓ | 加密导出 (AES-256-GCM) |
+| POST | `/api/restore` | ✓ | 加密导入恢复 |
+
+### 集成
+
+| Method | Path | Auth | 说明 |
+|--------|------|:---:|------|
+| GET/POST | `/api/cloudflare/zones` | ✓ | CF 区域列表 |
+| GET/POST | `/api/cloudflare/:zoneId/records` | ✓ | DNS 记录 CRUD |
+| POST | `/api/cloudflare/update-ip` | ✓ | 更新 DNS 记录 IP |
+| POST | `/api/ai/chat` | ✓ | AI 对话 (SiliconFlow) |
+| GET | `/api/shell/:instanceId` | ✓ | Cloud Shell 端点 |
+| POST | `/api/telegram/webhook` | — | Telegram Bot Webhook |
 
 ## 构建
 

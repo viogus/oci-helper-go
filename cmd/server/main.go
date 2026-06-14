@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net/http"
@@ -58,7 +59,11 @@ func main() {
 		signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 		<-sig
 		log.Println("shutting down...")
-		srv.Close()
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := srv.Shutdown(ctx); err != nil {
+			log.Printf("shutdown: %v", err)
+		}
 	}()
 
 	fmt.Printf("[oci-helper] listening on :%s\n", cfg.Port)

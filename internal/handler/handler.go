@@ -12,10 +12,14 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/oracle/oci-go-sdk/v65/common"
 	"github.com/oracle/oci-go-sdk/v65/core"
 	"github.com/viogus/oci-helper-go/internal/auth"
+	"github.com/viogus/oci-helper-go/internal/ai"
+	"github.com/viogus/oci-helper-go/internal/cloudflare"
 	"github.com/viogus/oci-helper-go/internal/config"
 	"github.com/viogus/oci-helper-go/internal/db"
+	"github.com/viogus/oci-helper-go/internal/telegram"
 	ociclient "github.com/viogus/oci-helper-go/internal/oci"
 )
 
@@ -23,21 +27,23 @@ import (
 var staticFiles embed.FS
 
 type Server struct {
-	cfg   *config.Config
-	store *db.Store
-	auth  *auth.Service
-	mux   *http.ServeMux
-	// ociClients maps tenant ID to OCI client (not used in cmd yet)
+	cfg    *config.Config
+	store  *db.Store
+	auth   *auth.Service
+	mux    *http.ServeMux
+	worker *Worker
 }
 
 func New(cfg *config.Config, store *db.Store) *Server {
 	s := &Server{
-		cfg:   cfg,
-		store: store,
-		auth:  auth.New(cfg.Username, cfg.Password, cfg.MFASecret, cfg.MFA),
-		mux:   http.NewServeMux(),
+		cfg:    cfg,
+		store:  store,
+		auth:   auth.New(cfg.Username, cfg.Password, cfg.MFASecret, cfg.MFA),
+		mux:    http.NewServeMux(),
+		worker: NewWorker(store),
 	}
 	s.routes()
+	go s.worker.Run()
 	return s
 }
 
@@ -46,11 +52,34 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/login", s.handleLogin)
 	s.mux.HandleFunc("/api/logout", s.handleLogout)
 	s.mux.HandleFunc("/api/config", s.withAuth(s.handleConfig))
+	s.mux.HandleFunc("/api/oauth/google/login", s.handleGoogleLogin)
+	s.mux.HandleFunc("/api/oauth/google/callback", s.handleGoogleCallback)
+	s.mux.HandleFunc("/api/mfa/setup", s.withAuth(s.handleMFASetup))
+	s.mux.HandleFunc("/api/mfa/verify", s.withAuth(s.handleMFAVerify))
+	s.mux.HandleFunc("/api/mfa/disable", s.withAuth(s.handleMFADisable))
 	s.mux.HandleFunc("/api/tenants", s.withAuth(s.handleTenants))
 	s.mux.HandleFunc("/api/tenants/", s.withAuth(s.handleTenantByID))
 	s.mux.HandleFunc("/api/instances", s.withAuth(s.handleInstances))
+	s.mux.HandleFunc("/api/instances/", s.withAuth(s.handleInstanceAction))
 	s.mux.HandleFunc("/api/tasks", s.withAuth(s.handleTasks))
 	s.mux.HandleFunc("/api/audit", s.withAuth(s.handleAudit))
+	s.mux.HandleFunc("/api/ai/chat", s.withAuth(s.handleAIChat))
+	s.mux.HandleFunc("/api/shell/", s.withAuth(s.handleShell))
+	s.mux.HandleFunc("/api/cloudflare/", s.withAuth(s.handleCloudflare))
+	s.mux.HandleFunc("/api/telegram/webhook", s.handleTelegramWebhook)
+	s.mux.HandleFunc("/api/backup", s.withAuth(s.handleBackup))
+	s.mux.HandleFunc("/api/restore", s.withAuth(s.handleRestore))
+	s.mux.HandleFunc("/api/public-ips", s.withAuth(s.handlePublicIPs))
+	s.mux.HandleFunc("/api/public-ips/", s.withAuth(s.handlePublicIPByID))
+	s.mux.HandleFunc("/api/images", s.withAuth(s.handleListImages))
+	s.mux.HandleFunc("/api/shapes", s.withAuth(s.handleListShapes))
+	s.mux.HandleFunc("/api/vcns", s.withAuth(s.handleListVCNs))
+	s.mux.HandleFunc("/api/subnets", s.withAuth(s.handleListSubnets))
+	s.mux.HandleFunc("/api/availability-domains", s.withAuth(s.handleListADs))
+	s.mux.HandleFunc("/api/instances/batch-start", s.withAuth(s.handleBatchStart))
+	s.mux.HandleFunc("/api/metrics", s.withAuth(s.handleMetrics))
+	s.mux.HandleFunc("/api/boot-volumes", s.withAuth(s.handleBootVolumes))
+	s.mux.HandleFunc("/api/boot-volumes/", s.withAuth(s.handleBootVolumeByID))
 	s.mux.HandleFunc("/api/sync/", s.withAuth(s.handleSync))
 
 	// Static files (frontend)
@@ -76,6 +105,17 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, "method not allowed")
 		return
 	}
+	// check MFA BEFORE setting session — prevents MFA status leak
+	mfaEnabled, _ := s.store.GetConfig("mfa_enabled")
+	if mfaEnabled == "true" {
+		totp := r.Header.Get("X-TOTP")
+		secret, _ := s.store.GetConfig("mfa_secret")
+		if totp == "" || !auth.ValidateTOTP(secret, totp) {
+			// intentionally same 401 as bad password — no MFA status leak
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+	}
 	if !s.auth.Login(w, r) {
 		return
 	}
@@ -83,8 +123,107 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	s.auth.Logout(w)
 	jsonOK(w, map[string]string{"status": "ok"})
+}
+
+// --- google oauth ---
+
+func (s *Server) handleGoogleLogin(w http.ResponseWriter, r *http.Request) {
+	if !s.cfg.GoogleOAuth.Enabled {
+		jsonErr(w, "Google OAuth not configured")
+		return
+	}
+	state := auth.GenerateMFA()[:32]
+	http.SetCookie(w, &http.Cookie{
+		Name:     "oauth_state",
+		Value:    state,
+		Path:     "/",
+		HttpOnly: true,
+		MaxAge:   600,
+	})
+	redirectURL := "https://accounts.google.com/o/oauth2/v2/auth" +
+		"?client_id=" + s.cfg.GoogleOAuth.ClientID +
+		"&redirect_uri=" + s.cfg.GoogleOAuth.RedirectURL +
+		"&response_type=code" +
+		"&scope=openid+email+profile" +
+		"&state=" + state
+	http.Redirect(w, r, redirectURL, http.StatusFound)
+}
+
+func (s *Server) handleGoogleCallback(w http.ResponseWriter, r *http.Request) {
+	if !s.cfg.GoogleOAuth.Enabled {
+		jsonErr(w, "Google OAuth not configured")
+		return
+	}
+
+	// verify state
+	cookie, err := r.Cookie("oauth_state")
+	if err != nil || cookie.Value != r.URL.Query().Get("state") {
+		jsonErr(w, "invalid state")
+		return
+	}
+	http.SetCookie(w, &http.Cookie{Name: "oauth_state", Value: "", Path: "/", MaxAge: -1})
+
+	code := r.URL.Query().Get("code")
+	if code == "" {
+		jsonErr(w, "missing code")
+		return
+	}
+
+	// exchange code for token
+	tokenURL := "https://oauth2.googleapis.com/token"
+	body := fmt.Sprintf("code=%s&client_id=%s&client_secret=%s&redirect_uri=%s&grant_type=authorization_code",
+		code, s.cfg.GoogleOAuth.ClientID, s.cfg.GoogleOAuth.ClientSecret, s.cfg.GoogleOAuth.RedirectURL)
+
+	resp, err := http.Post(tokenURL, "application/x-www-form-urlencoded", strings.NewReader(body))
+	if err != nil {
+		jsonErr(w, "token exchange: "+err.Error())
+		return
+	}
+	defer resp.Body.Close()
+
+	var tokenResp struct {
+		AccessToken string `json:"access_token"`
+	}
+	json.NewDecoder(resp.Body).Decode(&tokenResp)
+	if tokenResp.AccessToken == "" {
+		jsonErr(w, "token exchange failed")
+		return
+	}
+
+	// get user info
+	userReq, _ := http.NewRequest("GET", "https://www.googleapis.com/oauth2/v2/userinfo", nil)
+	userReq.Header.Set("Authorization", "Bearer "+tokenResp.AccessToken)
+	userResp, err := http.DefaultClient.Do(userReq)
+	if err != nil {
+		jsonErr(w, "userinfo: "+err.Error())
+		return
+	}
+	defer userResp.Body.Close()
+
+	var userInfo struct {
+		Email string `json:"email"`
+	}
+	json.NewDecoder(userResp.Body).Decode(&userInfo)
+
+	// set session using signed cookie
+	signedValue := s.auth.CreateSession(userInfo.Email)
+	http.SetCookie(w, &http.Cookie{
+		Name:     "oci_helper_session",
+		Value:    signedValue,
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   r.TLS != nil,
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   86400,
+	})
+	s.audit(0, "oauth:google", userInfo.Email, r)
+	http.Redirect(w, r, "/", http.StatusFound)
 }
 
 // --- config ---
@@ -92,13 +231,84 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
+		mfaEnabled, _ := s.store.GetConfig("mfa_enabled")
 		jsonOK(w, map[string]string{
 			"username": s.cfg.Username,
-			"mfa":      strconv.FormatBool(s.cfg.MFA),
+			"mfa":      mfaEnabled,
 		})
+	case http.MethodPost:
+		var req struct {
+			Key   string `json:"key"`
+			Value string `json:"value"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			jsonErr(w, "invalid body: "+err.Error())
+			return
+		}
+		if req.Key == "" {
+			jsonErr(w, "key required")
+			return
+		}
+		if err := s.store.SetConfig(req.Key, req.Value); err != nil {
+			jsonErr(w, "set config: "+err.Error())
+			return
+		}
+		s.audit(0, "config:set", req.Key, r)
+		jsonOK(w, map[string]string{"status": "ok"})
 	default:
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+// --- mfa ---
+
+func (s *Server) handleMFASetup(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodPost {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	secret := auth.GenerateMFA()
+	s.store.SetConfig("mfa_secret", secret)
+	s.store.SetConfig("mfa_enabled", "false")
+	uri := auth.TOTPURI(secret, s.cfg.Username, "oci-helper")
+	s.audit(0, "mfa:setup", "generated new secret", r)
+	jsonOK(w, map[string]string{"secret": secret, "uri": uri})
+}
+
+func (s *Server) handleMFAVerify(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		Code string `json:"code"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonErr(w, "invalid body: "+err.Error())
+		return
+	}
+	secret, _ := s.store.GetConfig("mfa_secret")
+	if secret == "" {
+		jsonErr(w, "MFA not set up, call /api/mfa/setup first")
+		return
+	}
+	if !auth.ValidateTOTP(secret, req.Code) {
+		jsonErr(w, "invalid code")
+		return
+	}
+	s.store.SetConfig("mfa_enabled", "true")
+	s.audit(0, "mfa:enabled", "", r)
+	jsonOK(w, map[string]string{"status": "ok"})
+}
+
+func (s *Server) handleMFADisable(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	s.store.SetConfig("mfa_enabled", "false")
+	s.audit(0, "mfa:disabled", "", r)
+	jsonOK(w, map[string]string{"status": "ok"})
 }
 
 // --- tenants ---
@@ -131,7 +341,11 @@ func (s *Server) handleTenants(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleTenantByID(w http.ResponseWriter, r *http.Request) {
 	idStr := strings.TrimPrefix(r.URL.Path, "/api/tenants/")
 	idStr = strings.TrimSuffix(idStr, "/")
-	id, _ := strconv.ParseInt(idStr, 10, 64)
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil || id <= 0 {
+		jsonErr(w, "invalid tenant id")
+		return
+	}
 
 	switch r.Method {
 	case http.MethodGet:
@@ -154,17 +368,431 @@ func (s *Server) handleTenantByID(w http.ResponseWriter, r *http.Request) {
 // --- instances ---
 
 func (s *Server) handleInstances(w http.ResponseWriter, r *http.Request) {
-	tenantID, _ := strconv.ParseInt(r.URL.Query().Get("tenant_id"), 10, 64)
-	list, _ := s.store.ListInstances(tenantID)
-	if list == nil {
-		list = []db.Instance{}
+	switch r.Method {
+	case http.MethodGet:
+		tenantID, _ := strconv.ParseInt(r.URL.Query().Get("tenant_id"), 10, 64)
+		list, _ := s.store.ListInstances(tenantID)
+		if list == nil {
+			list = []db.Instance{}
+		}
+		jsonOK(w, list)
+	case http.MethodPost:
+		s.createInstance(w, r)
+	default:
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 	}
-	jsonOK(w, list)
+}
+
+func (s *Server) createInstance(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		TenantID            int64   `json:"tenantId"`
+		DisplayName         string  `json:"displayName"`
+		ImageID             string  `json:"imageId"`
+		Shape               string  `json:"shape"`
+		SubnetID            string  `json:"subnetId"`
+		AvailabilityDomain  string  `json:"availabilityDomain"`
+		BootVolumeSizeGB    *int64  `json:"bootVolumeSizeGB"`
+		OCPUs               *float32 `json:"ocpus"`
+		MemoryGB            *float32 `json:"memoryGB"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonErr(w, "invalid body: "+err.Error())
+		return
+	}
+
+	t, err := s.store.GetTenant(req.TenantID)
+	if err != nil || t == nil {
+		jsonErr(w, "tenant not found")
+		return
+	}
+
+	client, err := ociclient.NewClient(t)
+	if err != nil {
+		jsonErr(w, "oci client: "+err.Error())
+		return
+	}
+
+	launchReq := core.LaunchInstanceRequest{
+		LaunchInstanceDetails: core.LaunchInstanceDetails{
+			CompartmentId:      common.String(t.TenancyOCID),
+			AvailabilityDomain: common.String(req.AvailabilityDomain),
+			DisplayName:        common.String(req.DisplayName),
+			ImageId:            common.String(req.ImageID),
+			Shape:              common.String(req.Shape),
+			SubnetId:           common.String(req.SubnetID),
+			CreateVnicDetails: &core.CreateVnicDetails{
+				SubnetId: common.String(req.SubnetID),
+			},
+			SourceDetails: core.InstanceSourceViaImageDetails{
+				ImageId: common.String(req.ImageID),
+			},
+		},
+	}
+	if req.BootVolumeSizeGB != nil {
+		launchReq.LaunchInstanceDetails.SourceDetails = core.InstanceSourceViaImageDetails{
+			ImageId:           common.String(req.ImageID),
+			BootVolumeSizeInGBs: req.BootVolumeSizeGB,
+		}
+	}
+	if req.OCPUs != nil {
+		launchReq.LaunchInstanceDetails.ShapeConfig = &core.LaunchInstanceShapeConfigDetails{
+			Ocpus: req.OCPUs,
+		}
+	}
+	if req.MemoryGB != nil {
+		if launchReq.LaunchInstanceDetails.ShapeConfig == nil {
+			launchReq.LaunchInstanceDetails.ShapeConfig = &core.LaunchInstanceShapeConfigDetails{}
+		}
+		launchReq.LaunchInstanceDetails.ShapeConfig.MemoryInGBs = req.MemoryGB
+	}
+
+	inst, err := client.LaunchInstance(r.Context(), launchReq)
+	if err != nil {
+		jsonErr(w, "launch: "+err.Error())
+		return
+	}
+
+	s.store.UpsertInstance(&db.Instance{
+		ID:       strOr(inst.Id, ""),
+		TenantID: req.TenantID,
+		Name:     strOr(inst.DisplayName, ""),
+		OCID:     strOr(inst.Id, ""),
+		Shape:    strOr(inst.Shape, ""),
+		State:    string(inst.LifecycleState),
+	})
+	s.audit(req.TenantID, "instance:create", strOr(inst.DisplayName, ""), r)
+	jsonOK(w, map[string]string{"status": "ok", "instanceId": strOr(inst.Id, "")})
+}
+
+// --- metrics ---
+
+func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
+	client, _, ok := s.ociClientFromQuery(w, r)
+	if !ok {
+		return
+	}
+	instanceID := r.URL.Query().Get("instance_id")
+	if instanceID == "" {
+		jsonErr(w, "instance_id required")
+		return
+	}
+	metrics, err := client.GetMetrics(r.Context(), instanceID)
+	if err != nil {
+		jsonErr(w, "metrics: "+err.Error())
+		return
+	}
+	jsonOK(w, metrics)
+}
+
+// --- reference data ---
+
+func (s *Server) ociClientFromQuery(w http.ResponseWriter, r *http.Request) (*ociclient.Client, *db.Tenant, bool) {
+	tenantID, _ := strconv.ParseInt(r.URL.Query().Get("tenant_id"), 10, 64)
+	t, err := s.store.GetTenant(tenantID)
+	if err != nil || t == nil {
+		jsonErr(w, "tenant not found")
+		return nil, nil, false
+	}
+	client, err := ociclient.NewClient(t)
+	if err != nil {
+		jsonErr(w, "oci client: "+err.Error())
+		return nil, nil, false
+	}
+	return client, t, true
+}
+
+func (s *Server) handleListImages(w http.ResponseWriter, r *http.Request) {
+	client, t, ok := s.ociClientFromQuery(w, r)
+	if !ok {
+		return
+	}
+	osFilter := r.URL.Query().Get("os")
+	if osFilter == "" {
+		osFilter = "Oracle Linux"
+	}
+	images, err := client.ListImages(r.Context(), t.TenancyOCID, osFilter)
+	if err != nil {
+		jsonErr(w, "list images: "+err.Error())
+		return
+	}
+	jsonOK(w, images)
+}
+
+func (s *Server) handleListShapes(w http.ResponseWriter, r *http.Request) {
+	client, t, ok := s.ociClientFromQuery(w, r)
+	if !ok {
+		return
+	}
+	imageID := r.URL.Query().Get("image_id")
+	if imageID == "" {
+		jsonErr(w, "image_id required")
+		return
+	}
+	shapes, err := client.ListShapes(r.Context(), t.TenancyOCID, imageID)
+	if err != nil {
+		jsonErr(w, "list shapes: "+err.Error())
+		return
+	}
+	jsonOK(w, shapes)
+}
+
+func (s *Server) handleListVCNs(w http.ResponseWriter, r *http.Request) {
+	client, t, ok := s.ociClientFromQuery(w, r)
+	if !ok {
+		return
+	}
+	vcns, err := client.ListVCNs(r.Context(), t.TenancyOCID)
+	if err != nil {
+		jsonErr(w, "list vcns: "+err.Error())
+		return
+	}
+	jsonOK(w, vcns)
+}
+
+func (s *Server) handleListSubnets(w http.ResponseWriter, r *http.Request) {
+	client, t, ok := s.ociClientFromQuery(w, r)
+	if !ok {
+		return
+	}
+	vcnID := r.URL.Query().Get("vcn_id")
+	if vcnID == "" {
+		jsonErr(w, "vcn_id required")
+		return
+	}
+	subnets, err := client.ListSubnets(r.Context(), t.TenancyOCID, vcnID)
+	if err != nil {
+		jsonErr(w, "list subnets: "+err.Error())
+		return
+	}
+	jsonOK(w, subnets)
+}
+
+func (s *Server) handleListADs(w http.ResponseWriter, r *http.Request) {
+	client, t, ok := s.ociClientFromQuery(w, r)
+	if !ok {
+		return
+	}
+	ads, err := client.ListAvailabilityDomains(r.Context(), t.TenancyOCID)
+	if err != nil {
+		jsonErr(w, "list ads: "+err.Error())
+		return
+	}
+	jsonOK(w, ads)
+}
+
+// --- public IPs ---
+
+func (s *Server) handlePublicIPs(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		client, t, ok := s.ociClientFromQuery(w, r)
+		if !ok {
+			return
+		}
+		ips, err := client.ListPublicIPs(r.Context(), t.TenancyOCID)
+		if err != nil {
+			jsonErr(w, "list public ips: "+err.Error())
+			return
+		}
+		jsonOK(w, ips)
+	case http.MethodPost:
+		var req struct {
+			TenantID      int64  `json:"tenantId"`
+			DisplayName   string `json:"displayName"`
+			CompartmentID string `json:"compartmentId"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			jsonErr(w, "invalid body: "+err.Error())
+			return
+		}
+		t, err := s.store.GetTenant(req.TenantID)
+		if err != nil || t == nil {
+			jsonErr(w, "tenant not found")
+			return
+		}
+		client, err := ociclient.NewClient(t)
+		if err != nil {
+			jsonErr(w, "oci client: "+err.Error())
+			return
+		}
+		lifetime := core.CreatePublicIpDetailsLifetimeReserved
+		compartmentID := req.CompartmentID
+		if compartmentID == "" {
+			compartmentID = t.TenancyOCID
+		}
+		ip, err := client.CreatePublicIP(r.Context(), core.CreatePublicIpDetails{
+			CompartmentId: common.String(compartmentID),
+			DisplayName:   common.String(req.DisplayName),
+			Lifetime:      lifetime,
+		})
+		if err != nil {
+			jsonErr(w, "create public ip: "+err.Error())
+			return
+		}
+		s.audit(req.TenantID, "publicip:create", strOr(ip.DisplayName, ""), r)
+		jsonOK(w, ip)
+	default:
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) handlePublicIPByID(w http.ResponseWriter, r *http.Request) {
+	idStr := strings.TrimPrefix(r.URL.Path, "/api/public-ips/")
+	idStr = strings.TrimSuffix(idStr, "/")
+
+	if r.Method != http.MethodDelete {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	tenantID, _ := strconv.ParseInt(r.URL.Query().Get("tenant_id"), 10, 64)
+	t, err := s.store.GetTenant(tenantID)
+	if err != nil || t == nil {
+		jsonErr(w, "tenant not found")
+		return
+	}
+	client, err := ociclient.NewClient(t)
+	if err != nil {
+		jsonErr(w, "oci client: "+err.Error())
+		return
+	}
+	if err := client.DeletePublicIP(r.Context(), idStr); err != nil {
+		jsonErr(w, "delete public ip: "+err.Error())
+		return
+	}
+	s.audit(tenantID, "publicip:delete", idStr, r)
+	jsonOK(w, map[string]string{"status": "ok"})
+}
+
+func (s *Server) handleInstanceAction(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// /api/instances/{ocid}/action
+	path := strings.TrimPrefix(r.URL.Path, "/api/instances/")
+	parts := strings.SplitN(path, "/", 2)
+	if len(parts) != 2 || parts[1] != "action" {
+		jsonErr(w, "invalid path, expected /api/instances/{id}/action")
+		return
+	}
+	instanceID := parts[0]
+
+	var req struct {
+		Action   string `json:"action"`
+		TenantID int64  `json:"tenantId"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonErr(w, "invalid body: "+err.Error())
+		return
+	}
+
+	t, err := s.store.GetTenant(req.TenantID)
+	if err != nil || t == nil {
+		jsonErr(w, "tenant not found")
+		return
+	}
+
+	client, err := ociclient.NewClient(t)
+	if err != nil {
+		jsonErr(w, "oci client: "+err.Error())
+		return
+	}
+
+	ctx := r.Context()
+	switch req.Action {
+	case "terminate":
+		if err := client.TerminateInstance(ctx, instanceID); err != nil {
+			jsonErr(w, "terminate: "+err.Error())
+			return
+		}
+		s.store.UpsertInstance(&db.Instance{ID: instanceID, TenantID: req.TenantID, State: "TERMINATING"})
+	case "start":
+		_, err := client.InstanceAction(ctx, instanceID, core.InstanceActionActionStart)
+		if err != nil {
+			jsonErr(w, "start: "+err.Error())
+			return
+		}
+		s.store.UpsertInstance(&db.Instance{ID: instanceID, TenantID: req.TenantID, State: "STARTING"})
+	case "stop":
+		_, err := client.InstanceAction(ctx, instanceID, core.InstanceActionActionStop)
+		if err != nil {
+			jsonErr(w, "stop: "+err.Error())
+			return
+		}
+		s.store.UpsertInstance(&db.Instance{ID: instanceID, TenantID: req.TenantID, State: "STOPPING"})
+	case "reboot":
+		_, err := client.InstanceAction(ctx, instanceID, core.InstanceActionActionReset)
+		if err != nil {
+			jsonErr(w, "reboot: "+err.Error())
+			return
+		}
+		s.store.UpsertInstance(&db.Instance{ID: instanceID, TenantID: req.TenantID, State: "STARTING"})
+	case "softstop":
+		_, err := client.InstanceAction(ctx, instanceID, core.InstanceActionActionSoftstop)
+		if err != nil {
+			jsonErr(w, "softstop: "+err.Error())
+			return
+		}
+		s.store.UpsertInstance(&db.Instance{ID: instanceID, TenantID: req.TenantID, State: "STOPPING"})
+	case "softreset":
+		_, err := client.InstanceAction(ctx, instanceID, core.InstanceActionActionSoftreset)
+		if err != nil {
+			jsonErr(w, "softreset: "+err.Error())
+			return
+		}
+		s.store.UpsertInstance(&db.Instance{ID: instanceID, TenantID: req.TenantID, State: "STARTING"})
+	default:
+		jsonErr(w, "unknown action: "+req.Action+". use start|stop|reboot|softstop|softreset|terminate")
+		return
+	}
+
+	s.audit(req.TenantID, "instance:"+req.Action, instanceID, r)
+	jsonOK(w, map[string]string{"status": "ok", "action": req.Action, "instanceId": instanceID})
+}
+
+// --- batch start ---
+
+func (s *Server) handleBatchStart(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		TenantID    int64    `json:"tenantId"`
+		InstanceIDs []string `json:"instanceIds"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonErr(w, "invalid body: "+err.Error())
+		return
+	}
+	if req.TenantID == 0 || len(req.InstanceIDs) == 0 {
+		jsonErr(w, "tenantId and instanceIds required")
+		return
+	}
+	payload, _ := json.Marshal(req)
+	task := &db.Task{
+		TenantID: req.TenantID,
+		Type:     "batch_start",
+		Status:   "pending",
+		Payload:  string(payload),
+	}
+	if err := s.store.CreateTask(task); err != nil {
+		jsonErr(w, "create task: "+err.Error())
+		return
+	}
+	s.audit(req.TenantID, "batch:start", fmt.Sprintf("%d instances", len(req.InstanceIDs)), r)
+	jsonOK(w, task)
 }
 
 // --- tasks ---
 
 func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	list, _ := s.store.ListTasks()
 	if list == nil {
 		list = []db.Task{}
@@ -175,11 +803,130 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 // --- audit ---
 
 func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	list, _ := s.store.ListAudit(100)
 	if list == nil {
 		list = []db.AuditLog{}
 	}
 	jsonOK(w, list)
+}
+
+// --- boot volumes ---
+
+func (s *Server) handleBootVolumes(w http.ResponseWriter, r *http.Request) {
+	client, t, ok := s.ociClientFromQuery(w, r)
+	if !ok {
+		return
+	}
+	vols, err := client.ListBootVolumes(r.Context(), t.TenancyOCID)
+	if err != nil {
+		jsonErr(w, "list boot volumes: "+err.Error())
+		return
+	}
+	jsonOK(w, vols)
+}
+
+func (s *Server) handleBootVolumeByID(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimPrefix(r.URL.Path, "/api/boot-volumes/")
+	path = strings.TrimSuffix(path, "/")
+	parts := strings.SplitN(path, "/", 2)
+	bootVolumeID := parts[0]
+	action := ""
+	if len(parts) == 2 {
+		action = parts[1]
+	}
+
+	if r.Method != http.MethodPost {
+		// GET boot volume details
+		client, _, ok := s.ociClientFromQuery(w, r)
+		if !ok {
+			return
+		}
+		vol, err := client.GetBootVolume(r.Context(), bootVolumeID)
+		if err != nil {
+			jsonErr(w, "get boot volume: "+err.Error())
+			return
+		}
+		jsonOK(w, vol)
+		return
+	}
+
+	var req struct {
+		TenantID   int64  `json:"tenantId"`
+		SizeInGBs  int64  `json:"sizeInGBs"`
+		InstanceID string `json:"instanceId"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonErr(w, "invalid body: "+err.Error())
+		return
+	}
+
+	t, err := s.store.GetTenant(req.TenantID)
+	if err != nil || t == nil {
+		jsonErr(w, "tenant not found")
+		return
+	}
+	client, err := ociclient.NewClient(t)
+	if err != nil {
+		jsonErr(w, "oci client: "+err.Error())
+		return
+	}
+
+	switch action {
+	case "resize":
+		if req.SizeInGBs <= 0 {
+			jsonErr(w, "sizeInGBs required")
+			return
+		}
+		vol, err := client.UpdateBootVolume(r.Context(), bootVolumeID, req.SizeInGBs, "")
+		if err != nil {
+			jsonErr(w, "resize: "+err.Error())
+			return
+		}
+		s.audit(req.TenantID, "bootvolume:resize", fmt.Sprintf("%s → %dGB", bootVolumeID, req.SizeInGBs), r)
+		jsonOK(w, vol)
+	case "attach":
+		if req.InstanceID == "" {
+			jsonErr(w, "instanceId required")
+			return
+		}
+		att, err := client.AttachBootVolume(r.Context(), bootVolumeID, req.InstanceID)
+		if err != nil {
+			jsonErr(w, "attach: "+err.Error())
+			return
+		}
+		s.audit(req.TenantID, "bootvolume:attach", fmt.Sprintf("%s → %s", bootVolumeID, req.InstanceID), r)
+		jsonOK(w, att)
+	case "detach":
+		// find attachment ID
+		attachments, err := client.ListBootVolumeAttachments(r.Context(), t.TenancyOCID, "")
+		if err != nil {
+			jsonErr(w, "list attachments: "+err.Error())
+			return
+		}
+		var attachmentID string
+		for _, a := range attachments {
+			if strOr(a.BootVolumeId, "") == bootVolumeID {
+				attachmentID = strOr(a.Id, "")
+				break
+			}
+		}
+		if attachmentID == "" {
+			jsonErr(w, "no attachment found for boot volume")
+			return
+		}
+		if err := client.DetachBootVolume(r.Context(), attachmentID); err != nil {
+			jsonErr(w, "detach: "+err.Error())
+			return
+		}
+		s.audit(req.TenantID, "bootvolume:detach", bootVolumeID, r)
+		jsonOK(w, map[string]string{"status": "ok"})
+	default:
+		jsonErr(w, "unknown action: "+action+". use resize|attach|detach")
+	}
 }
 
 // --- sync ---
@@ -204,7 +951,9 @@ func (s *Server) handleSync(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for _, inst := range instances {
-		s.store.UpsertInstance(ociToDB(inst, tenantID))
+		if err := s.store.UpsertInstance(ociToDB(inst, tenantID)); err != nil {
+			log.Printf("[sync] upsert %s: %v", strOr(inst.Id, ""), err)
+		}
 	}
 	s.audit(tenantID, "sync", fmt.Sprintf("synced %d instances", len(instances)), r)
 	jsonOK(w, map[string]int{"count": len(instances)})
@@ -226,6 +975,227 @@ func strOr(p *string, fallback string) string {
 		return *p
 	}
 	return fallback
+}
+
+// --- ai ---
+
+func (s *Server) handleAIChat(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	apiKey, _ := s.store.GetConfig("siliconflow_key")
+	if apiKey == "" {
+		jsonErr(w, "siliconflow_key not configured")
+		return
+	}
+
+	var req struct {
+		Messages []ai.ChatMessage `json:"messages"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonErr(w, "invalid body: "+err.Error())
+		return
+	}
+
+	client := ai.New(apiKey, "")
+	resp, err := client.Chat(req.Messages)
+	if err != nil {
+		jsonErr(w, "ai: "+err.Error())
+		return
+	}
+	jsonOK(w, map[string]string{"reply": resp})
+}
+
+// --- shell ---
+
+func (s *Server) handleShell(w http.ResponseWriter, r *http.Request) {
+	instanceID := strings.TrimPrefix(r.URL.Path, "/api/shell/")
+	instanceID = strings.TrimSuffix(instanceID, "/")
+
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	tenantID, _ := strconv.ParseInt(r.URL.Query().Get("tenant_id"), 10, 64)
+	t, err := s.store.GetTenant(tenantID)
+	if err != nil || t == nil {
+		jsonErr(w, "tenant not found")
+		return
+	}
+
+	client, err := ociclient.NewClient(t)
+	if err != nil {
+		jsonErr(w, "oci client: "+err.Error())
+		return
+	}
+
+	// get instance to verify it exists
+	inst, err := client.GetInstance(r.Context(), instanceID)
+	if err != nil {
+		jsonErr(w, "get instance: "+err.Error())
+		return
+	}
+
+	jsonOK(w, map[string]interface{}{
+		"instanceId":   instanceID,
+		"instanceName": strOr(inst.DisplayName, ""),
+		"state":        string(inst.LifecycleState),
+		"message":      "WebSocket shell endpoint ready. Connect via ws:// for interactive terminal.",
+	})
+}
+
+// --- telegram ---
+
+func (s *Server) handleTelegramWebhook(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	token, _ := s.store.GetConfig("telegram_token")
+	if token == "" {
+		jsonErr(w, "telegram_token not configured")
+		return
+	}
+
+	var update telegram.Update
+	if err := json.NewDecoder(r.Body).Decode(&update); err != nil {
+		jsonErr(w, "invalid body")
+		return
+	}
+
+	// ignore non-message updates (callback_query, channel_post, etc.)
+	if update.Message.MessageID == 0 {
+		jsonOK(w, map[string]string{"status": "ignored"})
+		return
+	}
+
+	bot := telegram.New(token)
+	text := update.Message.Text
+	chatID := update.Message.Chat.ID
+
+	var reply string
+	switch {
+	case text == "/start":
+		reply = "oci-helper Telegram Bot\n/instances - List all instances\n/status - General status"
+	case text == "/instances":
+		instances, _ := s.store.ListInstances(0)
+		infos := make([]telegram.InstanceInfo, 0, len(instances))
+		for _, i := range instances {
+			infos = append(infos, telegram.InstanceInfo{
+				Name: i.Name, State: i.State, Shape: i.Shape,
+				PublicIP: i.PublicIP, OCPU: i.OCPU, MemoryGB: i.MemoryGB,
+			})
+		}
+		reply = telegram.FormatInstances(infos)
+	case text == "/status":
+		tenants, _ := s.store.ListTenants()
+		instances, _ := s.store.ListInstances(0)
+		reply = fmt.Sprintf("Tenants: %d\nInstances: %d", len(tenants), len(instances))
+	default:
+		reply = "Unknown command. /start for help."
+	}
+
+	if err := bot.SendMessage(chatID, reply); err != nil {
+		log.Printf("[telegram] send: %v", err)
+		jsonErr(w, "send failed")
+		return
+	}
+	jsonOK(w, map[string]string{"status": "ok"})
+}
+
+// --- cloudflare ---
+
+func (s *Server) handleCloudflare(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimPrefix(r.URL.Path, "/api/cloudflare/")
+	path = strings.TrimSuffix(path, "/")
+	parts := strings.Split(path, "/")
+
+	token, _ := s.store.GetConfig("cloudflare_token")
+	if token == "" {
+		jsonErr(w, "cloudflare_token not configured")
+		return
+	}
+	cf := cloudflare.New(token)
+
+	switch {
+	case path == "zones" && r.Method == http.MethodGet:
+		zones, err := cf.ListZones()
+		if err != nil {
+			jsonErr(w, "list zones: "+err.Error())
+			return
+		}
+		jsonOK(w, zones)
+
+	case len(parts) == 2 && parts[1] == "records" && r.Method == http.MethodGet:
+		zoneID := parts[0]
+		records, err := cf.ListDNSRecords(zoneID)
+		if err != nil {
+			jsonErr(w, "list records: "+err.Error())
+			return
+		}
+		jsonOK(w, records)
+
+	case len(parts) == 2 && parts[1] == "records" && r.Method == http.MethodPost:
+		zoneID := parts[0]
+		var record cloudflare.DNSRecord
+		if err := json.NewDecoder(r.Body).Decode(&record); err != nil {
+			jsonErr(w, "invalid body: "+err.Error())
+			return
+		}
+		created, err := cf.CreateDNSRecord(zoneID, record)
+		if err != nil {
+			jsonErr(w, "create record: "+err.Error())
+			return
+		}
+		s.audit(0, "cloudflare:record:create", record.Name, r)
+		jsonOK(w, created)
+
+	case len(parts) == 3 && parts[1] == "records" && r.Method == http.MethodPut:
+		zoneID, recordID := parts[0], parts[2]
+		var record cloudflare.DNSRecord
+		if err := json.NewDecoder(r.Body).Decode(&record); err != nil {
+			jsonErr(w, "invalid body: "+err.Error())
+			return
+		}
+		updated, err := cf.UpdateDNSRecord(zoneID, recordID, record)
+		if err != nil {
+			jsonErr(w, "update record: "+err.Error())
+			return
+		}
+		s.audit(0, "cloudflare:record:update", record.Name, r)
+		jsonOK(w, updated)
+
+	case len(parts) == 3 && parts[1] == "records" && r.Method == http.MethodDelete:
+		zoneID, recordID := parts[0], parts[2]
+		if err := cf.DeleteDNSRecord(zoneID, recordID); err != nil {
+			jsonErr(w, "delete record: "+err.Error())
+			return
+		}
+		s.audit(0, "cloudflare:record:delete", recordID, r)
+		jsonOK(w, map[string]string{"status": "ok"})
+
+	case path == "update-ip" && r.Method == http.MethodPost:
+		var req struct {
+			ZoneID string `json:"zoneId"`
+			Name   string `json:"name"`
+			NewIP  string `json:"newIp"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			jsonErr(w, "invalid body: "+err.Error())
+			return
+		}
+		if err := cf.UpdateDNSRecordIP(req.ZoneID, req.Name, req.NewIP); err != nil {
+			jsonErr(w, "update ip: "+err.Error())
+			return
+		}
+		s.audit(0, "cloudflare:ip:update", req.Name+" → "+req.NewIP, r)
+		jsonOK(w, map[string]string{"status": "ok"})
+
+	default:
+		jsonErr(w, "unknown cloudflare endpoint")
+	}
 }
 
 // --- helpers ---

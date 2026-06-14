@@ -1,0 +1,25 @@
+services:
+  oci-helper:
+    image: ghcr.io/viogus/oci-helper-go:latest
+    container_name: oci-helper
+    restart: unless-stopped
+    ports:
+      - "8818:8818"
+    volumes:
+      - oci-helper-data:/app/oci-helper
+    environment:
+      - OCI_USERNAME=admin
+      - OCI_PASSWORD=change-me
+      - PORT=8818
+    healthcheck:
+      test: ["CMD", "/oci-helper", "health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+
+volumes:
+  oci-helper-data:

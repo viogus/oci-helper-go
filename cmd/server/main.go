@@ -39,7 +39,7 @@ func main() {
 	// open db
 	store, err := db.New(cfg.DBPath)
 	if err != nil {
-		log.Fatalf("open db: %v", err)
+		log.Fatalf("open db %s: %v (check volume permissions)", cfg.DBPath, err)
 	}
 	defer store.Close()
 

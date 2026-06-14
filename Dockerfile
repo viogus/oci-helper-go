@@ -6,6 +6,7 @@ RUN apk add --no-cache git ca-certificates
 
 # prepare passwd/group for scratch
 RUN mkdir -p /app/oci-helper/keys && \
+    chmod 777 /app/oci-helper /app/oci-helper/keys && \
     echo "nobody:x:65534:65534:nobody:/:/sbin/nologin" > /etc/passwd && \
     echo "nobody:x:65534:" > /etc/group
 

@@ -31,9 +31,9 @@ func main() {
 
 	cfg := config.Load()
 
-	// ensure data dir
+	// ensure data dir (non-fatal: keys dir only needed for PEM key file uploads)
 	if err := os.MkdirAll(cfg.KeysDir, 0700); err != nil {
-		log.Fatalf("mkdir keys: %v", err)
+		log.Printf("warn: cannot create keys dir %s: %v", cfg.KeysDir, err)
 	}
 
 	// open db

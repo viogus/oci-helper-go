@@ -7,8 +7,6 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -1225,9 +1223,3 @@ func jsonErr(w http.ResponseWriter, msg string) {
 	json.NewEncoder(w).Encode(map[string]string{"error": msg})
 }
 
-func init() {
-	// ensure keys dir exists
-	if err := os.MkdirAll(filepath.Join("/app", "oci-helper", "keys"), 0700); err != nil {
-		log.Printf("warn: cannot create keys dir: %v", err)
-	}
-}

@@ -5,7 +5,8 @@ FROM golang:1.26-alpine AS builder
 RUN apk add --no-cache git ca-certificates
 
 # prepare passwd/group for scratch
-RUN echo "nobody:x:65534:65534:nobody:/:/sbin/nologin" > /etc/passwd && \
+RUN mkdir -p /app/oci-helper/keys && \
+    echo "nobody:x:65534:65534:nobody:/:/sbin/nologin" > /etc/passwd && \
     echo "nobody:x:65534:" > /etc/group
 
 WORKDIR /src
@@ -22,6 +23,7 @@ FROM scratch
 COPY --from=builder /oci-helper /oci-helper
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 COPY --from=builder /etc/passwd /etc/group /etc/
+COPY --from=builder /app/oci-helper /app/oci-helper
 
 USER 65534
 EXPOSE 8818

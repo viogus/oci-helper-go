@@ -28,6 +28,9 @@ func New(path string) (*Store, error) {
 func (s *Store) Close() error { return s.db.Close() }
 
 func (s *Store) migrate() error {
+	if _, err := s.db.Exec(`PRAGMA foreign_keys = ON`); err != nil {
+		return fmt.Errorf("pragma: %w", err)
+	}
 	ddl := []string{
 		`CREATE TABLE IF NOT EXISTS tenants (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,

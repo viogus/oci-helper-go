@@ -70,15 +70,25 @@ func NewClient(t *db.Tenant) (*Client, error) {
 func (c *Client) Tenant() *db.Tenant { return c.tenant }
 
 func (c *Client) ListInstances(ctx context.Context, compartmentID string) ([]core.Instance, error) {
-	req := core.ListInstancesRequest{
-		CompartmentId: common.String(compartmentID),
-		Limit:         common.Int(100),
+	var all []core.Instance
+	page := common.String("")
+	for {
+		req := core.ListInstancesRequest{
+			CompartmentId: common.String(compartmentID),
+			Limit:         common.Int(1000),
+			Page:          page,
+		}
+		resp, err := c.compute.ListInstances(ctx, req)
+		if err != nil {
+			return nil, fmt.Errorf("list instances: %w", err)
+		}
+		all = append(all, resp.Items...)
+		if resp.OpcNextPage == nil || *resp.OpcNextPage == "" {
+			break
+		}
+		page = resp.OpcNextPage
 	}
-	resp, err := c.compute.ListInstances(ctx, req)
-	if err != nil {
-		return nil, fmt.Errorf("list instances: %w", err)
-	}
-	return resp.Items, nil
+	return all, nil
 }
 
 func (c *Client) GetInstance(ctx context.Context, instanceID string) (*core.Instance, error) {
@@ -119,7 +129,7 @@ func (c *Client) TerminateInstance(ctx context.Context, instanceID string) error
 func (c *Client) ListVCNs(ctx context.Context, compartmentID string) ([]core.Vcn, error) {
 	req := core.ListVcnsRequest{
 		CompartmentId: common.String(compartmentID),
-		Limit:         common.Int(100),
+		Limit:         common.Int(1000),
 	}
 	resp, err := c.vcn.ListVcns(ctx, req)
 	if err != nil {
@@ -132,7 +142,7 @@ func (c *Client) ListSubnets(ctx context.Context, compartmentID, vcnID string) (
 	req := core.ListSubnetsRequest{
 		CompartmentId: common.String(compartmentID),
 		VcnId:         common.String(vcnID),
-		Limit:         common.Int(100),
+		Limit:         common.Int(1000),
 	}
 	resp, err := c.vcn.ListSubnets(ctx, req)
 	if err != nil {
@@ -197,7 +207,7 @@ func (c *Client) ListPublicIPs(ctx context.Context, compartmentID string) ([]cor
 	req := core.ListPublicIpsRequest{
 		CompartmentId: common.String(compartmentID),
 		Scope:         core.ListPublicIpsScopeRegion,
-		Limit:         common.Int(100),
+		Limit:         common.Int(1000),
 	}
 	resp, err := c.vcn.ListPublicIps(ctx, req)
 	if err != nil {
@@ -234,7 +244,7 @@ func (c *Client) ListShapes(ctx context.Context, compartmentID, imageID string) 
 	req := core.ListShapesRequest{
 		CompartmentId: common.String(compartmentID),
 		ImageId:       common.String(imageID),
-		Limit:         common.Int(100),
+		Limit:         common.Int(1000),
 	}
 	resp, err := c.compute.ListShapes(ctx, req)
 	if err != nil {
@@ -248,7 +258,7 @@ func (c *Client) ListShapes(ctx context.Context, compartmentID, imageID string) 
 func (c *Client) ListBootVolumes(ctx context.Context, compartmentID string) ([]core.BootVolume, error) {
 	req := core.ListBootVolumesRequest{
 		CompartmentId: common.String(compartmentID),
-		Limit:         common.Int(100),
+		Limit:         common.Int(1000),
 	}
 	resp, err := c.bootVolume.ListBootVolumes(ctx, req)
 	if err != nil {

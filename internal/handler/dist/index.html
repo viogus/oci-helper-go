@@ -623,6 +623,9 @@ async function saveCFToken() {
 async function loadCFZones() {
   const r = await api('/api/cloudflare/zones');
   if (!r) {
+    document.getElementById('cf-zones').innerHTML = '<tr><td colspan="2">Configure cloudflare_token in settings first</td></tr>';
+    return;
+  }
   const zones = await r.json();
   if (zones.error) {
     document.getElementById('cf-zones').innerHTML = '<tr><td colspan="2">'+esc(zones.error)+'</td></tr>';
@@ -734,7 +737,11 @@ async function mfaVerify() {
 }
 
 async function mfaDisable() {
-  await api('/api/mfa/disable', {method:'POST'});
+  const code = prompt('Enter your current TOTP code to disable MFA:');
+  if (!code) return;
+  const r = await api('/api/mfa/disable', {method:'POST', body: JSON.stringify({code})});
+  const d = await r.json();
+  if (d.error) { alert(d.error); return; }
   loadMFAStatus();
 }
 

@@ -173,7 +173,31 @@ func (s *Store) UpsertInstanceImport(id string, tenantID int64, name, ocid, shap
 	return err
 }
 
+// ClearAll removes all data (for restore)
+func (s *Store) ClearAll() {
+	s.db.Exec(`DELETE FROM instances`)
+	s.db.Exec(`DELETE FROM tenants`)
+	s.db.Exec(`DELETE FROM config`)
+}
+
 // Config
+
+func (s *Store) ListAllConfig() ([]ConfigKV, error) {
+	rows, err := s.db.Query(`SELECT key, value FROM config ORDER BY key`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var list []ConfigKV
+	for rows.Next() {
+		var c ConfigKV
+		if err := rows.Scan(&c.Key, &c.Value); err != nil {
+			return nil, err
+		}
+		list = append(list, c)
+	}
+	return list, rows.Err()
+}
 
 func (s *Store) GetConfig(key string) (string, error) {
 	var v string

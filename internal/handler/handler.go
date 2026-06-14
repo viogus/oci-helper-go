@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -104,12 +105,21 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// check MFA BEFORE setting session — prevents MFA status leak
-	mfaEnabled, _ := s.store.GetConfig("mfa_enabled")
+	mfaEnabled, mfaErr := s.store.GetConfig("mfa_enabled")
+	if mfaErr != nil {
+		log.Printf("[login] config read error: %v", mfaErr)
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
 	if mfaEnabled == "true" {
 		totp := r.Header.Get("X-TOTP")
-		secret, _ := s.store.GetConfig("mfa_secret")
+		secret, err := s.store.GetConfig("mfa_secret")
+		if err != nil {
+			log.Printf("[login] secret read error: %v", err)
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
 		if totp == "" || !auth.ValidateTOTP(secret, totp) {
-			// intentionally same 401 as bad password — no MFA status leak
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
@@ -302,6 +312,18 @@ func (s *Server) handleMFAVerify(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleMFADisable(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		Code string `json:"code"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonErr(w, "invalid body: "+err.Error())
+		return
+	}
+	secret, _ := s.store.GetConfig("mfa_secret")
+	if secret == "" || !auth.ValidateTOTP(secret, req.Code) {
+		jsonErr(w, "valid TOTP code required to disable MFA")
 		return
 	}
 	s.store.SetConfig("mfa_enabled", "false")
@@ -1040,7 +1062,7 @@ func (s *Server) handleShell(w http.ResponseWriter, r *http.Request) {
 		"instanceId":   instanceID,
 		"instanceName": strOr(inst.DisplayName, ""),
 		"state":        string(inst.LifecycleState),
-		"message":      "WebSocket shell endpoint ready. Connect via ws:// for interactive terminal.",
+		"message":      "Instance console access. Use OCI Console Connections API for interactive SSH/terminal.",
 	})
 }
 
@@ -1200,7 +1222,8 @@ func (s *Server) handleCloudflare(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) audit(tenantID int64, action, detail string, r *http.Request) {
 	ip := r.RemoteAddr
-	if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
+	// Only trust X-Forwarded-For from localhost or private network
+	if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" && isTrustedProxy(r.RemoteAddr) {
 		ip = strings.Split(fwd, ",")[0]
 	}
 	s.store.AddAudit(&db.AuditLog{
@@ -1209,6 +1232,18 @@ func (s *Server) audit(tenantID int64, action, detail string, r *http.Request) {
 		Detail:   detail,
 		IP:       strings.TrimSpace(ip),
 	})
+}
+
+func isTrustedProxy(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false
+	}
+	return ip.IsLoopback() || ip.IsPrivate()
 }
 
 func jsonOK(w http.ResponseWriter, v interface{}) {

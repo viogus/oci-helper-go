@@ -80,14 +80,14 @@ func (s *Server) handleBackup(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	// export config keys
-	configKeys := []string{"mfa_secret", "mfa_enabled"}
-	for _, k := range configKeys {
-		v, err := s.store.GetConfig(k)
-		if err != nil {
-			continue
-		}
-		data.Config = append(data.Config, dbConfig{Key: k, Value: v})
+	// export all config keys
+	configList, err := s.store.ListAllConfig()
+	if err != nil {
+		jsonErr(w, "list config: "+err.Error())
+		return
+	}
+	for _, c := range configList {
+		data.Config = append(data.Config, dbConfig{Key: c.Key, Value: c.Value})
 	}
 
 	plain, _ := json.Marshal(data)
@@ -136,6 +136,9 @@ func (s *Server) handleRestore(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, "invalid backup: "+err.Error())
 		return
 	}
+
+	// clear existing data before restore
+	s.store.ClearAll()
 
 	// restore tenants
 	for _, t := range data.Tenants {

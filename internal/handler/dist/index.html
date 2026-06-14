@@ -341,7 +341,7 @@ function switchTab(t) {
   currentTab = t;
   document.querySelectorAll('#tab-bar .tab').forEach(e=>e.classList.remove('active'));
   document.querySelector(`[data-tab="${t}"]`)?.classList.add('active');
-  document.querySelectorAll('[id^="tab-"]').forEach(e=>e.classList.add('hidden'));
+  document.querySelectorAll('[id^="tab-"]:not(#tab-bar)').forEach(e=>e.classList.add('hidden'));
   const el = document.getElementById('tab-'+t);
   if (el) el.classList.remove('hidden');
 

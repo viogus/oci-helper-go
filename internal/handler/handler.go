@@ -52,6 +52,17 @@ func New(cfg *config.Config, store *db.Store) *Server {
 	return s
 }
 
+// clientFor resolves the tenant's key file path (may be relative filename)
+// to an absolute path under KeysDir before creating the OCI client.
+func (s *Server) clientFor(t *db.Tenant) (*ociclient.Client, error) {
+	if t.KeyFile != "" && !filepath.IsAbs(t.KeyFile) {
+		resolved := *t
+		resolved.KeyFile = filepath.Join(s.cfg.KeysDir, t.KeyFile)
+		return ociclient.NewClient(&resolved)
+	}
+	return ociclient.NewClient(t)
+}
+
 func (s *Server) routes() {
 	// API — exact paths
 	s.mux.HandleFunc("/api/login", s.handleLogin)
@@ -501,7 +512,7 @@ func (s *Server) createInstance(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	client, err := ociclient.NewClient(t)
+	client, err := s.clientFor(t)
 	if err != nil {
 		jsonErr(w, "oci client: "+err.Error())
 		return
@@ -588,7 +599,7 @@ func (s *Server) ociClientFromQuery(w http.ResponseWriter, r *http.Request) (*oc
 		jsonErr(w, "tenant not found")
 		return nil, nil, false
 	}
-	client, err := ociclient.NewClient(t)
+	client, err := s.clientFor(t)
 	if err != nil {
 		jsonErr(w, "oci client: "+err.Error())
 		return nil, nil, false
@@ -705,7 +716,7 @@ func (s *Server) handlePublicIPs(w http.ResponseWriter, r *http.Request) {
 			jsonErr(w, "tenant not found")
 			return
 		}
-		client, err := ociclient.NewClient(t)
+		client, err := s.clientFor(t)
 		if err != nil {
 			jsonErr(w, "oci client: "+err.Error())
 			return
@@ -746,7 +757,7 @@ func (s *Server) handlePublicIPByID(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, "tenant not found")
 		return
 	}
-	client, err := ociclient.NewClient(t)
+	client, err := s.clientFor(t)
 	if err != nil {
 		jsonErr(w, "oci client: "+err.Error())
 		return
@@ -789,7 +800,7 @@ func (s *Server) handleInstanceAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	client, err := ociclient.NewClient(t)
+	client, err := s.clientFor(t)
 	if err != nil {
 		jsonErr(w, "oci client: "+err.Error())
 		return
@@ -990,7 +1001,7 @@ func (s *Server) handleBootVolumeByID(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, "tenant not found")
 		return
 	}
-	client, err := ociclient.NewClient(t)
+	client, err := s.clientFor(t)
 	if err != nil {
 		jsonErr(w, "oci client: "+err.Error())
 		return
@@ -1061,7 +1072,7 @@ func (s *Server) handleSync(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, "tenant not found")
 		return
 	}
-	client, err := ociclient.NewClient(t)
+	client, err := s.clientFor(t)
 	if err != nil {
 		jsonErr(w, "oci client: "+err.Error())
 		return
@@ -1146,7 +1157,7 @@ func (s *Server) handleShell(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	client, err := ociclient.NewClient(t)
+	client, err := s.clientFor(t)
 	if err != nil {
 		jsonErr(w, "oci client: "+err.Error())
 		return
@@ -1480,7 +1491,7 @@ func (s *Server) handleChangeShape(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, "tenant not found")
 		return
 	}
-	client, err := ociclient.NewClient(tenant)
+	client, err := s.clientFor(tenant)
 	if err != nil {
 		jsonErr(w, "oci client: "+err.Error())
 		return
@@ -1513,7 +1524,7 @@ func (s *Server) handleChangeBootVolume(w http.ResponseWriter, r *http.Request) 
 		jsonErr(w, "tenant not found")
 		return
 	}
-	client, err := ociclient.NewClient(tenant)
+	client, err := s.clientFor(tenant)
 	if err != nil {
 		jsonErr(w, "oci client: "+err.Error())
 		return
@@ -1550,7 +1561,7 @@ func (s *Server) handleAttachIPv6(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, "tenant not found")
 		return
 	}
-	client, err := ociclient.NewClient(tenant)
+	client, err := s.clientFor(tenant)
 	if err != nil {
 		jsonErr(w, "oci client: "+err.Error())
 		return
@@ -1592,7 +1603,7 @@ func (s *Server) handleUpdateInstanceName(w http.ResponseWriter, r *http.Request
 		jsonErr(w, "tenant not found")
 		return
 	}
-	client, err := ociclient.NewClient(tenant)
+	client, err := s.clientFor(tenant)
 	if err != nil {
 		jsonErr(w, "oci client: "+err.Error())
 		return
@@ -1625,7 +1636,7 @@ func (s *Server) handleChangeIP(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, "tenant not found")
 		return
 	}
-	client, err := ociclient.NewClient(tenant)
+	client, err := s.clientFor(tenant)
 	if err != nil {
 		jsonErr(w, "oci client: "+err.Error())
 		return
@@ -1720,7 +1731,7 @@ func (s *Server) handleOneClick500M(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, "tenant not found")
 		return
 	}
-	client, err := ociclient.NewClient(tenant)
+	client, err := s.clientFor(tenant)
 	if err != nil {
 		jsonErr(w, "oci client: "+err.Error())
 		return
@@ -1751,7 +1762,7 @@ func (s *Server) handleOneClickClose500M(w http.ResponseWriter, r *http.Request)
 		jsonErr(w, "tenant not found")
 		return
 	}
-	client, err := ociclient.NewClient(tenant)
+	client, err := s.clientFor(tenant)
 	if err != nil {
 		jsonErr(w, "oci client: "+err.Error())
 		return
@@ -1785,7 +1796,7 @@ func (s *Server) handleUpdateShape(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, "tenant not found")
 		return
 	}
-	client, err := ociclient.NewClient(tenant)
+	client, err := s.clientFor(tenant)
 	if err != nil {
 		jsonErr(w, "oci client: "+err.Error())
 		return
@@ -1817,7 +1828,7 @@ func (s *Server) handleLimits(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, "tenant not found")
 		return
 	}
-	client, err := ociclient.NewClient(tenant)
+	client, err := s.clientFor(tenant)
 	if err != nil {
 		jsonErr(w, "oci client: "+err.Error())
 		return

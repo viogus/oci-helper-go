@@ -375,11 +375,24 @@ func (s *Server) handleMFADisable(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleTenants(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		list, _ := s.store.ListTenants()
+		keyword := r.URL.Query().Get("keyword")
+		page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+		if page < 1 {
+			page = 1
+		}
+		size, _ := strconv.Atoi(r.URL.Query().Get("size"))
+		if size < 1 {
+			size = 20
+		}
+		list, total, err := s.store.ListTenantsPaginated(keyword, page, size)
+		if err != nil {
+			jsonErr(w, "list tenants: "+err.Error())
+			return
+		}
 		if list == nil {
 			list = []db.Tenant{}
 		}
-		jsonOK(w, list)
+		jsonOK(w, map[string]interface{}{"data": list, "total": total, "page": page, "size": size})
 	case http.MethodPost:
 		var t db.Tenant
 		if err := json.NewDecoder(r.Body).Decode(&t); err != nil {
@@ -430,11 +443,24 @@ func (s *Server) handleInstances(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		tenantID, _ := strconv.ParseInt(r.URL.Query().Get("tenant_id"), 10, 64)
-		list, _ := s.store.ListInstances(tenantID)
+		keyword := r.URL.Query().Get("keyword")
+		page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+		if page < 1 {
+			page = 1
+		}
+		size, _ := strconv.Atoi(r.URL.Query().Get("size"))
+		if size < 1 {
+			size = 20
+		}
+		list, total, err := s.store.ListInstancesPaginated(tenantID, keyword, page, size)
+		if err != nil {
+			jsonErr(w, "list instances: "+err.Error())
+			return
+		}
 		if list == nil {
 			list = []db.Instance{}
 		}
-		jsonOK(w, list)
+		jsonOK(w, map[string]interface{}{"data": list, "total": total, "page": page, "size": size})
 	case http.MethodPost:
 		s.createInstance(w, r)
 	default:
@@ -852,11 +878,24 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	list, _ := s.store.ListTasks()
+	keyword := r.URL.Query().Get("keyword")
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	if page < 1 {
+		page = 1
+	}
+	size, _ := strconv.Atoi(r.URL.Query().Get("size"))
+	if size < 1 {
+		size = 20
+	}
+	list, total, err := s.store.ListTasksPaginated(keyword, page, size)
+	if err != nil {
+		jsonErr(w, "list tasks: "+err.Error())
+		return
+	}
 	if list == nil {
 		list = []db.Task{}
 	}
-	jsonOK(w, list)
+	jsonOK(w, map[string]interface{}{"data": list, "total": total, "page": page, "size": size})
 }
 
 // --- audit ---

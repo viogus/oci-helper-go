@@ -31,9 +31,12 @@ func main() {
 
 	cfg := config.Load()
 
-	// ensure data dir (non-fatal: keys dir only needed for PEM key file uploads)
-	if err := os.MkdirAll(cfg.KeysDir, 0700); err != nil {
+	// ensure keys dir exists and is writable (nobody user in container)
+	if err := os.MkdirAll(cfg.KeysDir, 0777); err != nil {
 		log.Printf("warn: cannot create keys dir %s: %v", cfg.KeysDir, err)
+	}
+	if err := os.Chmod(cfg.KeysDir, 0777); err != nil {
+		log.Printf("warn: cannot set keys dir permission %s: %v (PEM upload may fail)", cfg.KeysDir, err)
 	}
 
 	// open db

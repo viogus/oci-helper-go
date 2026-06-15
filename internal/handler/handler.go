@@ -1407,10 +1407,14 @@ func (s *Server) handleKeys(w http.ResponseWriter, r *http.Request) {
 				jsonErr(w, "open upload: "+err.Error())
 				return
 			}
-			out, err := os.Create(dst)
+			out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
 			if err != nil {
 				src.Close()
-				jsonErr(w, "create file: "+err.Error())
+				if os.IsPermission(err) {
+					jsonErr(w, fmt.Sprintf("permission denied writing key file — check that %s is writable", s.cfg.KeysDir))
+				} else {
+					jsonErr(w, "create file: "+err.Error())
+				}
 				return
 			}
 			if _, err := io.Copy(out, src); err != nil {

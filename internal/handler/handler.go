@@ -1579,10 +1579,65 @@ func (s *Server) handleCheckAlive(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]string{"status": "not implemented"})
 }
 func (s *Server) handleOneClick500M(w http.ResponseWriter, r *http.Request) {
-	jsonOK(w, map[string]string{"status": "not implemented"})
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		TenantID   int64  `json:"tenant_id"`
+		InstanceID string `json:"instance_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonErr(w, "invalid body: "+err.Error())
+		return
+	}
+	tenant, err := s.store.GetTenant(req.TenantID)
+	if err != nil || tenant == nil {
+		jsonErr(w, "tenant not found")
+		return
+	}
+	client, err := ociclient.NewClient(tenant)
+	if err != nil {
+		jsonErr(w, "oci client: "+err.Error())
+		return
+	}
+	if err := client.Enable500Mbps(r.Context(), req.InstanceID); err != nil {
+		jsonErr(w, "enable 500M: "+err.Error())
+		return
+	}
+	s.audit(req.TenantID, "instance:500m-enable", req.InstanceID, r)
+	jsonOK(w, map[string]string{"status": "ok"})
 }
+
 func (s *Server) handleOneClickClose500M(w http.ResponseWriter, r *http.Request) {
-	jsonOK(w, map[string]string{"status": "not implemented"})
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		TenantID   int64  `json:"tenant_id"`
+		InstanceID string `json:"instance_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonErr(w, "invalid body: "+err.Error())
+		return
+	}
+	tenant, err := s.store.GetTenant(req.TenantID)
+	if err != nil || tenant == nil {
+		jsonErr(w, "tenant not found")
+		return
+	}
+	client, err := ociclient.NewClient(tenant)
+	if err != nil {
+		jsonErr(w, "oci client: "+err.Error())
+		return
+	}
+	if err := client.Disable500Mbps(r.Context(), req.InstanceID); err != nil {
+		jsonErr(w, "disable 500M: "+err.Error())
+		return
+	}
+	s.audit(req.TenantID, "instance:500m-disable", req.InstanceID, r)
+	jsonOK(w, map[string]string{"status": "ok"})
 }
 func (s *Server) handleAutoRescue(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]string{"status": "not implemented"})
@@ -1621,7 +1676,34 @@ func (s *Server) handleUpdateShape(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]string{"status": "ok"})
 }
 func (s *Server) handleLimits(w http.ResponseWriter, r *http.Request) {
-	jsonOK(w, map[string]string{"status": "not implemented"})
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		TenantID    int64  `json:"tenant_id"`
+		ServiceName string `json:"service_name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonErr(w, "invalid body: "+err.Error())
+		return
+	}
+	tenant, err := s.store.GetTenant(req.TenantID)
+	if err != nil || tenant == nil {
+		jsonErr(w, "tenant not found")
+		return
+	}
+	client, err := ociclient.NewClient(tenant)
+	if err != nil {
+		jsonErr(w, "oci client: "+err.Error())
+		return
+	}
+	limits, err := client.GetLimits(r.Context(), req.TenantID, req.ServiceName)
+	if err != nil {
+		jsonErr(w, "get limits: "+err.Error())
+		return
+	}
+	jsonOK(w, limits)
 }
 func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]string{"status": "not implemented"})

@@ -11,6 +11,7 @@ import (
 	"github.com/oracle/oci-go-sdk/v65/common"
 	"github.com/oracle/oci-go-sdk/v65/core"
 	"github.com/oracle/oci-go-sdk/v65/identity"
+	"github.com/oracle/oci-go-sdk/v65/limits"
 	"github.com/oracle/oci-go-sdk/v65/monitoring"
 
 	"github.com/viogus/oci-helper-go/internal/db"
@@ -24,6 +25,7 @@ type Client struct {
 	identity   identity.IdentityClient
 	bootVolume core.BlockstorageClient
 	monitoring monitoring.MonitoringClient
+	limits     limits.LimitsClient
 	mu         sync.Mutex
 }
 
@@ -58,6 +60,11 @@ func NewClient(t *db.Tenant) (*Client, error) {
 		return nil, fmt.Errorf("monitoring client: %w", err)
 	}
 
+	lim, err := limits.NewLimitsClientWithConfigurationProvider(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("limits client: %w", err)
+	}
+
 	return &Client{
 		tenant:     t,
 		rawCfg:     cfg,
@@ -66,6 +73,7 @@ func NewClient(t *db.Tenant) (*Client, error) {
 		identity:   id,
 		bootVolume: bv,
 		monitoring: mon,
+		limits:     lim,
 	}, nil
 }
 
@@ -727,4 +735,77 @@ func (c *Client) ReleaseAllPorts(ctx context.Context, vcnID string) error {
 		}
 	}
 	return nil
+}
+
+// --- Limits ---
+
+type LimitInfo struct {
+	ServiceName string `json:"serviceName"`
+	Name        string `json:"name"`
+	Used        int64  `json:"used"`
+	Available   int64  `json:"available"`
+	Max         int64  `json:"max"`
+}
+
+func (c *Client) GetLimits(ctx context.Context, tenantID int64, serviceName string) ([]LimitInfo, error) {
+	compartmentID := c.tenant.TenancyOCID
+	req := limits.ListLimitDefinitionsRequest{
+		CompartmentId: common.String(compartmentID),
+		ServiceName:   common.String(serviceName),
+		Limit:         common.Int(100),
+	}
+	resp, err := c.limits.ListLimitDefinitions(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	var result []LimitInfo
+	for _, def := range resp.Items {
+		valReq := limits.GetResourceAvailabilityRequest{
+			ServiceName:    common.String(serviceName),
+			LimitName:      def.Name,
+			CompartmentId:  common.String(compartmentID),
+			AvailabilityDomain: common.String(c.tenant.Region),
+		}
+		valResp, err := c.limits.GetResourceAvailability(ctx, valReq)
+		if err != nil {
+			continue
+		}
+		info := LimitInfo{
+			ServiceName: *def.ServiceName,
+			Name:        *def.Name,
+		}
+		if valResp.Available != nil {
+			info.Available = *valResp.Available
+		}
+		if valResp.Used != nil {
+			info.Used = *valResp.Used
+		}
+		if valResp.EffectiveQuotaValue != nil {
+			info.Max = int64(*valResp.EffectiveQuotaValue)
+		}
+		result = append(result, info)
+	}
+	return result, nil
+}
+
+// --- One-Click 500Mbps ---
+
+// Enable500Mbps creates a Network Load Balancer for the instance to achieve 500Mbps bandwidth.
+// Note: This requires the OCI network load balancer API which may need additional SDK imports.
+func (c *Client) Enable500Mbps(ctx context.Context, instanceID string) error {
+	compartmentID := c.tenant.TenancyOCID
+	vnics, err := c.GetInstanceVNICs(ctx, compartmentID, instanceID)
+	if err != nil {
+		return fmt.Errorf("get vnics: %w", err)
+	}
+	if len(vnics) == 0 {
+		return fmt.Errorf("no VNIC found")
+	}
+	_ = vnics
+	return fmt.Errorf("NLB creation requires OCI network load balancer SDK (not yet integrated)")
+}
+
+// Disable500Mbps deletes the NLB associated with the instance.
+func (c *Client) Disable500Mbps(ctx context.Context, instanceID string) error {
+	return fmt.Errorf("NLB deletion requires OCI network load balancer SDK (not yet integrated)")
 }

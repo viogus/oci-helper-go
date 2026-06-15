@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"crypto/subtle"
 	"embed"
 	"encoding/json"
 	"fmt"
@@ -195,6 +196,7 @@ func (s *Server) handleGoogleLogin(w http.ResponseWriter, r *http.Request) {
 		HttpOnly: true,
 		MaxAge:   600,
 	})
+	// NOTE: redirect_uri must match the URI registered in Google Cloud Console
 	redirectURL := "https://accounts.google.com/o/oauth2/v2/auth" +
 		"?client_id=" + s.cfg.GoogleOAuth.ClientID +
 		"&redirect_uri=" + s.cfg.GoogleOAuth.RedirectURL +
@@ -210,9 +212,9 @@ func (s *Server) handleGoogleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// verify state
+	// verify state using timing-safe comparison
 	cookie, err := r.Cookie("oauth_state")
-	if err != nil || cookie.Value != r.URL.Query().Get("state") {
+	if err != nil || subtle.ConstantTimeCompare([]byte(cookie.Value), []byte(r.URL.Query().Get("state"))) != 1 {
 		jsonErr(w, "invalid state")
 		return
 	}
@@ -239,7 +241,10 @@ func (s *Server) handleGoogleCallback(w http.ResponseWriter, r *http.Request) {
 	var tokenResp struct {
 		AccessToken string `json:"access_token"`
 	}
-	json.NewDecoder(resp.Body).Decode(&tokenResp)
+	if err := json.NewDecoder(resp.Body).Decode(&tokenResp); err != nil {
+		jsonErr(w, "token decode: "+err.Error())
+		return
+	}
 	if tokenResp.AccessToken == "" {
 		jsonErr(w, "token exchange failed")
 		return
@@ -258,7 +263,10 @@ func (s *Server) handleGoogleCallback(w http.ResponseWriter, r *http.Request) {
 	var userInfo struct {
 		Email string `json:"email"`
 	}
-	json.NewDecoder(userResp.Body).Decode(&userInfo)
+	if err := json.NewDecoder(userResp.Body).Decode(&userInfo); err != nil {
+		jsonErr(w, "userinfo decode: "+err.Error())
+		return
+	}
 
 	// set session using signed cookie
 	signedValue := s.auth.CreateSession(userInfo.Email)
@@ -1290,7 +1298,7 @@ func (s *Server) handleCloudflare(w http.ResponseWriter, r *http.Request) {
 			jsonErr(w, "update ip: "+err.Error())
 			return
 		}
-		s.audit(0, "cloudflare:ip:update", req.Name+" → "+req.NewIP, r)
+		s.audit(0, "cloudflare:ip:update", req.Name+" → "+maskIP(req.NewIP), r)
 		jsonOK(w, map[string]string{"status": "ok"})
 
 	default:
@@ -1324,6 +1332,15 @@ func isTrustedProxy(addr string) bool {
 		return false
 	}
 	return ip.IsLoopback() || ip.IsPrivate()
+}
+
+func maskIP(s string) string {
+	parts := strings.Split(s, ".")
+	if len(parts) == 4 {
+		parts[3] = "***"
+		return strings.Join(parts, ".")
+	}
+	return s
 }
 
 // --- key file management ---
@@ -1602,7 +1619,7 @@ func (s *Server) handleChangeIP(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, "change ip: "+err.Error())
 		return
 	}
-	s.audit(req.TenantID, "instance:change-ip", req.InstanceID+" → "+newIP, r)
+	s.audit(req.TenantID, "instance:change-ip", req.InstanceID+" → "+maskIP(newIP), r)
 	jsonOK(w, map[string]string{"new_ip": newIP, "status": "ok"})
 }
 func (s *Server) handleCheckAlive(w http.ResponseWriter, r *http.Request) {

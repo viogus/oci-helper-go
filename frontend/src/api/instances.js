@@ -27,3 +27,7 @@ export function attachIPv6(data) {
 export function updateInstanceName(data) {
   return post('/instances/update-name', data)
 }
+
+export function checkAlive(data) {
+  return post('/instances/check-alive', data)
+}

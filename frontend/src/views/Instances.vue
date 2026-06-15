@@ -213,36 +213,85 @@
     </el-dialog>
 
     <!-- Metrics Dialog (placeholder — Phase 3) -->
-    <el-dialog v-model="metricsVisible" title="Instance Metrics" width="640px">
+    <el-dialog v-model="metricsVisible" title="Instance Metrics" width="680px">
       <p v-if="currentInstance">
         Metrics for <strong>{{ currentInstance.name }}</strong>
         <span style="color: #909399; margin-left: 8px;">({{ currentInstance.shape }})</span>
       </p>
-      <el-alert
-        title="Metrics visualization will be available in Phase 3"
-        type="info"
-        :closable="false"
-        show-icon
-        style="margin-top: 16px"
-      />
+
+      <div v-if="metricsLoading" style="text-align:center;padding:40px">
+        <el-icon class="is-loading" :size="32"><Loading /></el-icon>
+        <p style="margin-top:8px;color:#909399;">Loading metrics...</p>
+      </div>
+
+      <el-alert v-else-if="metricsError" :title="metricsError" type="error" :closable="false" show-icon style="margin-top: 16px" />
+
+      <div v-else-if="metricsData" class="metrics-grid">
+        <div class="metric-card">
+          <h4>CPU Utilization</h4>
+          <VChart :option="cpuGaugeOption" class="gauge-chart" autoresize />
+        </div>
+        <div class="metric-card">
+          <h4>Memory Utilization</h4>
+          <VChart :option="memGaugeOption" class="gauge-chart" autoresize />
+        </div>
+        <div class="metric-card full-width">
+          <h4>Network</h4>
+          <VChart :option="netBarOption" class="bar-chart" autoresize />
+        </div>
+        <div class="metric-card full-width">
+          <h4>Disk I/O</h4>
+          <VChart :option="diskBarOption" class="bar-chart" autoresize />
+        </div>
+      </div>
+
+      <el-empty v-else description="No metrics data available" />
+
       <template #footer>
         <el-button @click="metricsVisible = false">Close</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- Check Alive Results Dialog -->
+    <el-dialog v-model="checkAliveVisible" title="Check Alive Results" width="540px">
+      <el-table :data="checkAliveResults" stripe border size="small">
+        <el-table-column prop="instance_id" label="Instance ID" min-width="200" show-overflow-tooltip />
+        <el-table-column prop="alive" label="Status" width="100" align="center">
+          <template #default="{ row }">
+            <el-tag :type="row.alive ? 'success' : 'danger'" effect="dark" size="small">
+              {{ row.alive ? 'Alive' : 'Dead' }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="error" label="Error" min-width="150" show-overflow-tooltip>
+          <template #default="{ row }">
+            <span v-if="row.error" style="color: #F56C6C; font-size: 12px;">{{ row.error }}</span>
+            <span v-else>-</span>
+          </template>
+        </el-table-column>
+      </el-table>
+      <template #footer>
+        <el-button @click="checkAliveVisible = false">Close</el-button>
       </template>
     </el-dialog>
   </div>
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, onMounted, computed } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { ArrowDown } from '@element-plus/icons-vue'
+import { ArrowDown, Loading } from '@element-plus/icons-vue'
+import VChart from 'vue-echarts'
+import 'echarts'
+import { getMetrics } from '../api/metrics.js'
 import {
   listInstances,
   instanceAction,
   batchStart,
   changeShape,
   changeBootVolume,
-  attachIPv6
+  attachIPv6,
+  checkAlive
 } from '../api/instances.js'
 import { get } from '../api/index.js'
 
@@ -265,6 +314,12 @@ const shapeDialogVisible = ref(false)
 const volumeDialogVisible = ref(false)
 const attachIPv6Visible = ref(false)
 const metricsVisible = ref(false)
+const metricsData = ref(null)
+const metricsLoading = ref(false)
+const metricsError = ref('')
+const checkAliveVisible = ref(false)
+const checkAliveResults = ref([])
+const checkAliveLoading = ref(false)
 const currentInstance = ref(null)
 
 const shapeForm = reactive({
@@ -530,16 +585,115 @@ async function handleBatchTerminate() {
 }
 
 async function handleCheckAlive() {
-  ElMessage.info('Check Alive — feature coming soon')
+  if (selectedRows.value.length === 0) {
+    ElMessage.warning('Select at least one instance')
+    return
+  }
+  checkAliveLoading.value = true
+  try {
+    const res = await checkAlive({
+      tenant_id: selectedRows.value[0].tenantId,
+      instance_ids: selectedRows.value.map(r => r.id)
+    })
+    checkAliveResults.value = res.results || []
+    checkAliveVisible.value = true
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || e.message)
+  } finally {
+    checkAliveLoading.value = false
+  }
 }
 
 // ---------------------------------------------------------------------------
-// Metrics (placeholder)
+// Metrics
 // ---------------------------------------------------------------------------
-function openMetrics(instance) {
+async function openMetrics(instance) {
   currentInstance.value = instance
   metricsVisible.value = true
+  metricsLoading.value = true
+  metricsError.value = ''
+  metricsData.value = null
+  try {
+    const res = await getMetrics({ tenant_id: instance.tenantId, instance_id: instance.id })
+    metricsData.value = res
+  } catch (e) {
+    metricsError.value = e.response?.data?.error || e.message
+  } finally {
+    metricsLoading.value = false
+  }
 }
+
+const cpuGaugeOption = computed(() => ({
+  series: [{
+    type: 'gauge',
+    startAngle: 220,
+    endAngle: -40,
+    min: 0,
+    max: 100,
+    splitNumber: 5,
+    axisLine: { lineStyle: { width: 10, color: [[0.5, '#67C23A'], [0.8, '#E6A23C'], [1, '#F56C6C']] } },
+    pointer: { width: 4 },
+    detail: { formatter: '{value}%', fontSize: 16 },
+    data: [{ value: metricsData.value ? Math.round(metricsData.value.CpuUtilization * 100) / 100 : 0, name: 'CPU' }]
+  }]
+}))
+
+const memGaugeOption = computed(() => ({
+  series: [{
+    type: 'gauge',
+    startAngle: 220,
+    endAngle: -40,
+    min: 0,
+    max: 100,
+    splitNumber: 5,
+    axisLine: { lineStyle: { width: 10, color: [[0.5, '#67C23A'], [0.8, '#E6A23C'], [1, '#F56C6C']] } },
+    pointer: { width: 4 },
+    detail: { formatter: '{value}%', fontSize: 16 },
+    data: [{ value: metricsData.value ? Math.round(metricsData.value.MemoryUtilization * 100) / 100 : 0, name: 'Memory' }]
+  }]
+}))
+
+function fmtBytes(v) {
+  if (!v || v === 0) return '0 B/s'
+  if (v >= 1e9) return (v / 1e9).toFixed(1) + ' GB/s'
+  if (v >= 1e6) return (v / 1e6).toFixed(1) + ' MB/s'
+  if (v >= 1e3) return (v / 1e3).toFixed(1) + ' KB/s'
+  return v.toFixed(0) + ' B/s'
+}
+
+const netBarOption = computed(() => {
+  const d = metricsData.value
+  return {
+    tooltip: { trigger: 'axis', formatter: p => p[0].name + '<br/>' + fmtBytes(p[0].value) },
+    grid: { left: 60, right: 20, top: 10, bottom: 30 },
+    xAxis: { type: 'category', data: ['In', 'Out'] },
+    yAxis: { type: 'value', axisLabel: { formatter: v => fmtBytes(v) } },
+    series: [{
+      type: 'bar', barWidth: 40,
+      data: [
+        { value: d?.NetworkBytesIn || 0, itemStyle: { color: '#5470c6' } },
+        { value: d?.NetworkBytesOut || 0, itemStyle: { color: '#91cc75' } }
+      ]
+    }]
+  }
+})
+
+const diskBarOption = computed(() => {
+  const d = metricsData.value
+  return {
+    tooltip: { trigger: 'axis', formatter: p => p[0].name + '<br/>' + fmtBytes(p[0].value) },
+    grid: { left: 60, right: 20, top: 10, bottom: 30 },
+    xAxis: { type: 'category', data: ['Read', 'Write'] },
+    yAxis: { type: 'value', axisLabel: { formatter: v => fmtBytes(v) } },
+    series: [{
+      type: 'bar', barWidth: 40,
+      data: [
+        { value: d?.DiskBytesRead || 0, itemStyle: { color: '#fac858' } },
+        { value: d?.DiskBytesWrite || 0, itemStyle: { color: '#ee6666' } }
+      ]
+    }]
+  }
+})
 
 // ---------------------------------------------------------------------------
 // Lifecycle
@@ -596,5 +750,35 @@ onMounted(() => {
   justify-content: flex-end;
   margin-top: 16px;
   padding: 8px 0;
+}
+
+/* Metrics dialog */
+.metrics-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 16px;
+}
+.metric-card {
+  width: calc(50% - 6px);
+  border: 1px solid #ebeef5;
+  border-radius: 6px;
+  padding: 10px;
+  box-sizing: border-box;
+}
+.metric-card.full-width {
+  width: 100%;
+}
+.metric-card h4 {
+  margin: 0 0 4px;
+  font-size: 13px;
+  color: #606266;
+  text-align: center;
+}
+.gauge-chart {
+  height: 180px;
+}
+.bar-chart {
+  height: 200px;
 }
 </style>

@@ -338,17 +338,22 @@ async function handleShrink(volume) {
     return // user cancelled
   }
 
-  // Call auto-rescue (stub may return "not implemented")
+  // Call auto-rescue
   try {
     const res = await post('/instances/auto-rescue', {
       tenant_id: tenantId.value,
       instance_id: instanceId
     })
-    if (res.status === 'not implemented') {
-      ElMessage.info('Auto-rescue is not yet implemented on the server')
-      return
+    if (res.steps) {
+      const lastStep = res.steps[res.steps.length - 1]
+      if (res.final_alive) {
+        ElMessage.success('Auto-rescue succeeded: alive after ' + lastStep.action)
+      } else {
+        ElMessage.warning('Auto-rescue completed but still dead. Action: ' + lastStep.action + ' error: ' + (lastStep.error || 'none'))
+      }
+    } else {
+      ElMessage.success('Auto-rescue completed')
     }
-    ElMessage.success('Boot volume shrink request submitted')
     setTimeout(() => loadBootVolumes(), 2000)
   } catch (e) {
     const msg = e.response?.data?.error || e.message

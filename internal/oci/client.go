@@ -3,6 +3,7 @@ package oci
 import (
 	"context"
 	"fmt"
+	"log"
 	"net"
 	"os"
 	"strconv"
@@ -15,6 +16,7 @@ import (
 	"github.com/oracle/oci-go-sdk/v65/identity"
 	"github.com/oracle/oci-go-sdk/v65/limits"
 	"github.com/oracle/oci-go-sdk/v65/monitoring"
+	"github.com/oracle/oci-go-sdk/v65/networkloadbalancer"
 
 	"github.com/viogus/oci-helper-go/internal/db"
 )
@@ -28,6 +30,7 @@ type Client struct {
 	bootVolume core.BlockstorageClient
 	monitoring monitoring.MonitoringClient
 	limits     limits.LimitsClient
+	nlb        networkloadbalancer.NetworkLoadBalancerClient
 	mu         sync.Mutex
 }
 
@@ -71,6 +74,11 @@ func NewClient(t *db.Tenant) (*Client, error) {
 		return nil, fmt.Errorf("limits client: %w", err)
 	}
 
+	nlb, err := networkloadbalancer.NewNetworkLoadBalancerClientWithConfigurationProvider(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("nlb client: %w", err)
+	}
+
 	return &Client{
 		tenant:     t,
 		rawCfg:     cfg,
@@ -80,6 +88,7 @@ func NewClient(t *db.Tenant) (*Client, error) {
 		bootVolume: bv,
 		monitoring: mon,
 		limits:     lim,
+		nlb:        nlb,
 	}, nil
 }
 
@@ -565,6 +574,38 @@ type SecurityRuleInfo struct {
 	Type     string `json:"type"` // "ingress" or "egress"
 }
 
+func portRangeKey(opts *core.TcpOptions) string {
+	if opts == nil || opts.DestinationPortRange == nil {
+		return "all"
+	}
+	min := *opts.DestinationPortRange.Min
+	max := *opts.DestinationPortRange.Max
+	if min == max {
+		return strconv.Itoa(min)
+	}
+	return strconv.Itoa(min) + "-" + strconv.Itoa(max)
+}
+
+func securityRuleID(slID, direction string, protocol, source, dest *string, tcpOpts *core.TcpOptions) string {
+	id := slID + "/" + direction + "/"
+	if protocol != nil {
+		id += *protocol
+	} else {
+		id += "all"
+	}
+	if direction == "ingress" && source != nil {
+		id += "/" + strings.ReplaceAll(*source, "/", "_")
+	} else if direction == "egress" && dest != nil {
+		id += "/" + strings.ReplaceAll(*dest, "/", "_")
+	} else {
+		id += "/0.0.0.0/0"
+	}
+	if protocol != nil && (*protocol == "TCP" || *protocol == "UDP") {
+		id += "/" + portRangeKey(tcpOpts)
+	}
+	return id
+}
+
 func (c *Client) ListSecurityRules(ctx context.Context, vcnID, keyword string, page, size int) ([]SecurityRuleInfo, int64, error) {
 	compartmentID := c.tenant.TenancyOCID
 	req := core.ListSecurityListsRequest{
@@ -581,7 +622,7 @@ func (c *Client) ListSecurityRules(ctx context.Context, vcnID, keyword string, p
 	for _, sl := range resp.Items {
 		for _, rule := range sl.IngressSecurityRules {
 			info := SecurityRuleInfo{
-				ID:       *sl.Id + "/ingress/" + *rule.Protocol,
+				ID:       securityRuleID(*sl.Id, "ingress", rule.Protocol, rule.Source, nil, rule.TcpOptions),
 				Name:     *sl.DisplayName,
 				Protocol: "",
 				Source:   "",
@@ -601,7 +642,7 @@ func (c *Client) ListSecurityRules(ctx context.Context, vcnID, keyword string, p
 		}
 		for _, rule := range sl.EgressSecurityRules {
 			info := SecurityRuleInfo{
-				ID:       *sl.Id + "/egress/" + *rule.Protocol,
+				ID:       securityRuleID(*sl.Id, "egress", rule.Protocol, nil, rule.Destination, rule.TcpOptions),
 				Name:     *sl.DisplayName,
 				Protocol: "",
 				Dest:     "",
@@ -738,8 +779,147 @@ func (c *Client) AddEgressRule(ctx context.Context, vcnID, protocol, port, dest 
 	return err
 }
 
+type ruleFilter struct {
+	direction     string
+	protocol      string
+	sourceOrDest  string
+	portMin       int
+	portMax       int
+	hasPort       bool
+}
+
 func (c *Client) RemoveSecurityRules(ctx context.Context, vcnID string, ruleIDs []string) error {
-	return fmt.Errorf("not implemented: remove specific rules by ID")
+	if len(ruleIDs) == 0 {
+		return fmt.Errorf("no rule IDs provided")
+	}
+
+	// Parse rule IDs: {slId}/{direction}/{protocol}[/{sourceOrDest}[/{portMin}[-{portMax}]]]
+	filtersBySL := make(map[string][]ruleFilter)
+	for _, rid := range ruleIDs {
+		parts := strings.SplitN(rid, "/", 6)
+		if len(parts) < 3 {
+			return fmt.Errorf("invalid rule ID format: %s", rid)
+		}
+		slID := parts[0]
+		f := ruleFilter{direction: parts[1], protocol: parts[2]}
+		if len(parts) >= 5 {
+			f.sourceOrDest = parts[3]
+			if parts[4] != "all" {
+				f.hasPort = true
+				portParts := strings.SplitN(parts[4], "-", 2)
+				f.portMin, _ = strconv.Atoi(portParts[0])
+				if len(portParts) > 1 {
+					f.portMax, _ = strconv.Atoi(portParts[1])
+				} else {
+					f.portMax = f.portMin
+				}
+			}
+		}
+		filtersBySL[slID] = append(filtersBySL[slID], f)
+	}
+
+	// List all security lists for the VCN
+	req := core.ListSecurityListsRequest{
+		CompartmentId: common.String(c.tenant.TenancyOCID),
+		VcnId:         common.String(vcnID),
+		Limit:         common.Int(100),
+	}
+	resp, err := c.vcn.ListSecurityLists(ctx, req)
+	if err != nil {
+		return fmt.Errorf("list security lists: %w", err)
+	}
+
+	for _, sl := range resp.Items {
+		slID := *sl.Id
+		filters, ok := filtersBySL[slID]
+		if !ok {
+			continue
+		}
+
+		// Filter ingress rules
+		var newIngress []core.IngressSecurityRule
+		for _, rule := range sl.IngressSecurityRules {
+			if !matchesIngressFilter(rule, filters) {
+				newIngress = append(newIngress, rule)
+			}
+		}
+
+		// Filter egress rules
+		var newEgress []core.EgressSecurityRule
+		for _, rule := range sl.EgressSecurityRules {
+			if !matchesEgressFilter(rule, filters) {
+				newEgress = append(newEgress, rule)
+			}
+		}
+
+		updateReq := core.UpdateSecurityListRequest{
+			SecurityListId: sl.Id,
+			UpdateSecurityListDetails: core.UpdateSecurityListDetails{
+				IngressSecurityRules: newIngress,
+				EgressSecurityRules:  newEgress,
+			},
+		}
+		if _, err := c.vcn.UpdateSecurityList(ctx, updateReq); err != nil {
+			return fmt.Errorf("update security list %s: %w", slID, err)
+		}
+	}
+	return nil
+}
+
+func matchesIngressFilter(rule core.IngressSecurityRule, filters []ruleFilter) bool {
+	for _, f := range filters {
+		if f.direction != "ingress" {
+			continue
+		}
+		if rule.Protocol == nil || *rule.Protocol != f.protocol {
+			continue
+		}
+		if f.sourceOrDest != "" {
+			if rule.Source == nil || *rule.Source != f.sourceOrDest {
+				continue
+			}
+		}
+		if f.hasPort {
+			if rule.TcpOptions == nil || rule.TcpOptions.DestinationPortRange == nil {
+				continue
+			}
+			min := *rule.TcpOptions.DestinationPortRange.Min
+			max := *rule.TcpOptions.DestinationPortRange.Max
+			if min != f.portMin || max != f.portMax {
+				continue
+			}
+		}
+		return true
+	}
+	return false
+}
+
+func matchesEgressFilter(rule core.EgressSecurityRule, filters []ruleFilter) bool {
+	for _, f := range filters {
+		if f.direction != "egress" {
+			continue
+		}
+		if rule.Protocol == nil || *rule.Protocol != f.protocol {
+			continue
+		}
+		if f.sourceOrDest != "" {
+			if rule.Destination == nil || *rule.Destination != f.sourceOrDest {
+				continue
+			}
+		}
+		if f.hasPort {
+			if rule.TcpOptions == nil || rule.TcpOptions.DestinationPortRange == nil {
+				continue
+			}
+			min := *rule.TcpOptions.DestinationPortRange.Min
+			max := *rule.TcpOptions.DestinationPortRange.Max
+			if min != f.portMin || max != f.portMax {
+				continue
+			}
+		}
+		return true
+	}
+	return false
 }
 
 func (c *Client) ReleaseAllPorts(ctx context.Context, vcnID string) error {
@@ -836,13 +1016,151 @@ func (c *Client) Enable500Mbps(ctx context.Context, instanceID string) error {
 	if len(vnics) == 0 {
 		return fmt.Errorf("no VNIC found")
 	}
-	_ = vnics
-	return fmt.Errorf("NLB creation requires OCI network load balancer SDK (not yet integrated)")
+	vnic := vnics[0]
+	privateIP := ""
+	if vnic.PrivateIp != nil {
+		privateIP = *vnic.PrivateIp
+	}
+	subnetID := ""
+	if vnic.SubnetId != nil {
+		subnetID = *vnic.SubnetId
+	}
+	if privateIP == "" || subnetID == "" {
+		return fmt.Errorf("instance VNIC missing private IP or subnet ID")
+	}
+
+	displayName := "nlb-" + instanceID
+	if len(displayName) > 100 {
+		displayName = displayName[:100]
+	}
+	bsName := "bs-" + instanceID
+
+	createReq := networkloadbalancer.CreateNetworkLoadBalancerRequest{
+		CreateNetworkLoadBalancerDetails: networkloadbalancer.CreateNetworkLoadBalancerDetails{
+			CompartmentId:                common.String(compartmentID),
+			DisplayName:                  common.String(displayName),
+			SubnetId:                     common.String(subnetID),
+			IsPreserveSourceDestination:  common.Bool(true),
+			IsPrivate:                    common.Bool(false),
+			FreeformTags:                 map[string]string{"oci-helper-instance-id": instanceID},
+			BackendSets: map[string]networkloadbalancer.BackendSetDetails{
+				bsName: {
+					Policy: networkloadbalancer.NetworkLoadBalancingPolicyFiveTuple,
+					HealthChecker: &networkloadbalancer.HealthChecker{
+						Protocol: networkloadbalancer.HealthCheckProtocolsTcp,
+						Port:     common.Int(22),
+					},
+					Backends: []networkloadbalancer.Backend{
+						{IpAddress: common.String(privateIP), Port: common.Int(22), Name: common.String(instanceID)},
+					},
+				},
+			},
+			Listeners: map[string]networkloadbalancer.ListenerDetails{
+				"listener-all": {
+					Name:                  common.String("listener-all"),
+					DefaultBackendSetName: common.String(bsName),
+					Port:                  common.Int(0),
+					Protocol:              networkloadbalancer.ListenerProtocolsAny,
+				},
+			},
+		},
+	}
+	resp, err := c.nlb.CreateNetworkLoadBalancer(ctx, createReq)
+	if err != nil {
+		return fmt.Errorf("create NLB: %w", err)
+	}
+	workReqID := resp.OpcWorkRequestId
+	if workReqID == nil || *workReqID == "" {
+		return fmt.Errorf("NLB created but no work request ID returned")
+	}
+	log.Printf("[Enable500Mbps] NLB work request: %s", *workReqID)
+
+	pollInterval := 5 * time.Second
+	deadline := time.Now().Add(5 * time.Minute)
+	for time.Now().Before(deadline) {
+		wr, err := c.nlb.GetWorkRequest(ctx, networkloadbalancer.GetWorkRequestRequest{WorkRequestId: workReqID})
+		if err != nil {
+			return fmt.Errorf("poll NLB work request: %w", err)
+		}
+		status := wr.Status
+		pct := float32(0)
+		if wr.PercentComplete != nil {
+			pct = *wr.PercentComplete
+		}
+		log.Printf("[Enable500Mbps] status=%s %.0f%%", status, float64(pct))
+		switch status {
+		case networkloadbalancer.OperationStatusSucceeded:
+			return nil
+		case networkloadbalancer.OperationStatusFailed:
+			return fmt.Errorf("NLB creation failed")
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(pollInterval):
+		}
+	}
+	return fmt.Errorf("NLB creation timed out")
 }
 
 // Disable500Mbps deletes the NLB associated with the instance.
 func (c *Client) Disable500Mbps(ctx context.Context, instanceID string) error {
-	return fmt.Errorf("NLB deletion requires OCI network load balancer SDK (not yet integrated)")
+	compartmentID := c.tenant.TenancyOCID
+
+	listReq := networkloadbalancer.ListNetworkLoadBalancersRequest{
+		CompartmentId: common.String(compartmentID),
+		Limit:         common.Int(100),
+	}
+	listResp, err := c.nlb.ListNetworkLoadBalancers(ctx, listReq)
+	if err != nil {
+		return fmt.Errorf("list NLBs: %w", err)
+	}
+
+	var nlbID *string
+	for _, nlb := range listResp.Items {
+		if nlb.FreeformTags != nil && nlb.FreeformTags["oci-helper-instance-id"] == instanceID {
+			nlbID = nlb.Id
+			break
+		}
+	}
+	if nlbID == nil {
+		return fmt.Errorf("no NLB found for instance %s", instanceID)
+	}
+
+	delResp, err := c.nlb.DeleteNetworkLoadBalancer(ctx, networkloadbalancer.DeleteNetworkLoadBalancerRequest{
+		NetworkLoadBalancerId: nlbID,
+	})
+	if err != nil {
+		return fmt.Errorf("delete NLB: %w", err)
+	}
+	workReqID := delResp.OpcWorkRequestId
+	if workReqID == nil || *workReqID == "" {
+		return nil
+	}
+	log.Printf("[Disable500Mbps] NLB delete work request: %s", *workReqID)
+
+	pollInterval := 5 * time.Second
+	deadline := time.Now().Add(3 * time.Minute)
+	for time.Now().Before(deadline) {
+		wr, err := c.nlb.GetWorkRequest(ctx, networkloadbalancer.GetWorkRequestRequest{WorkRequestId: workReqID})
+		if err != nil {
+			return fmt.Errorf("poll NLB delete: %w", err)
+		}
+		status := wr.Status
+		switch status {
+		case networkloadbalancer.OperationStatusSucceeded:
+			log.Printf("[Disable500Mbps] NLB deleted")
+			return nil
+		case networkloadbalancer.OperationStatusFailed:
+			return fmt.Errorf("NLB deletion failed")
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(pollInterval):
+		}
+	}
+	return fmt.Errorf("NLB deletion timed out")
 }
 
 // ChangeInstanceIP replaces the ephemeral public IP of an instance.

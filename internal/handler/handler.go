@@ -1787,7 +1787,103 @@ func (s *Server) handleOneClickClose500M(w http.ResponseWriter, r *http.Request)
 	jsonOK(w, map[string]string{"status": "ok"})
 }
 func (s *Server) handleAutoRescue(w http.ResponseWriter, r *http.Request) {
-	jsonOK(w, map[string]string{"status": "not implemented"})
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		TenantID   int64  `json:"tenant_id"`
+		InstanceID string `json:"instance_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonErr(w, "invalid body: "+err.Error())
+		return
+	}
+	tenant, err := s.store.GetTenant(req.TenantID)
+	if err != nil || tenant == nil {
+		jsonErr(w, "tenant not found")
+		return
+	}
+	client, err := s.clientFor(tenant)
+	if err != nil {
+		jsonErr(w, "oci client: "+err.Error())
+		return
+	}
+	inst, err := s.store.GetInstanceByID(fmt.Sprintf("%d:%s", req.TenantID, req.InstanceID))
+	if err != nil || inst == nil {
+		jsonErr(w, "instance not found in DB — sync first")
+		return
+	}
+	if inst.PublicIP == "" {
+		jsonErr(w, "instance has no public IP")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	type step struct {
+		Action string `json:"action"`
+		Alive  bool   `json:"alive"`
+		Error  string `json:"error,omitempty"`
+	}
+	var steps []step
+	finalAlive := false
+
+	addStep := func(action string) bool {
+		alive := checkTCPPort(inst.PublicIP, 22, 5*time.Second)
+		steps = append(steps, step{Action: action, Alive: alive})
+		return alive
+	}
+
+	// Step 1: TCP check (no action)
+	if addStep("tcp_check") {
+		finalAlive = true
+		jsonOK(w, map[string]interface{}{"steps": steps, "final_alive": finalAlive})
+		return
+	}
+
+	// Step 2: SOFTRESET
+	if _, err := client.InstanceAction(ctx, req.InstanceID, core.InstanceActionActionSoftreset); err != nil {
+		steps = append(steps, step{Action: "softreset", Alive: false, Error: err.Error()})
+	} else {
+		time.Sleep(30 * time.Second)
+		if addStep("softreset") {
+			finalAlive = true
+			s.audit(req.TenantID, "instance:auto-rescue:softreset", req.InstanceID, r)
+			jsonOK(w, map[string]interface{}{"steps": steps, "final_alive": finalAlive})
+			return
+		}
+	}
+
+	// Step 3: RESET
+	if _, err := client.InstanceAction(ctx, req.InstanceID, core.InstanceActionActionReset); err != nil {
+		steps = append(steps, step{Action: "reset", Alive: false, Error: err.Error()})
+	} else {
+		time.Sleep(60 * time.Second)
+		if addStep("reset") {
+			finalAlive = true
+			s.audit(req.TenantID, "instance:auto-rescue:reset", req.InstanceID, r)
+			jsonOK(w, map[string]interface{}{"steps": steps, "final_alive": finalAlive})
+			return
+		}
+	}
+
+	// Step 4: STOP then START
+	if _, err := client.InstanceAction(ctx, req.InstanceID, core.InstanceActionActionStop); err != nil {
+		steps = append(steps, step{Action: "stop", Alive: false, Error: err.Error()})
+	} else {
+		time.Sleep(30 * time.Second)
+		if _, err := client.InstanceAction(ctx, req.InstanceID, core.InstanceActionActionStart); err != nil {
+			steps = append(steps, step{Action: "start", Alive: false, Error: err.Error()})
+		} else {
+			time.Sleep(60 * time.Second)
+			finalAlive = addStep("stop_start")
+		}
+	}
+
+	s.audit(req.TenantID, "instance:auto-rescue", req.InstanceID, r)
+	jsonOK(w, map[string]interface{}{"steps": steps, "final_alive": finalAlive})
 }
 func (s *Server) handleUpdateShape(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {

@@ -9,8 +9,6 @@ import (
 	"net/http"
 	"sync"
 	"time"
-
-	ociclient "github.com/viogus/oci-helper-go/internal/oci"
 )
 
 type memTask struct {
@@ -168,7 +166,7 @@ func (s *Server) runChangeIPLoop(task *memTask) {
 			if err != nil || tenant == nil {
 				continue
 			}
-			client, err := ociclient.NewClient(tenant)
+			client, err := s.clientFor(tenant)
 			if err != nil {
 				continue
 			}
@@ -206,7 +204,7 @@ func (s *Server) runUpdateCfgLoop(task *memTask) {
 			if err != nil || tenant == nil {
 				continue
 			}
-			client, err := ociclient.NewClient(tenant)
+			client, err := s.clientFor(tenant)
 			if err != nil {
 				continue
 			}

@@ -4,8 +4,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
-
-	ociclient "github.com/viogus/oci-helper-go/internal/oci"
 )
 
 func (s *Server) handleSecurityRules(w http.ResponseWriter, r *http.Request) {
@@ -43,7 +41,7 @@ func (s *Server) handleSecurityRules(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, "tenant not found")
 		return
 	}
-	client, err := ociclient.NewClient(tenant)
+	client, err := s.clientFor(tenant)
 	if err != nil {
 		jsonErr(w, "oci client: "+err.Error())
 		return

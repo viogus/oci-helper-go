@@ -45,7 +45,7 @@ func New(cfg *config.Config, store *db.Store) *Server {
 		store:  store,
 		auth:   auth.New(cfg.Username, cfg.Password, cfg.MFASecret, cfg.MFA),
 		mux:    http.NewServeMux(),
-		worker: NewWorker(store),
+		worker: NewWorker(store, cfg.KeysDir),
 	}
 	s.routes()
 	go s.worker.Run()

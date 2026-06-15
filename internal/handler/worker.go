@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"path/filepath"
 	"time"
 
 	"github.com/oracle/oci-go-sdk/v65/core"
@@ -15,12 +16,22 @@ import (
 const pollInterval = 5 * time.Second
 
 type Worker struct {
-	store    *db.Store
+	store   *db.Store
+	keysDir string
 	restarts int
 }
 
-func NewWorker(store *db.Store) *Worker {
-	return &Worker{store: store}
+func NewWorker(store *db.Store, keysDir string) *Worker {
+	return &Worker{store: store, keysDir: keysDir}
+}
+
+func (w *Worker) newClient(t *db.Tenant) (*ociclient.Client, error) {
+	if t.KeyFile != "" && !filepath.IsAbs(t.KeyFile) {
+		resolved := *t
+		resolved.KeyFile = filepath.Join(w.keysDir, t.KeyFile)
+		return ociclient.NewClient(&resolved)
+	}
+	return ociclient.NewClient(t)
 }
 
 func (w *Worker) Run() {
@@ -85,7 +96,7 @@ func (w *Worker) runBatchStart(task *db.Task) {
 		return
 	}
 
-	client, err := ociclient.NewClient(tenant)
+	client, err := w.newClient(tenant)
 	if err != nil {
 		w.store.UpdateTaskStatus(task.ID, "failed", 0, "oci client: "+err.Error())
 		return
@@ -141,7 +152,7 @@ func (w *Worker) runBatchCreate(task *db.Task) {
 		return
 	}
 
-	client, err := ociclient.NewClient(tenant)
+	client, err := w.newClient(tenant)
 	if err != nil {
 		w.store.UpdateTaskStatus(task.ID, "failed", 0, "oci client: "+err.Error())
 		return

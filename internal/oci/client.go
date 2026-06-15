@@ -330,6 +330,87 @@ func (c *Client) DetachBootVolume(ctx context.Context, attachmentID string) erro
 	return err
 }
 
+// --- Instance Mutations ---
+
+func (c *Client) UpdateInstance(ctx context.Context, instanceID, shape string, ocpus, memoryGB float32) error {
+	details := core.UpdateInstanceDetails{}
+	if shape != "" {
+		details.Shape = common.String(shape)
+	}
+	if ocpus > 0 || memoryGB > 0 {
+		details.ShapeConfig = &core.UpdateInstanceShapeConfigDetails{}
+		if ocpus > 0 {
+			details.ShapeConfig.Ocpus = common.Float32(ocpus)
+		}
+		if memoryGB > 0 {
+			details.ShapeConfig.MemoryInGBs = common.Float32(memoryGB)
+		}
+	}
+	req := core.UpdateInstanceRequest{
+		InstanceId:            common.String(instanceID),
+		UpdateInstanceDetails: details,
+	}
+	_, err := c.compute.UpdateInstance(ctx, req)
+	return err
+}
+
+func (c *Client) UpdateInstanceDisplayName(ctx context.Context, instanceID, displayName string) error {
+	details := core.UpdateInstanceDetails{
+		DisplayName: common.String(displayName),
+	}
+	req := core.UpdateInstanceRequest{
+		InstanceId:            common.String(instanceID),
+		UpdateInstanceDetails: details,
+	}
+	_, err := c.compute.UpdateInstance(ctx, req)
+	return err
+}
+
+func (c *Client) GetBootVolumeAttachment(ctx context.Context, compartmentID, instanceID string) (*core.BootVolumeAttachment, error) {
+	req := core.ListBootVolumeAttachmentsRequest{
+		CompartmentId: common.String(compartmentID),
+		InstanceId:    common.String(instanceID),
+		Limit:         common.Int(10),
+	}
+	resp, err := c.compute.ListBootVolumeAttachments(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	if len(resp.Items) == 0 {
+		return nil, fmt.Errorf("no boot volume attached")
+	}
+	return &resp.Items[0], nil
+}
+
+func (c *Client) GetInstanceVNICs(ctx context.Context, compartmentID, instanceID string) ([]core.Vnic, error) {
+	attachments, err := c.ListVnicAttachments(ctx, compartmentID, instanceID)
+	if err != nil {
+		return nil, err
+	}
+	var vnics []core.Vnic
+	for _, att := range attachments {
+		if att.VnicId == nil {
+			continue
+		}
+		vnic, err := c.GetVnic(ctx, *att.VnicId)
+		if err != nil {
+			return nil, err
+		}
+		vnics = append(vnics, *vnic)
+	}
+	return vnics, nil
+}
+
+func (c *Client) AssignIPv6(ctx context.Context, vnicID string) error {
+	req := core.CreateIpv6Request{
+		CreateIpv6Details: core.CreateIpv6Details{
+			VnicId: common.String(vnicID),
+		},
+	}
+	_, err := c.vcn.CreateIpv6(ctx, req)
+	return err
+}
+
 // Metrics
 
 func (c *Client) GetMetrics(ctx context.Context, instanceID string) (map[string]float64, error) {

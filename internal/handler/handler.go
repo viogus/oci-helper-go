@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"embed"
 	"encoding/json"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/oracle/oci-go-sdk/v65/common"
 	"github.com/oracle/oci-go-sdk/v65/core"
@@ -1424,16 +1426,151 @@ func (s *Server) handleKeyByID(w http.ResponseWriter, r *http.Request) {
 // --- Phase 1 stubs (implemented in later phases) ---
 
 func (s *Server) handleChangeShape(w http.ResponseWriter, r *http.Request) {
-	jsonOK(w, map[string]string{"status": "not implemented"})
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		TenantID   int64   `json:"tenant_id"`
+		InstanceID string  `json:"instance_id"`
+		Shape      string  `json:"shape"`
+		Ocpus      float32 `json:"ocpus"`
+		MemoryGB   float32 `json:"memory_gb"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonErr(w, "invalid body: "+err.Error())
+		return
+	}
+	tenant, err := s.store.GetTenant(req.TenantID)
+	if err != nil || tenant == nil {
+		jsonErr(w, "tenant not found")
+		return
+	}
+	client, err := ociclient.NewClient(tenant)
+	if err != nil {
+		jsonErr(w, "oci client: "+err.Error())
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+	if err := client.UpdateInstance(ctx, req.InstanceID, req.Shape, req.Ocpus, req.MemoryGB); err != nil {
+		jsonErr(w, "update instance: "+err.Error())
+		return
+	}
+	s.audit(req.TenantID, "instance:change-shape", req.InstanceID, r)
+	jsonOK(w, map[string]string{"status": "ok"})
 }
 func (s *Server) handleChangeBootVolume(w http.ResponseWriter, r *http.Request) {
-	jsonOK(w, map[string]string{"status": "not implemented"})
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		TenantID   int64  `json:"tenant_id"`
+		InstanceID string `json:"instance_id"`
+		SizeGB     int64  `json:"size_gb"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonErr(w, "invalid body: "+err.Error())
+		return
+	}
+	tenant, err := s.store.GetTenant(req.TenantID)
+	if err != nil || tenant == nil {
+		jsonErr(w, "tenant not found")
+		return
+	}
+	client, err := ociclient.NewClient(tenant)
+	if err != nil {
+		jsonErr(w, "oci client: "+err.Error())
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+	attachment, err := client.GetBootVolumeAttachment(ctx, tenant.TenancyOCID, req.InstanceID)
+	if err != nil {
+		jsonErr(w, "get boot volume: "+err.Error())
+		return
+	}
+	if _, err := client.UpdateBootVolume(ctx, *attachment.BootVolumeId, req.SizeGB, ""); err != nil {
+		jsonErr(w, "update boot volume: "+err.Error())
+		return
+	}
+	s.audit(req.TenantID, "instance:change-boot-volume", req.InstanceID, r)
+	jsonOK(w, map[string]string{"status": "ok"})
 }
 func (s *Server) handleAttachIPv6(w http.ResponseWriter, r *http.Request) {
-	jsonOK(w, map[string]string{"status": "not implemented"})
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		TenantID   int64  `json:"tenant_id"`
+		InstanceID string `json:"instance_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonErr(w, "invalid body: "+err.Error())
+		return
+	}
+	tenant, err := s.store.GetTenant(req.TenantID)
+	if err != nil || tenant == nil {
+		jsonErr(w, "tenant not found")
+		return
+	}
+	client, err := ociclient.NewClient(tenant)
+	if err != nil {
+		jsonErr(w, "oci client: "+err.Error())
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+	vnics, err := client.GetInstanceVNICs(ctx, tenant.TenancyOCID, req.InstanceID)
+	if err != nil {
+		jsonErr(w, "list vnics: "+err.Error())
+		return
+	}
+	if len(vnics) == 0 {
+		jsonErr(w, "no VNIC found for instance")
+		return
+	}
+	if err := client.AssignIPv6(ctx, *vnics[0].Id); err != nil {
+		jsonErr(w, "assign ipv6: "+err.Error())
+		return
+	}
+	s.audit(req.TenantID, "instance:attach-ipv6", req.InstanceID, r)
+	jsonOK(w, map[string]string{"status": "ok"})
 }
 func (s *Server) handleUpdateInstanceName(w http.ResponseWriter, r *http.Request) {
-	jsonOK(w, map[string]string{"status": "not implemented"})
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		TenantID   int64  `json:"tenant_id"`
+		InstanceID string `json:"instance_id"`
+		Name       string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonErr(w, "invalid body: "+err.Error())
+		return
+	}
+	tenant, err := s.store.GetTenant(req.TenantID)
+	if err != nil || tenant == nil {
+		jsonErr(w, "tenant not found")
+		return
+	}
+	client, err := ociclient.NewClient(tenant)
+	if err != nil {
+		jsonErr(w, "oci client: "+err.Error())
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+	if err := client.UpdateInstanceDisplayName(ctx, req.InstanceID, req.Name); err != nil {
+		jsonErr(w, "update name: "+err.Error())
+		return
+	}
+	s.audit(req.TenantID, "instance:update-name", req.InstanceID+" -> "+req.Name, r)
+	jsonOK(w, map[string]string{"status": "ok"})
 }
 func (s *Server) handleChangeIP(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]string{"status": "not implemented"})
@@ -1451,7 +1588,37 @@ func (s *Server) handleAutoRescue(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]string{"status": "not implemented"})
 }
 func (s *Server) handleUpdateShape(w http.ResponseWriter, r *http.Request) {
-	jsonOK(w, map[string]string{"status": "not implemented"})
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		TenantID   int64  `json:"tenant_id"`
+		InstanceID string `json:"instance_id"`
+		Shape      string `json:"shape"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonErr(w, "invalid body: "+err.Error())
+		return
+	}
+	tenant, err := s.store.GetTenant(req.TenantID)
+	if err != nil || tenant == nil {
+		jsonErr(w, "tenant not found")
+		return
+	}
+	client, err := ociclient.NewClient(tenant)
+	if err != nil {
+		jsonErr(w, "oci client: "+err.Error())
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+	if err := client.UpdateInstance(ctx, req.InstanceID, req.Shape, 0, 0); err != nil {
+		jsonErr(w, "update shape: "+err.Error())
+		return
+	}
+	s.audit(req.TenantID, "instance:update-shape", req.InstanceID, r)
+	jsonOK(w, map[string]string{"status": "ok"})
 }
 func (s *Server) handleSecurityRules(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]string{"status": "not implemented"})

@@ -428,10 +428,11 @@ async function handleChangeShape() {
   saving.value = true
   try {
     await changeShape({
-      instanceId: currentInstance.value.id,
+      tenant_id: currentInstance.value.tenantId,
+      instance_id: currentInstance.value.id,
       shape: shapeForm.shape,
       ocpus: shapeForm.ocpus,
-      memoryGB: shapeForm.memoryGB
+      memory_gb: shapeForm.memoryGB
     })
     ElMessage.success('Shape change request submitted')
     shapeDialogVisible.value = false
@@ -448,8 +449,9 @@ async function handleChangeBootVolume() {
   saving.value = true
   try {
     await changeBootVolume({
-      instanceId: currentInstance.value.id,
-      sizeGB: volumeForm.sizeGB
+      tenant_id: currentInstance.value.tenantId,
+      instance_id: currentInstance.value.id,
+      size_gb: volumeForm.sizeGB
     })
     ElMessage.success('Boot volume change request submitted')
     volumeDialogVisible.value = false
@@ -466,7 +468,8 @@ async function handleAttachIPv6() {
   saving.value = true
   try {
     await attachIPv6({
-      instanceId: currentInstance.value.id
+      tenant_id: currentInstance.value.tenantId,
+      instance_id: currentInstance.value.id
     })
     ElMessage.success('IPv6 attachment request submitted')
     attachIPv6Visible.value = false

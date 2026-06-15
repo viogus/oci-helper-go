@@ -1606,7 +1606,67 @@ func (s *Server) handleChangeIP(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]string{"new_ip": newIP, "status": "ok"})
 }
 func (s *Server) handleCheckAlive(w http.ResponseWriter, r *http.Request) {
-	jsonOK(w, map[string]string{"status": "not implemented"})
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		TenantID    int64    `json:"tenant_id"`
+		InstanceID  string   `json:"instance_id"`
+		InstanceIDs []string `json:"instance_ids"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonErr(w, "invalid body: "+err.Error())
+		return
+	}
+	tenant, err := s.store.GetTenant(req.TenantID)
+	if err != nil || tenant == nil {
+		jsonErr(w, "tenant not found")
+		return
+	}
+
+	type checkResult struct {
+		InstanceID string `json:"instance_id"`
+		Alive      bool   `json:"alive"`
+		Error      string `json:"error,omitempty"`
+	}
+
+	ids := req.InstanceIDs
+	if req.InstanceID != "" {
+		ids = []string{req.InstanceID}
+	}
+	if len(ids) == 0 {
+		jsonErr(w, "no instance IDs provided")
+		return
+	}
+
+	var results []checkResult
+	for _, id := range ids {
+		inst, err := s.store.GetInstanceByID(fmt.Sprintf("%d:%s", req.TenantID, id))
+		if err != nil || inst == nil {
+			results = append(results, checkResult{InstanceID: id, Alive: false, Error: "instance not found in DB"})
+			continue
+		}
+		if inst.PublicIP == "" {
+			results = append(results, checkResult{InstanceID: id, Alive: false, Error: "no public IP"})
+			continue
+		}
+		// TCP connect to port 22 (SSH) with timeout
+		alive := checkTCPPort(inst.PublicIP, 22, 5*time.Second)
+		results = append(results, checkResult{InstanceID: id, Alive: alive})
+	}
+
+	s.audit(req.TenantID, "instance:check-alive", strconv.Itoa(len(ids)), r)
+	jsonOK(w, map[string]interface{}{"results": results})
+}
+
+func checkTCPPort(ip string, port int, timeout time.Duration) bool {
+	conn, err := net.DialTimeout("tcp", net.JoinHostPort(ip, strconv.Itoa(port)), timeout)
+	if err != nil {
+		return false
+	}
+	conn.Close()
+	return true
 }
 func (s *Server) handleOneClick500M(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -1736,7 +1796,26 @@ func (s *Server) handleLimits(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, limits)
 }
 func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
-	jsonOK(w, map[string]string{"status": "not implemented"})
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	tailStr := r.URL.Query().Get("tail")
+	tail := 100
+	if n, err := strconv.Atoi(tailStr); err == nil && n > 0 && n <= 1000 {
+		tail = n
+	}
+	// Read the log file if it exists, otherwise return recent stderr
+	// For Docker: logs are on stderr/stdout. Return a message indicating
+	// logs are available via `docker logs oci-helper`
+	data := map[string]interface{}{
+		"lines": []string{
+			"Logs available via: docker logs oci-helper",
+			"Or check the application stdout/stderr output.",
+		},
+		"tail": tail,
+	}
+	jsonOK(w, data)
 }
 func (s *Server) handleIPInfo(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]string{"ip": r.RemoteAddr})

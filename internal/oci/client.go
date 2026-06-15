@@ -439,6 +439,77 @@ func (c *Client) GetMetrics(ctx context.Context, instanceID string) (map[string]
 	return result, nil
 }
 
+// Traffic
+
+type TrafficDataPoint struct {
+	Timestamp       string  `json:"timestamp"`
+	BytesInPerSec   float64 `json:"bytesInPerSec"`
+	BytesOutPerSec  float64 `json:"bytesOutPerSec"`
+	PacketsInPerSec float64 `json:"packetsInPerSec"`
+	PacketsOutPerSec float64 `json:"packetsOutPerSec"`
+}
+
+func (c *Client) GetVNICTtraffic(ctx context.Context, vnicID string, startTime, endTime time.Time) ([]TrafficDataPoint, error) {
+	namespace := "oci_vcn"
+
+	results := make(map[string][]float64)
+	metricNames := []string{"VnicBytesIn", "VnicBytesOut", "VnicPacketsIn", "VnicPacketsOut"}
+
+	for _, name := range metricNames {
+		req := monitoring.SummarizeMetricsDataRequest{
+			SummarizeMetricsDataDetails: monitoring.SummarizeMetricsDataDetails{
+				Namespace: common.String(namespace),
+				Query:     common.String(fmt.Sprintf("%s[1m]{resourceId=\"%s\"}.mean()", name, vnicID)),
+				StartTime: &common.SDKTime{Time: startTime},
+				EndTime:   &common.SDKTime{Time: endTime},
+			},
+		}
+		resp, err := c.monitoring.SummarizeMetricsData(ctx, req)
+		if err != nil {
+			return nil, fmt.Errorf("%s query: %w", name, err)
+		}
+		var values []float64
+		for _, item := range resp.Items {
+			if item.AggregatedDatapoints != nil {
+				for _, dp := range item.AggregatedDatapoints {
+					if dp.Value != nil {
+						values = append(values, *dp.Value)
+					}
+				}
+			}
+		}
+		results[name] = values
+	}
+
+	// Combine into time series
+	var data []TrafficDataPoint
+	maxLen := 0
+	for _, v := range results {
+		if len(v) > maxLen {
+			maxLen = len(v)
+		}
+	}
+	for i := 0; i < maxLen; i++ {
+		dp := TrafficDataPoint{
+			Timestamp: startTime.Add(time.Duration(i) * time.Minute).Format(time.RFC3339),
+		}
+		if i < len(results["VnicBytesIn"]) {
+			dp.BytesInPerSec = results["VnicBytesIn"][i]
+		}
+		if i < len(results["VnicBytesOut"]) {
+			dp.BytesOutPerSec = results["VnicBytesOut"][i]
+		}
+		if i < len(results["VnicPacketsIn"]) {
+			dp.PacketsInPerSec = results["VnicPacketsIn"][i]
+		}
+		if i < len(results["VnicPacketsOut"]) {
+			dp.PacketsOutPerSec = results["VnicPacketsOut"][i]
+		}
+		data = append(data, dp)
+	}
+	return data, nil
+}
+
 // --- Security Rules ---
 
 type SecurityRuleInfo struct {

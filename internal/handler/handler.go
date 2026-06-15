@@ -1620,9 +1620,6 @@ func (s *Server) handleUpdateShape(w http.ResponseWriter, r *http.Request) {
 	s.audit(req.TenantID, "instance:update-shape", req.InstanceID, r)
 	jsonOK(w, map[string]string{"status": "ok"})
 }
-func (s *Server) handleTraffic(w http.ResponseWriter, r *http.Request) {
-	jsonOK(w, map[string]string{"status": "not implemented"})
-}
 func (s *Server) handleLimits(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]string{"status": "not implemented"})
 }

@@ -6,10 +6,28 @@ const api = axios.create({
   headers: { 'Content-Type': 'application/json' }
 })
 
-// response interceptor: unwrap data, handle 401
+// Retry configuration
+const MAX_RETRIES = 3
+const RETRY_DELAY = 1000 // 1 second base
+
+// response interceptor: unwrap data, handle 401, retry on failure
 api.interceptors.response.use(
   res => res,
-  err => {
+  async err => {
+    const config = err.config
+
+    // Retry GET requests on network errors or 5xx (up to 3 times) with exponential backoff
+    if (config.method === 'get' && (!err.response || err.response.status >= 500)) {
+      config._retryCount = config._retryCount || 0
+      if (config._retryCount < MAX_RETRIES) {
+        config._retryCount++
+        const delay = RETRY_DELAY * Math.pow(2, config._retryCount - 1)
+        await new Promise(resolve => setTimeout(resolve, delay))
+        return api(config)
+      }
+    }
+
+    // Handle 401 redirect
     if (err.response?.status === 401) {
       const router = (window.__router)
       if (router && router.currentRoute?.value?.path !== '/login') {

@@ -151,26 +151,29 @@ func (s *Store) ListAudit(limit int) ([]AuditLog, error) {
 	return list, rows.Err()
 }
 
-// Import helpers (no auto-increment)
+func (s *Store) ListAuditPaginated(keyword string, page, size int) ([]AuditLog, int64, error) {
+	kw := "%" + keyword + "%"
+	var total int64
+	s.db.QueryRow(`SELECT COUNT(*) FROM audit_logs WHERE action LIKE ? OR detail LIKE ?`, kw, kw).Scan(&total)
 
-func (s *Store) CreateTenantImport(name, userOCID, tenancyOCID, region, fingerprint, keyFile string) error {
-	_, err := s.db.Exec(
-		`INSERT INTO tenants (name, user_ocid, tenancy_ocid, region, fingerprint, key_file)
-		 VALUES (?,?,?,?,?,?)`,
-		name, userOCID, tenancyOCID, region, fingerprint, keyFile)
-	return err
-}
-
-func (s *Store) UpsertInstanceImport(id string, tenantID int64, name, ocid, shape, state, publicIP, privateIP string, ocpu, memoryGB float64, bootVolumeGB int64) error {
-	_, err := s.db.Exec(
-		`INSERT INTO instances (id, tenant_id, name, ocid, shape, ocpu, memory_gb, boot_volume_gb, public_ip, private_ip, state, synced_at)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
-		 ON CONFLICT(id) DO UPDATE SET
-		   name=excluded.name, shape=excluded.shape, ocpu=excluded.ocpu, memory_gb=excluded.memory_gb,
-		   state=excluded.state, public_ip=excluded.public_ip, private_ip=excluded.private_ip,
-		   synced_at=CURRENT_TIMESTAMP`,
-		id, tenantID, name, ocid, shape, ocpu, memoryGB, bootVolumeGB, publicIP, privateIP, state)
-	return err
+	offset := (page - 1) * size
+	rows, err := s.db.Query(`SELECT id, tenant_id, action, detail, ip, created_at FROM audit_logs
+		WHERE action LIKE ? OR detail LIKE ?
+		ORDER BY id DESC LIMIT ? OFFSET ?`,
+		kw, kw, size, offset)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	var list []AuditLog
+	for rows.Next() {
+		var l AuditLog
+		if err := rows.Scan(&l.ID, &l.TenantID, &l.Action, &l.Detail, &l.IP, &l.CreatedAt); err != nil {
+			return nil, 0, err
+		}
+		list = append(list, l)
+	}
+	return list, total, rows.Err()
 }
 
 // ClearAllTx removes all data within a transaction (for restore)

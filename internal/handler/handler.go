@@ -915,11 +915,24 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	list, _ := s.store.ListAudit(100)
+	keyword := r.URL.Query().Get("keyword")
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	if page < 1 {
+		page = 1
+	}
+	size, _ := strconv.Atoi(r.URL.Query().Get("size"))
+	if size < 1 {
+		size = 20
+	}
+	list, total, err := s.store.ListAuditPaginated(keyword, page, size)
+	if err != nil {
+		jsonErr(w, "list audit: "+err.Error())
+		return
+	}
 	if list == nil {
 		list = []db.AuditLog{}
 	}
-	jsonOK(w, list)
+	jsonOK(w, map[string]interface{}{"data": list, "total": total, "page": page, "size": size})
 }
 
 // --- boot volumes ---
@@ -1844,9 +1857,13 @@ func jsonOK(w http.ResponseWriter, v interface{}) {
 }
 
 func jsonErr(w http.ResponseWriter, msg string) {
+	jsonErrStatus(w, msg, http.StatusBadRequest)
+}
+
+func jsonErrStatus(w http.ResponseWriter, msg string, status int) {
 	log.Printf("ERROR: %s", msg)
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusBadRequest)
+	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(map[string]string{"error": msg})
 }
 

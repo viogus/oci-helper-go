@@ -15,7 +15,8 @@ import (
 const pollInterval = 5 * time.Second
 
 type Worker struct {
-	store *db.Store
+	store    *db.Store
+	restarts int
 }
 
 func NewWorker(store *db.Store) *Worker {
@@ -26,7 +27,14 @@ func (w *Worker) Run() {
 	log.Println("[worker] started")
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("[worker] panic recovered: %v — restarting", r)
+			w.restarts++
+			if w.restarts > 5 {
+				log.Printf("[worker] panicked %d times, giving up", w.restarts)
+				return
+			}
+			backoff := time.Duration(w.restarts) * 10 * time.Second
+			log.Printf("[worker] panic: %v — restart in %v (attempt %d)", r, backoff, w.restarts)
+			time.Sleep(backoff)
 			go w.Run()
 		}
 	}()

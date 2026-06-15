@@ -36,6 +36,7 @@ const routes = [
       { path: 'logs', name: 'Logs', component: () => import('../views/Logs.vue'), meta: { title: 'Logs', icon: 'Document' } },
       { path: 'mem-tasks', name: 'InMemoryTasks', component: () => import('../views/InMemoryTasks.vue'), meta: { title: 'Memory Tasks', icon: 'Timer' } },
       { path: 'settings', name: 'Settings', component: () => import('../views/Settings.vue'), meta: { title: 'Settings', icon: 'Setting' } },
+      { path: 'audit', name: 'Audit', component: () => import('../views/Audit.vue'), meta: { title: 'Audit Log', icon: 'List' } },
       { path: 'vnc', name: 'VncConsole', component: () => import('../views/VncConsole.vue'), meta: { title: 'VNC Console', icon: 'Monitor' } },
     ]
   },

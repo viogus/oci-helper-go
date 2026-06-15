@@ -58,6 +58,12 @@ export async function upload(path, formData) {
   return res.data
 }
 
+// helper: PUT
+export async function put(path, data = {}) {
+  const res = await api.put(path, data)
+  return res.data
+}
+
 // helper: DELETE
 export async function del(path) {
   const res = await api.delete(path)

@@ -63,6 +63,10 @@
           <el-icon><Upload /></el-icon>
           <span>Backup</span>
         </el-menu-item>
+        <el-menu-item index="/audit">
+          <el-icon><List /></el-icon>
+          <span>Audit Log</span>
+        </el-menu-item>
       </el-menu>
     </el-aside>
     <el-container>
@@ -91,7 +95,7 @@
 import { ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth.js'
-import { Fold, Moon, Sunny } from '@element-plus/icons-vue'
+import { Fold, Moon, Sunny, List } from '@element-plus/icons-vue'
 
 const route = useRoute()
 const router = useRouter()

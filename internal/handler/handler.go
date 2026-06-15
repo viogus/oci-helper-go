@@ -55,12 +55,24 @@ func New(cfg *config.Config, store *db.Store) *Server {
 // clientFor resolves the tenant's key file path (may be relative filename)
 // to an absolute path under KeysDir before creating the OCI client.
 func (s *Server) clientFor(t *db.Tenant) (*ociclient.Client, error) {
-	if t.KeyFile != "" && !filepath.IsAbs(t.KeyFile) {
-		resolved := *t
-		resolved.KeyFile = filepath.Join(s.cfg.KeysDir, t.KeyFile)
-		return ociclient.NewClient(&resolved)
+	keyPath := t.KeyFile
+	if keyPath != "" && !filepath.IsAbs(keyPath) {
+		keyPath = filepath.Join(s.cfg.KeysDir, keyPath)
 	}
-	return ociclient.NewClient(t)
+	log.Printf("[clientFor] tenant=%d keyFile=%q resolved=%q keysDir=%q", t.ID, t.KeyFile, keyPath, s.cfg.KeysDir)
+
+	// verify file exists and is readable before passing to SDK
+	if keyPath != "" {
+		if fi, err := os.Stat(keyPath); err != nil {
+			log.Printf("[clientFor] key file stat error: %v", err)
+		} else {
+			log.Printf("[clientFor] key file found: size=%d mode=%v", fi.Size(), fi.Mode())
+		}
+	}
+
+	resolved := *t
+	resolved.KeyFile = keyPath
+	return ociclient.NewClient(&resolved)
 }
 
 func (s *Server) routes() {

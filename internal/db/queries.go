@@ -173,11 +173,53 @@ func (s *Store) UpsertInstanceImport(id string, tenantID int64, name, ocid, shap
 	return err
 }
 
-// ClearAll removes all data (for restore)
+// ClearAllTx removes all data within a transaction (for restore)
+func (s *Store) ClearAllTx(tx *sql.Tx) error {
+	if _, err := tx.Exec(`DELETE FROM instances`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM tenants`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM config`); err != nil {
+		return err
+	}
+	return nil
+}
+
+// ClearAll removes all data (for restore, non-transactional)
 func (s *Store) ClearAll() {
 	s.db.Exec(`DELETE FROM instances`)
 	s.db.Exec(`DELETE FROM tenants`)
 	s.db.Exec(`DELETE FROM config`)
+}
+
+// CreateTenantImportTx inserts a tenant within a transaction.
+func (s *Store) CreateTenantImportTx(tx *sql.Tx, name, userOCID, tenancyOCID, region, fingerprint, keyFile string) error {
+	_, err := tx.Exec(
+		`INSERT INTO tenants (name, user_ocid, tenancy_ocid, region, fingerprint, key_file)
+		 VALUES (?,?,?,?,?,?)`,
+		name, userOCID, tenancyOCID, region, fingerprint, keyFile)
+	return err
+}
+
+// UpsertInstanceImportTx upserts an instance within a transaction.
+func (s *Store) UpsertInstanceImportTx(tx *sql.Tx, id string, tenantID int64, name, ocid, shape, state, publicIP, privateIP string, ocpu, memoryGB float64, bootVolumeGB int64) error {
+	_, err := tx.Exec(
+		`INSERT INTO instances (id, tenant_id, name, ocid, shape, ocpu, memory_gb, boot_volume_gb, public_ip, private_ip, state, synced_at)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
+		 ON CONFLICT(id) DO UPDATE SET
+		   name=excluded.name, shape=excluded.shape, ocpu=excluded.ocpu, memory_gb=excluded.memory_gb,
+		   state=excluded.state, public_ip=excluded.public_ip, private_ip=excluded.private_ip,
+		   synced_at=CURRENT_TIMESTAMP`,
+		id, tenantID, name, ocid, shape, ocpu, memoryGB, bootVolumeGB, publicIP, privateIP, state)
+	return err
+}
+
+// SetConfigTx sets a config key-value pair within a transaction.
+func (s *Store) SetConfigTx(tx *sql.Tx, key, value string) error {
+	_, err := tx.Exec(`INSERT INTO config (key, value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, key, value)
+	return err
 }
 
 // Config

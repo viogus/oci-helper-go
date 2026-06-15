@@ -138,11 +138,21 @@ func (s *Server) handleRestore(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// clear existing data before restore
-	s.store.ClearAll()
+	tx, err := s.store.BeginTx()
+	if err != nil {
+		jsonErr(w, "begin tx: "+err.Error())
+		return
+	}
+	if err := s.store.ClearAllTx(tx); err != nil {
+		tx.Rollback()
+		jsonErr(w, "clear: "+err.Error())
+		return
+	}
 
 	// restore tenants
 	for _, t := range data.Tenants {
-		if err := s.store.CreateTenantImport(t.Name, t.UserOCID, t.TenancyOCID, t.Region, t.Fingerprint, t.KeyFile); err != nil {
+		if err := s.store.CreateTenantImportTx(tx, t.Name, t.UserOCID, t.TenancyOCID, t.Region, t.Fingerprint, t.KeyFile); err != nil {
+			tx.Rollback()
 			jsonErr(w, "restore tenant: "+err.Error())
 			return
 		}
@@ -150,7 +160,8 @@ func (s *Server) handleRestore(w http.ResponseWriter, r *http.Request) {
 
 	// restore instances
 	for _, i := range data.Instances {
-		if err := s.store.UpsertInstanceImport(i.ID, i.TenantID, i.Name, i.OCID, i.Shape, i.State, i.PublicIP, i.PrivateIP, i.OCPU, i.MemoryGB, i.BootVolumeGB); err != nil {
+		if err := s.store.UpsertInstanceImportTx(tx, i.ID, i.TenantID, i.Name, i.OCID, i.Shape, i.State, i.PublicIP, i.PrivateIP, i.OCPU, i.MemoryGB, i.BootVolumeGB); err != nil {
+			tx.Rollback()
 			jsonErr(w, "restore instance: "+err.Error())
 			return
 		}
@@ -158,10 +169,16 @@ func (s *Server) handleRestore(w http.ResponseWriter, r *http.Request) {
 
 	// restore config
 	for _, c := range data.Config {
-		if err := s.store.SetConfig(c.Key, c.Value); err != nil {
+		if err := s.store.SetConfigTx(tx, c.Key, c.Value); err != nil {
+			tx.Rollback()
 			jsonErr(w, "restore config: "+err.Error())
 			return
 		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		jsonErr(w, "commit: "+err.Error())
+		return
 	}
 
 	s.audit(0, "backup:restore", fmt.Sprintf("%d tenants, %d instances", len(data.Tenants), len(data.Instances)), r)

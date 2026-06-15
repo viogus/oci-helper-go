@@ -27,6 +27,10 @@ func New(path string) (*Store, error) {
 
 func (s *Store) Close() error { return s.db.Close() }
 
+func (s *Store) BeginTx() (*sql.Tx, error) {
+	return s.db.Begin()
+}
+
 func (s *Store) migrate() error {
 	if _, err := s.db.Exec(`PRAGMA foreign_keys = ON`); err != nil {
 		return fmt.Errorf("pragma: %w", err)

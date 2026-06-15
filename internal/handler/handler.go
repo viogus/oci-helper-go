@@ -533,7 +533,7 @@ func (s *Server) createInstance(w http.ResponseWriter, r *http.Request) {
 		launchReq.LaunchInstanceDetails.ShapeConfig.MemoryInGBs = req.MemoryGB
 	}
 
-	inst, err := client.LaunchInstance(r.Context(), launchReq)
+	inst, err := client.LaunchInstanceWithRequest(r.Context(), launchReq)
 	if err != nil {
 		jsonErr(w, "launch: "+err.Error())
 		return
@@ -1706,12 +1706,6 @@ func (s *Server) handleLimits(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, limits)
 }
 func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
-	jsonOK(w, map[string]string{"status": "not implemented"})
-}
-func (s *Server) handleBatchCreate(w http.ResponseWriter, r *http.Request) {
-	jsonOK(w, map[string]string{"status": "not implemented"})
-}
-func (s *Server) handleCreateTasks(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]string{"status": "not implemented"})
 }
 func (s *Server) handleMemTasksChangeIP(w http.ResponseWriter, r *http.Request) {

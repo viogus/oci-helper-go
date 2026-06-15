@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"time"
 
@@ -49,6 +50,8 @@ func (w *Worker) processNext() {
 		switch t.Type {
 		case "batch_start":
 			w.runBatchStart(t)
+		case "batch_create":
+			w.runBatchCreate(t)
 		default:
 			w.store.UpdateTaskStatus(t.ID, "failed", 0, "unknown task type: "+t.Type)
 		}
@@ -103,4 +106,56 @@ func (w *Worker) runBatchStart(task *db.Task) {
 	}
 
 	w.store.UpdateTaskStatus(task.ID, "completed", 100, "done")
+}
+
+func (w *Worker) runBatchCreate(task *db.Task) {
+	w.store.UpdateTaskStatus(task.ID, "running", 0, "creating instances...")
+
+	var payload struct {
+		TenantID           int64  `json:"tenant_id"`
+		InstancesPerTenant int    `json:"instances_per_tenant"`
+		Region             string `json:"region"`
+		Shape              string `json:"shape"`
+		ImageID            string `json:"image_id"`
+		SubnetID           string `json:"subnet_id"`
+		AvailabilityDomain string `json:"availability_domain"`
+		BootVolumeSizeGB   int64  `json:"boot_volume_size_gb"`
+		DisplayNamePrefix  string `json:"display_name_prefix"`
+	}
+	if err := json.Unmarshal([]byte(task.Payload), &payload); err != nil {
+		w.store.UpdateTaskStatus(task.ID, "failed", 0, "invalid payload: "+err.Error())
+		return
+	}
+
+	tenant, err := w.store.GetTenant(payload.TenantID)
+	if err != nil || tenant == nil {
+		w.store.UpdateTaskStatus(task.ID, "failed", 0, "tenant not found")
+		return
+	}
+
+	client, err := ociclient.NewClient(tenant)
+	if err != nil {
+		w.store.UpdateTaskStatus(task.ID, "failed", 0, "oci client: "+err.Error())
+		return
+	}
+
+	total := payload.InstancesPerTenant
+	for i := 0; i < total; i++ {
+		progress := (i * 100) / total
+		displayName := fmt.Sprintf("%s-%s-%d", payload.DisplayNamePrefix, tenant.Name, i+1)
+		w.store.UpdateTaskStatus(task.ID, "running", progress, "creating "+displayName)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
+		err := client.LaunchInstance(ctx, payload.Region, payload.AvailabilityDomain, payload.Shape, payload.ImageID, payload.SubnetID, displayName, payload.BootVolumeSizeGB)
+		cancel()
+		if err != nil {
+			w.store.UpdateTaskStatus(task.ID, "running", progress, "failed "+displayName+": "+err.Error())
+			continue
+		}
+
+		w.store.UpdateTaskStatus(task.ID, "running", progress, "created "+displayName)
+		time.Sleep(2 * time.Second)
+	}
+
+	w.store.UpdateTaskStatus(task.ID, "completed", 100, fmt.Sprintf("created %d instances", total))
 }

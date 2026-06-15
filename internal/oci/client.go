@@ -122,12 +122,41 @@ func (c *Client) InstanceAction(ctx context.Context, instanceID string, action c
 	return &resp.Instance, nil
 }
 
-func (c *Client) LaunchInstance(ctx context.Context, req core.LaunchInstanceRequest) (*core.Instance, error) {
+func (c *Client) LaunchInstanceWithRequest(ctx context.Context, req core.LaunchInstanceRequest) (*core.Instance, error) {
 	resp, err := c.compute.LaunchInstance(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("launch instance: %w", err)
 	}
 	return &resp.Instance, nil
+}
+
+// LaunchInstance creates a compute instance from individual parameters (convenience wrapper).
+func (c *Client) LaunchInstance(ctx context.Context, region, ad, shape, imageID, subnetID, displayName string, bootVolumeSizeGB int64) error {
+	details := core.LaunchInstanceDetails{
+		AvailabilityDomain: common.String(ad),
+		CompartmentId:      common.String(c.tenant.TenancyOCID),
+		Shape:              common.String(shape),
+		DisplayName:        common.String(displayName),
+		Metadata:           map[string]string{},
+		SourceDetails: core.InstanceSourceViaImageDetails{
+			ImageId:             common.String(imageID),
+			BootVolumeSizeInGBs: common.Int64(bootVolumeSizeGB),
+		},
+		CreateVnicDetails: &core.CreateVnicDetails{
+			SubnetId: common.String(subnetID),
+		},
+	}
+	// For AMD micro instances, constrain shape config
+	if strings.Contains(strings.ToLower(shape), "micro") {
+		details.ShapeConfig = &core.LaunchInstanceShapeConfigDetails{
+			Ocpus: common.Float32(1),
+		}
+	}
+	req := core.LaunchInstanceRequest{
+		LaunchInstanceDetails: details,
+	}
+	_, err := c.compute.LaunchInstance(ctx, req)
+	return err
 }
 
 func (c *Client) TerminateInstance(ctx context.Context, instanceID string) error {

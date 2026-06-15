@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -31,9 +32,13 @@ type Client struct {
 }
 
 func NewClient(t *db.Tenant) (*Client, error) {
+	pemData, err := os.ReadFile(t.KeyFile)
+	if err != nil {
+		return nil, fmt.Errorf("read key file %s: %w", t.KeyFile, err)
+	}
 	cfg := common.NewRawConfigurationProvider(
 		t.TenancyOCID, t.UserOCID, t.Region, t.Fingerprint,
-		t.KeyFile, nil,
+		string(pemData), nil,
 	)
 
 	compute, err := core.NewComputeClientWithConfigurationProvider(cfg)

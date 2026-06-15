@@ -3,6 +3,8 @@ package oci
 import (
 	"context"
 	"fmt"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -435,4 +437,223 @@ func (c *Client) GetMetrics(ctx context.Context, instanceID string) (map[string]
 		}
 	}
 	return result, nil
+}
+
+// --- Security Rules ---
+
+type SecurityRuleInfo struct {
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Protocol string `json:"protocol"`
+	Source   string `json:"source"`
+	Dest     string `json:"dest"`
+	Port     string `json:"port"`
+	Type     string `json:"type"` // "ingress" or "egress"
+}
+
+func (c *Client) ListSecurityRules(ctx context.Context, vcnID, keyword string, page, size int) ([]SecurityRuleInfo, int64, error) {
+	compartmentID := c.tenant.TenancyOCID
+	req := core.ListSecurityListsRequest{
+		CompartmentId: common.String(compartmentID),
+		VcnId:         common.String(vcnID),
+		Limit:         common.Int(100),
+	}
+	resp, err := c.vcn.ListSecurityLists(ctx, req)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	var all []SecurityRuleInfo
+	for _, sl := range resp.Items {
+		for _, rule := range sl.IngressSecurityRules {
+			info := SecurityRuleInfo{
+				ID:       *sl.Id + "/ingress/" + *rule.Protocol,
+				Name:     *sl.DisplayName,
+				Protocol: "",
+				Source:   "",
+				Port:     "",
+				Type:     "ingress",
+			}
+			if rule.Protocol != nil {
+				info.Protocol = *rule.Protocol
+			}
+			if rule.Source != nil {
+				info.Source = *rule.Source
+			}
+			if rule.TcpOptions != nil && rule.TcpOptions.DestinationPortRange != nil {
+				info.Port = strconv.Itoa(*rule.TcpOptions.DestinationPortRange.Min) + "-" + strconv.Itoa(*rule.TcpOptions.DestinationPortRange.Max)
+			}
+			all = append(all, info)
+		}
+		for _, rule := range sl.EgressSecurityRules {
+			info := SecurityRuleInfo{
+				ID:       *sl.Id + "/egress/" + *rule.Protocol,
+				Name:     *sl.DisplayName,
+				Protocol: "",
+				Dest:     "",
+				Port:     "",
+				Type:     "egress",
+			}
+			if rule.Protocol != nil {
+				info.Protocol = *rule.Protocol
+			}
+			if rule.Destination != nil {
+				info.Dest = *rule.Destination
+			}
+			if rule.TcpOptions != nil && rule.TcpOptions.DestinationPortRange != nil {
+				info.Port = strconv.Itoa(*rule.TcpOptions.DestinationPortRange.Min) + "-" + strconv.Itoa(*rule.TcpOptions.DestinationPortRange.Max)
+			}
+			all = append(all, info)
+		}
+	}
+
+	// filter by keyword
+	kw := strings.ToLower(keyword)
+	var filtered []SecurityRuleInfo
+	for _, r := range all {
+		if kw == "" || strings.Contains(strings.ToLower(r.Protocol), kw) ||
+			strings.Contains(strings.ToLower(r.Source), kw) || strings.Contains(strings.ToLower(r.Port), kw) {
+			filtered = append(filtered, r)
+		}
+	}
+	total := int64(len(filtered))
+
+	// paginate
+	start := (page - 1) * size
+	if start >= len(filtered) {
+		return []SecurityRuleInfo{}, total, nil
+	}
+	end := start + size
+	if end > len(filtered) {
+		end = len(filtered)
+	}
+	return filtered[start:end], total, nil
+}
+
+func (c *Client) AddIngressRule(ctx context.Context, vcnID, protocol, port, source string) error {
+	req := core.ListSecurityListsRequest{
+		CompartmentId: common.String(c.tenant.TenancyOCID),
+		VcnId:         common.String(vcnID),
+		Limit:         common.Int(1),
+	}
+	resp, err := c.vcn.ListSecurityLists(ctx, req)
+	if err != nil {
+		return err
+	}
+	if len(resp.Items) == 0 {
+		return fmt.Errorf("no security list found")
+	}
+
+	sl := resp.Items[0]
+	ingressRules := sl.IngressSecurityRules
+	newRule := core.IngressSecurityRule{
+		Protocol:  common.String(protocol),
+		Source:    common.String(source),
+	}
+	if protocol == "TCP" || protocol == "UDP" {
+		parts := strings.Split(port, "-")
+		minPort, _ := strconv.Atoi(parts[0])
+		maxPort := minPort
+		if len(parts) > 1 {
+			maxPort, _ = strconv.Atoi(parts[1])
+		}
+		newRule.TcpOptions = &core.TcpOptions{
+			DestinationPortRange: &core.PortRange{
+				Min: common.Int(minPort),
+				Max: common.Int(maxPort),
+			},
+		}
+	}
+	ingressRules = append(ingressRules, newRule)
+
+	updateReq := core.UpdateSecurityListRequest{
+		SecurityListId: sl.Id,
+		UpdateSecurityListDetails: core.UpdateSecurityListDetails{
+			IngressSecurityRules: ingressRules,
+			EgressSecurityRules:  sl.EgressSecurityRules,
+		},
+	}
+	_, err = c.vcn.UpdateSecurityList(ctx, updateReq)
+	return err
+}
+
+func (c *Client) AddEgressRule(ctx context.Context, vcnID, protocol, port, dest string) error {
+	req := core.ListSecurityListsRequest{
+		CompartmentId: common.String(c.tenant.TenancyOCID),
+		VcnId:         common.String(vcnID),
+		Limit:         common.Int(1),
+	}
+	resp, err := c.vcn.ListSecurityLists(ctx, req)
+	if err != nil {
+		return err
+	}
+	if len(resp.Items) == 0 {
+		return fmt.Errorf("no security list found")
+	}
+
+	sl := resp.Items[0]
+	egressRules := sl.EgressSecurityRules
+	newRule := core.EgressSecurityRule{
+		Protocol:    common.String(protocol),
+		Destination: common.String(dest),
+			}
+	if protocol == "TCP" || protocol == "UDP" {
+		parts := strings.Split(port, "-")
+		minPort, _ := strconv.Atoi(parts[0])
+		maxPort := minPort
+		if len(parts) > 1 {
+			maxPort, _ = strconv.Atoi(parts[1])
+		}
+		newRule.TcpOptions = &core.TcpOptions{
+			DestinationPortRange: &core.PortRange{
+				Min: common.Int(minPort),
+				Max: common.Int(maxPort),
+			},
+		}
+	}
+	egressRules = append(egressRules, newRule)
+
+	updateReq := core.UpdateSecurityListRequest{
+		SecurityListId: sl.Id,
+		UpdateSecurityListDetails: core.UpdateSecurityListDetails{
+			IngressSecurityRules: sl.IngressSecurityRules,
+			EgressSecurityRules:  egressRules,
+		},
+	}
+	_, err = c.vcn.UpdateSecurityList(ctx, updateReq)
+	return err
+}
+
+func (c *Client) RemoveSecurityRules(ctx context.Context, vcnID string, ruleIDs []string) error {
+	return fmt.Errorf("not implemented: remove specific rules by ID")
+}
+
+func (c *Client) ReleaseAllPorts(ctx context.Context, vcnID string) error {
+	req := core.ListSecurityListsRequest{
+		CompartmentId: common.String(c.tenant.TenancyOCID),
+		VcnId:         common.String(vcnID),
+		Limit:         common.Int(100),
+	}
+	resp, err := c.vcn.ListSecurityLists(ctx, req)
+	if err != nil {
+		return err
+	}
+	for _, sl := range resp.Items {
+		ingressRules := sl.IngressSecurityRules
+		ingressRules = append(ingressRules, core.IngressSecurityRule{
+			Protocol:  common.String("all"),
+			Source:    common.String("0.0.0.0/0"),
+			})
+		updateReq := core.UpdateSecurityListRequest{
+			SecurityListId: sl.Id,
+			UpdateSecurityListDetails: core.UpdateSecurityListDetails{
+				IngressSecurityRules: ingressRules,
+				EgressSecurityRules:  sl.EgressSecurityRules,
+			},
+		}
+		if _, err := c.vcn.UpdateSecurityList(ctx, updateReq); err != nil {
+			return err
+		}
+	}
+	return nil
 }

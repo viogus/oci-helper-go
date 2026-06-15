@@ -1573,7 +1573,37 @@ func (s *Server) handleUpdateInstanceName(w http.ResponseWriter, r *http.Request
 	jsonOK(w, map[string]string{"status": "ok"})
 }
 func (s *Server) handleChangeIP(w http.ResponseWriter, r *http.Request) {
-	jsonOK(w, map[string]string{"status": "not implemented"})
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		TenantID   int64    `json:"tenant_id"`
+		InstanceID string   `json:"instance_id"`
+		CidrList   []string `json:"cidr_list"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonErr(w, "invalid body: "+err.Error())
+		return
+	}
+	tenant, err := s.store.GetTenant(req.TenantID)
+	if err != nil || tenant == nil {
+		jsonErr(w, "tenant not found")
+		return
+	}
+	client, err := ociclient.NewClient(tenant)
+	if err != nil {
+		jsonErr(w, "oci client: "+err.Error())
+		return
+	}
+	// Try to change IP once (synchronous)
+	newIP, err := client.ChangeInstanceIP(r.Context(), req.InstanceID, req.CidrList)
+	if err != nil {
+		jsonErr(w, "change ip: "+err.Error())
+		return
+	}
+	s.audit(req.TenantID, "instance:change-ip", req.InstanceID+" → "+newIP, r)
+	jsonOK(w, map[string]string{"new_ip": newIP, "status": "ok"})
 }
 func (s *Server) handleCheckAlive(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]string{"status": "not implemented"})
@@ -1706,12 +1736,6 @@ func (s *Server) handleLimits(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, limits)
 }
 func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
-	jsonOK(w, map[string]string{"status": "not implemented"})
-}
-func (s *Server) handleMemTasksChangeIP(w http.ResponseWriter, r *http.Request) {
-	jsonOK(w, map[string]string{"status": "not implemented"})
-}
-func (s *Server) handleMemTasksUpdateCfg(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]string{"status": "not implemented"})
 }
 func (s *Server) handleIPInfo(w http.ResponseWriter, r *http.Request) {

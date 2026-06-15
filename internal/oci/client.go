@@ -3,6 +3,7 @@ package oci
 import (
 	"context"
 	"fmt"
+	"net"
 	"strconv"
 	"strings"
 	"sync"
@@ -837,4 +838,135 @@ func (c *Client) Enable500Mbps(ctx context.Context, instanceID string) error {
 // Disable500Mbps deletes the NLB associated with the instance.
 func (c *Client) Disable500Mbps(ctx context.Context, instanceID string) error {
 	return fmt.Errorf("NLB deletion requires OCI network load balancer SDK (not yet integrated)")
+}
+
+// ChangeInstanceIP replaces the ephemeral public IP of an instance.
+func (c *Client) ChangeInstanceIP(ctx context.Context, instanceID string, cidrList []string) (string, error) {
+	// Get current VNIC
+	attReq := core.ListVnicAttachmentsRequest{
+		CompartmentId: common.String(c.tenant.TenancyOCID),
+		InstanceId:    common.String(instanceID),
+		Limit:         common.Int(10),
+	}
+	attResp, err := c.compute.ListVnicAttachments(ctx, attReq)
+	if err != nil {
+		return "", fmt.Errorf("list vnic attachments: %w", err)
+	}
+	if len(attResp.Items) == 0 {
+		return "", fmt.Errorf("no VNIC attached")
+	}
+
+	vnicID := attResp.Items[0].VnicId
+	vnicReq := core.GetVnicRequest{VnicId: vnicID}
+	vnicResp, err := c.vcn.GetVnic(ctx, vnicReq)
+	if err != nil {
+		return "", fmt.Errorf("get vnic: %w", err)
+	}
+
+	// Get current public IP
+	oldIP := ""
+	if vnicResp.PublicIp != nil {
+		oldIP = *vnicResp.PublicIp
+	}
+
+	// If no public IP, create one
+	if oldIP == "" {
+		return "", fmt.Errorf("instance has no public IP to replace")
+	}
+
+	// Find the private IP OCID for this VNIC to use when creating the new public IP
+	privReq := core.ListPrivateIpsRequest{
+		VnicId: vnicID,
+		Limit:  common.Int(10),
+	}
+	privResp, err := c.vcn.ListPrivateIps(ctx, privReq)
+	if err != nil {
+		return "", fmt.Errorf("list private IPs: %w", err)
+	}
+	var privateIPID *string
+	for _, p := range privResp.Items {
+		if p.IsPrimary != nil && *p.IsPrimary {
+			privateIPID = p.Id
+			break
+		}
+	}
+	if privateIPID == nil {
+		return "", fmt.Errorf("no primary private IP found for VNIC")
+	}
+
+	// Delete old public IP
+	// Find the public IP OCID by listing
+	pipReq := core.ListPublicIpsRequest{
+		Scope:         core.ListPublicIpsScopeAvailabilityDomain,
+		CompartmentId: common.String(c.tenant.TenancyOCID),
+		Limit:         common.Int(100),
+	}
+	pipResp, err := c.vcn.ListPublicIps(ctx, pipReq)
+	if err != nil {
+		return "", fmt.Errorf("list public IPs: %w", err)
+	}
+
+	var oldIPID string
+	for _, ip := range pipResp.Items {
+		if ip.IpAddress != nil && *ip.IpAddress == oldIP {
+			oldIPID = *ip.Id
+			break
+		}
+	}
+	if oldIPID == "" {
+		return "", fmt.Errorf("public IP not found in tenancy")
+	}
+
+	// Delete the old public IP
+	delReq := core.DeletePublicIpRequest{PublicIpId: common.String(oldIPID)}
+	if _, err := c.vcn.DeletePublicIp(ctx, delReq); err != nil {
+		return "", fmt.Errorf("delete old IP: %w", err)
+	}
+
+	// Create new public IP
+	createReq := core.CreatePublicIpRequest{
+		CreatePublicIpDetails: core.CreatePublicIpDetails{
+			CompartmentId: common.String(c.tenant.TenancyOCID),
+			Lifetime:      core.CreatePublicIpDetailsLifetimeEphemeral,
+			PrivateIpId:   privateIPID,
+		},
+	}
+	createResp, err := c.vcn.CreatePublicIp(ctx, createReq)
+	if err != nil {
+		return "", fmt.Errorf("create new IP: %w", err)
+	}
+
+	newIP := ""
+	if createResp.PublicIp.IpAddress != nil {
+		newIP = *createResp.PublicIp.IpAddress
+	}
+
+	// Check CIDR filter if specified
+	if len(cidrList) > 0 {
+		matched := false
+		for _, cidr := range cidrList {
+			if ipInCIDR(newIP, cidr) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return "", fmt.Errorf("new IP %s not in desired CIDR ranges: %v", newIP, cidrList)
+		}
+	}
+
+	return newIP, nil
+}
+
+// ipInCIDR checks if an IP is in a CIDR range
+func ipInCIDR(ipStr, cidrStr string) bool {
+	ip := net.ParseIP(ipStr)
+	if ip == nil {
+		return false
+	}
+	_, cidr, err := net.ParseCIDR(cidrStr)
+	if err != nil {
+		return false
+	}
+	return cidr.Contains(ip)
 }

@@ -75,7 +75,7 @@ async function send() {
   scrollToBottom()
 
   try {
-    const r = await post('/ai/chat', { message: msg })
+    const r = await post('/ai/chat', { messages: [{ role: 'user', content: msg }] })
     messages.value.push({ role: 'ai', content: r.reply || 'No response' })
   } catch (e) {
     const detail = e.response?.data?.error || 'AI service unavailable'

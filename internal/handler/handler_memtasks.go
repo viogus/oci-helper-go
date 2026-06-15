@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -231,5 +232,10 @@ func (s *Server) runUpdateCfgLoop(task *memTask) {
 }
 
 func generateID() string {
-	return fmt.Sprintf("%x", time.Now().UnixNano())
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		// fallback to timestamp if rand fails (should never happen)
+		return fmt.Sprintf("%x", time.Now().UnixNano())
+	}
+	return fmt.Sprintf("%x", b)
 }

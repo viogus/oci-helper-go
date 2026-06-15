@@ -1,6 +1,8 @@
 package auth
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
@@ -11,9 +13,11 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/crypto/bcrypt"
@@ -22,17 +26,19 @@ import (
 type Session struct {
 	User      string    `json:"user"`
 	CreatedAt time.Time `json:"createdAt"`
+	Version   int64     `json:"v"`
 }
 
 const sessionCookie = "oci_helper_session"
 const sessionTTL = 24 * time.Hour
 
 type Service struct {
-	username     string
-	passwordHash []byte
-	sessionKey   []byte
-	mfaSecret    string
-	mfaEnabled   bool
+	username       string
+	passwordHash   []byte
+	sessionKey     []byte
+	sessionVersion int64
+	mfaSecret      string
+	mfaEnabled     bool
 }
 
 func New(username, password, mfaSecret string, mfaEnabled bool) *Service {
@@ -70,12 +76,17 @@ func (s *Service) Login(w http.ResponseWriter, r *http.Request) bool {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return false
 	}
-	sess := Session{User: user, CreatedAt: time.Now()}
+	sess := Session{User: user, CreatedAt: time.Now(), Version: s.sessionVersion}
 	data, _ := json.Marshal(sess)
 	signed := sign(data, s.sessionKey)
+	encrypted, err := encryptSigned([]byte(signed), s.sessionKey)
+	if err != nil {
+		http.Error(w, "Internal error", http.StatusInternalServerError)
+		return false
+	}
 	cookie := &http.Cookie{
 		Name:     sessionCookie,
-		Value:    signed,
+		Value:    base64.RawURLEncoding.EncodeToString(encrypted),
 		Path:     "/",
 		HttpOnly: true,
 		Secure:   r.TLS != nil,
@@ -88,12 +99,18 @@ func (s *Service) Login(w http.ResponseWriter, r *http.Request) bool {
 
 // CreateSession generates a signed session cookie value for the given user.
 func (s *Service) CreateSession(user string) string {
-	sess := Session{User: user, CreatedAt: time.Now()}
+	sess := Session{User: user, CreatedAt: time.Now(), Version: s.sessionVersion}
 	data, _ := json.Marshal(sess)
-	return sign(data, s.sessionKey)
+	signed := sign(data, s.sessionKey)
+	encrypted, err := encryptSigned([]byte(signed), s.sessionKey)
+	if err != nil {
+		return ""
+	}
+	return base64.RawURLEncoding.EncodeToString(encrypted)
 }
 
 func (s *Service) Logout(w http.ResponseWriter) {
+	atomic.AddInt64(&s.sessionVersion, 1)
 	http.SetCookie(w, &http.Cookie{
 		Name:   sessionCookie,
 		Value:  "",
@@ -108,7 +125,17 @@ func (s *Service) Authenticate(w http.ResponseWriter, r *http.Request) bool {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return false
 	}
-	data, err := unsign(cookie.Value, s.sessionKey)
+	encrypted, err := base64.RawURLEncoding.DecodeString(cookie.Value)
+	if err != nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return false
+	}
+	signed, err := decryptSigned(encrypted, s.sessionKey)
+	if err != nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return false
+	}
+	data, err := unsign(string(signed), s.sessionKey)
 	if err != nil {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return false
@@ -116,6 +143,10 @@ func (s *Service) Authenticate(w http.ResponseWriter, r *http.Request) bool {
 	var sess Session
 	if err := json.Unmarshal(data, &sess); err != nil {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return false
+	}
+	if sess.Version != s.sessionVersion {
+		http.Error(w, "Session invalidated", http.StatusUnauthorized)
 		return false
 	}
 	if time.Since(sess.CreatedAt) >= sessionTTL {
@@ -152,6 +183,51 @@ func unsign(token string, key []byte) ([]byte, error) {
 		return nil, fmt.Errorf("invalid signature")
 	}
 	return data, nil
+}
+
+// encryptSigned encrypts plaintext with AES-256-GCM using key.
+// Returns salt(16) + nonce(12) + ciphertext||tag.
+// NOTE: The cookie format has changed. All existing sessions are invalidated on deploy.
+func encryptSigned(plaintext, key []byte) ([]byte, error) {
+	salt := make([]byte, 16)
+	if _, err := io.ReadFull(rand.Reader, salt); err != nil {
+		return nil, err
+	}
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, err
+	}
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+		return nil, err
+	}
+	out := make([]byte, 0, len(salt)+len(nonce)+len(plaintext)+16)
+	out = append(out, salt...)
+	out = append(out, nonce...)
+	return gcm.Seal(out, nonce, plaintext, nil), nil
+}
+
+// decryptSigned decrypts data produced by encryptSigned.
+func decryptSigned(data, key []byte) ([]byte, error) {
+	if len(data) < 28 {
+		return nil, fmt.Errorf("too short")
+	}
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, err
+	}
+	nonceSize := gcm.NonceSize()
+	nonce := data[16 : 16+nonceSize]
+	ciphertext := data[16+nonceSize:]
+	return gcm.Open(nil, nonce, ciphertext, nil)
 }
 
 // GenerateMFA creates a new TOTP secret (base32)

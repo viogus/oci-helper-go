@@ -212,3 +212,92 @@ func (s *Store) SetConfig(key, value string) error {
 	_, err := s.db.Exec(`INSERT INTO config (key, value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, key, value)
 	return err
 }
+
+func (s *Store) ListInstancesPaginated(tenantID int64, keyword string, page, size int) ([]Instance, int64, error) {
+	kw := "%" + keyword + "%"
+	var total int64
+	s.db.QueryRow(`SELECT COUNT(*) FROM instances WHERE (tenant_id=? OR ?=0) AND (name LIKE ? OR ocid LIKE ? OR public_ip LIKE ?)`,
+		tenantID, tenantID, kw, kw, kw).Scan(&total)
+
+	offset := (page - 1) * size
+	rows, err := s.db.Query(`SELECT id, tenant_id, name, ocid, shape, ocpu, memory_gb, boot_volume_gb,
+		public_ip, private_ip, state, availability_domain, fault_domain, image_id, subnet_id,
+		created_at, synced_at FROM instances
+		WHERE (tenant_id=? OR ?=0) AND (name LIKE ? OR ocid LIKE ? OR public_ip LIKE ?)
+		ORDER BY created_at DESC LIMIT ? OFFSET ?`,
+		tenantID, tenantID, kw, kw, kw, size, offset)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	var list []Instance
+	for rows.Next() {
+		var i Instance
+		if err := rows.Scan(&i.ID, &i.TenantID, &i.Name, &i.OCID, &i.Shape, &i.OCPU, &i.MemoryGB, &i.BootVolumeGB,
+			&i.PublicIP, &i.PrivateIP, &i.State, &i.AvailabilityDomain, &i.FaultDomain, &i.ImageID, &i.SubnetID,
+			&i.CreatedAt, &i.SyncedAt); err != nil {
+			return nil, 0, err
+		}
+		list = append(list, i)
+	}
+	return list, total, rows.Err()
+}
+
+func (s *Store) ListTenantsPaginated(keyword string, page, size int) ([]Tenant, int64, error) {
+	kw := "%" + keyword + "%"
+	var total int64
+	s.db.QueryRow(`SELECT COUNT(*) FROM tenants WHERE name LIKE ? OR region LIKE ?`, kw, kw).Scan(&total)
+
+	offset := (page - 1) * size
+	rows, err := s.db.Query(`SELECT id, name, user_ocid, tenancy_ocid, region, fingerprint, key_file,
+		status, coalesce(home_region,''), coalesce(subscribed,''), created_at, updated_at FROM tenants
+		WHERE name LIKE ? OR region LIKE ?
+		ORDER BY id DESC LIMIT ? OFFSET ?`,
+		kw, kw, size, offset)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	var list []Tenant
+	for rows.Next() {
+		var t Tenant
+		if err := rows.Scan(&t.ID, &t.Name, &t.UserOCID, &t.TenancyOCID, &t.Region, &t.Fingerprint, &t.KeyFile,
+			&t.Status, &t.HomeRegion, &t.Subscribed, &t.CreatedAt, &t.UpdatedAt); err != nil {
+			return nil, 0, err
+		}
+		list = append(list, t)
+	}
+	return list, total, rows.Err()
+}
+
+func (s *Store) ListTasksPaginated(keyword string, page, size int) ([]Task, int64, error) {
+	kw := "%" + keyword + "%"
+	var total int64
+	s.db.QueryRow(`SELECT COUNT(*) FROM tasks WHERE type LIKE ? OR message LIKE ?`, kw, kw).Scan(&total)
+
+	offset := (page - 1) * size
+	rows, err := s.db.Query(`SELECT id, tenant_id, type, status, progress, message, payload,
+		coalesce(result,''), created_at, started_at, finished_at FROM tasks
+		WHERE type LIKE ? OR message LIKE ?
+		ORDER BY id DESC LIMIT ? OFFSET ?`,
+		kw, kw, size, offset)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	var list []Task
+	for rows.Next() {
+		var t Task
+		if err := rows.Scan(&t.ID, &t.TenantID, &t.Type, &t.Status, &t.Progress, &t.Message,
+			&t.Payload, &t.Result, &t.CreatedAt, &t.StartedAt, &t.FinishedAt); err != nil {
+			return nil, 0, err
+		}
+		list = append(list, t)
+	}
+	return list, total, rows.Err()
+}
+
+func (s *Store) UpdateTaskPayload(id int64, payload string) error {
+	_, err := s.db.Exec(`UPDATE tasks SET payload=? WHERE id=?`, payload, id)
+	return err
+}

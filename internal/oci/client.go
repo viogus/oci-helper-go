@@ -1293,3 +1293,77 @@ func ipInCIDR(ipStr, cidrStr string) bool {
 	}
 	return cidr.Contains(ip)
 }
+
+// ── Console Connection ────────────────────────────────────────────────
+
+const (
+	consoleConnectionPollInterval = 5 * time.Second
+	consoleConnectionTimeout     = 2 * time.Minute
+)
+
+func (c *Client) CreateConsoleConnection(ctx context.Context, instanceID, publicKey string) (*core.InstanceConsoleConnection, error) {
+	req := core.CreateInstanceConsoleConnectionRequest{
+		CreateInstanceConsoleConnectionDetails: core.CreateInstanceConsoleConnectionDetails{
+			InstanceId: common.String(instanceID),
+			PublicKey:  common.String(publicKey),
+		},
+	}
+	resp, err := c.compute.CreateInstanceConsoleConnection(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("create console connection: %w", err)
+	}
+	return &resp.InstanceConsoleConnection, nil
+}
+
+func (c *Client) GetConsoleConnection(ctx context.Context, connectionID string) (*core.InstanceConsoleConnection, error) {
+	req := core.GetInstanceConsoleConnectionRequest{
+		InstanceConsoleConnectionId: common.String(connectionID),
+	}
+	resp, err := c.compute.GetInstanceConsoleConnection(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("get console connection: %w", err)
+	}
+	return &resp.InstanceConsoleConnection, nil
+}
+
+func (c *Client) DeleteConsoleConnection(ctx context.Context, connectionID string) error {
+	req := core.DeleteInstanceConsoleConnectionRequest{
+		InstanceConsoleConnectionId: common.String(connectionID),
+	}
+	_, err := c.compute.DeleteInstanceConsoleConnection(ctx, req)
+	return err
+}
+
+func (c *Client) ListConsoleConnections(ctx context.Context, instanceID string) ([]core.InstanceConsoleConnection, error) {
+	req := core.ListInstanceConsoleConnectionsRequest{
+		CompartmentId: common.String(c.tenant.TenancyOCID),
+		InstanceId:    common.String(instanceID),
+	}
+	resp, err := c.compute.ListInstanceConsoleConnections(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("list console connections: %w", err)
+	}
+	return resp.Items, nil
+}
+
+func (c *Client) WaitForConsoleConnectionActive(ctx context.Context, connectionID string) (*core.InstanceConsoleConnection, error) {
+	deadline := time.Now().Add(consoleConnectionTimeout)
+	for time.Now().Before(deadline) {
+		conn, err := c.GetConsoleConnection(ctx, connectionID)
+		if err != nil {
+			return nil, err
+		}
+		if conn.LifecycleState == core.InstanceConsoleConnectionLifecycleStateActive {
+			return conn, nil
+		}
+		if conn.LifecycleState == core.InstanceConsoleConnectionLifecycleStateFailed {
+			return nil, fmt.Errorf("console connection failed")
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(consoleConnectionPollInterval):
+		}
+	}
+	return nil, fmt.Errorf("console connection timed out after %v", consoleConnectionTimeout)
+}

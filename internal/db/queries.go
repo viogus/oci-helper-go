@@ -346,3 +346,210 @@ func (s *Store) UpdateTaskPayload(id int64, payload string) error {
 	_, err := s.db.Exec(`UPDATE tasks SET payload=? WHERE id=?`, payload, id)
 	return err
 }
+
+// ── CfCfg ──────────────────────────────────────────────────────────────
+
+func (s *Store) ListCfCfgs() ([]CfCfg, error) {
+	rows, err := s.db.Query(`SELECT id, name, token, email, api_key, zone_id, enabled, created_at, updated_at FROM cf_configs ORDER BY id DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var list []CfCfg
+	for rows.Next() {
+		var c CfCfg
+		if err := rows.Scan(&c.ID, &c.Name, &c.Token, &c.Email, &c.APIKey, &c.ZoneID, &c.Enabled, &c.CreatedAt, &c.UpdatedAt); err != nil {
+			return nil, err
+		}
+		list = append(list, c)
+	}
+	return list, rows.Err()
+}
+
+func (s *Store) GetCfCfg(id int64) (*CfCfg, error) {
+	var c CfCfg
+	err := s.db.QueryRow(`SELECT id, name, token, email, api_key, zone_id, enabled, created_at, updated_at FROM cf_configs WHERE id=?`, id).
+		Scan(&c.ID, &c.Name, &c.Token, &c.Email, &c.APIKey, &c.ZoneID, &c.Enabled, &c.CreatedAt, &c.UpdatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	return &c, err
+}
+
+func (s *Store) CreateCfCfg(c *CfCfg) error {
+	_, err := s.db.Exec(`INSERT INTO cf_configs (name, token, email, api_key, zone_id, enabled) VALUES (?,?,?,?,?,?)`,
+		c.Name, c.Token, c.Email, c.APIKey, c.ZoneID, c.Enabled)
+	return err
+}
+
+func (s *Store) UpdateCfCfg(c *CfCfg) error {
+	_, err := s.db.Exec(`UPDATE cf_configs SET name=?, token=?, email=?, api_key=?, zone_id=?, enabled=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`,
+		c.Name, c.Token, c.Email, c.APIKey, c.ZoneID, c.Enabled, c.ID)
+	return err
+}
+
+func (s *Store) DeleteCfCfg(id int64) error {
+	_, err := s.db.Exec(`DELETE FROM cf_configs WHERE id=?`, id)
+	return err
+}
+
+// ── IpData ─────────────────────────────────────────────────────────────
+
+func (s *Store) ListIpData(tenantID int64, dataType string) ([]IpData, error) {
+	q := `SELECT id, tenant_id, cidr, label, type, enabled, created_at FROM ip_data WHERE (tenant_id=? OR ?=0)`
+	args := []interface{}{tenantID, tenantID}
+	if dataType != "" {
+		q += ` AND type=?`
+		args = append(args, dataType)
+	}
+	q += ` ORDER BY id DESC`
+	rows, err := s.db.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var list []IpData
+	for rows.Next() {
+		var d IpData
+		if err := rows.Scan(&d.ID, &d.TenantID, &d.CIDR, &d.Label, &d.Type, &d.Enabled, &d.CreatedAt); err != nil {
+			return nil, err
+		}
+		list = append(list, d)
+	}
+	return list, rows.Err()
+}
+
+func (s *Store) CreateIpData(d *IpData) error {
+	_, err := s.db.Exec(`INSERT INTO ip_data (tenant_id, cidr, label, type, enabled) VALUES (?,?,?,?,?)`,
+		d.TenantID, d.CIDR, d.Label, d.Type, d.Enabled)
+	return err
+}
+
+func (s *Store) UpdateIpData(d *IpData) error {
+	_, err := s.db.Exec(`UPDATE ip_data SET cidr=?, label=?, type=?, enabled=? WHERE id=?`,
+		d.CIDR, d.Label, d.Type, d.Enabled, d.ID)
+	return err
+}
+
+func (s *Store) DeleteIpData(id int64) error {
+	_, err := s.db.Exec(`DELETE FROM ip_data WHERE id=?`, id)
+	return err
+}
+
+// ── SSH Keys ───────────────────────────────────────────────────────────
+
+func (s *Store) ListSSHKeys(tenantID int64) ([]SSHKey, error) {
+	rows, err := s.db.Query(`SELECT id, name, public_key, fingerprint, tenant_id, created_at FROM ssh_keys WHERE (tenant_id=? OR ?=0) ORDER BY id DESC`,
+		tenantID, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var list []SSHKey
+	for rows.Next() {
+		var k SSHKey
+		if err := rows.Scan(&k.ID, &k.Name, &k.PublicKey, &k.Fingerprint, &k.TenantID, &k.CreatedAt); err != nil {
+			return nil, err
+		}
+		list = append(list, k)
+	}
+	return list, rows.Err()
+}
+
+func (s *Store) CreateSSHKey(k *SSHKey) error {
+	_, err := s.db.Exec(`INSERT INTO ssh_keys (name, public_key, private_key, fingerprint, tenant_id) VALUES (?,?,?,?,?)`,
+		k.Name, k.PublicKey, k.PrivateKey, k.Fingerprint, k.TenantID)
+	return err
+}
+
+func (s *Store) DeleteSSHKey(id int64) error {
+	_, err := s.db.Exec(`DELETE FROM ssh_keys WHERE id=?`, id)
+	return err
+}
+
+// ── Instance Plans ─────────────────────────────────────────────────────
+
+func (s *Store) ListInstancePlans(tenantID int64) ([]InstancePlan, error) {
+	rows, err := s.db.Query(`SELECT id, name, tenant_id, shape, image_id, subnet_id, availability_domain, boot_volume_size_gb, ocpus, memory_gb, created_at FROM instance_plans WHERE (tenant_id=? OR ?=0) ORDER BY id DESC`,
+		tenantID, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var list []InstancePlan
+	for rows.Next() {
+		var p InstancePlan
+		if err := rows.Scan(&p.ID, &p.Name, &p.TenantID, &p.Shape, &p.ImageID, &p.SubnetID, &p.AvailabilityDomain, &p.BootVolumeSizeGB, &p.OCPUs, &p.MemoryGB, &p.CreatedAt); err != nil {
+			return nil, err
+		}
+		list = append(list, p)
+	}
+	return list, rows.Err()
+}
+
+func (s *Store) CreateInstancePlan(p *InstancePlan) error {
+	_, err := s.db.Exec(`INSERT INTO instance_plans (name, tenant_id, shape, image_id, subnet_id, availability_domain, boot_volume_size_gb, ocpus, memory_gb) VALUES (?,?,?,?,?,?,?,?,?)`,
+		p.Name, p.TenantID, p.Shape, p.ImageID, p.SubnetID, p.AvailabilityDomain, p.BootVolumeSizeGB, p.OCPUs, p.MemoryGB)
+	return err
+}
+
+func (s *Store) UpdateInstancePlan(p *InstancePlan) error {
+	_, err := s.db.Exec(`UPDATE instance_plans SET name=?, shape=?, image_id=?, subnet_id=?, availability_domain=?, boot_volume_size_gb=?, ocpus=?, memory_gb=? WHERE id=?`,
+		p.Name, p.Shape, p.ImageID, p.SubnetID, p.AvailabilityDomain, p.BootVolumeSizeGB, p.OCPUs, p.MemoryGB, p.ID)
+	return err
+}
+
+func (s *Store) DeleteInstancePlan(id int64) error {
+	_, err := s.db.Exec(`DELETE FROM instance_plans WHERE id=?`, id)
+	return err
+}
+
+// ── Users ──────────────────────────────────────────────────────────────
+
+func (s *Store) ListUsers() ([]User, error) {
+	rows, err := s.db.Query(`SELECT id, username, role, mfa_enabled, email, created_at, updated_at FROM users ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var list []User
+	for rows.Next() {
+		var u User
+		if err := rows.Scan(&u.ID, &u.Username, &u.Role, &u.MFAEnabled, &u.Email, &u.CreatedAt, &u.UpdatedAt); err != nil {
+			return nil, err
+		}
+		list = append(list, u)
+	}
+	return list, rows.Err()
+}
+
+func (s *Store) GetUserByUsername(username string) (*User, error) {
+	var u User
+	err := s.db.QueryRow(`SELECT id, username, password_hash, role, mfa_enabled, mfa_secret, email, created_at, updated_at FROM users WHERE username=?`, username).
+		Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &u.MFAEnabled, &u.MFASecret, &u.Email, &u.CreatedAt, &u.UpdatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	return &u, err
+}
+
+func (s *Store) CreateUser(u *User) error {
+	_, err := s.db.Exec(`INSERT INTO users (username, password_hash, role, email) VALUES (?,?,?,?)`,
+		u.Username, u.PasswordHash, u.Role, u.Email)
+	return err
+}
+
+func (s *Store) UpdateUserPassword(id int64, hash string) error {
+	_, err := s.db.Exec(`UPDATE users SET password_hash=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`, hash, id)
+	return err
+}
+
+func (s *Store) UpdateUserMFA(id int64, secret string, enabled bool) error {
+	_, err := s.db.Exec(`UPDATE users SET mfa_secret=?, mfa_enabled=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`, secret, enabled, id)
+	return err
+}
+
+func (s *Store) DeleteUser(id int64) error {
+	_, err := s.db.Exec(`DELETE FROM users WHERE id=?`, id)
+	return err
+}

@@ -800,3 +800,202 @@ func (s *Server) handleUpdateShape(w http.ResponseWriter, r *http.Request) {
 	s.audit(req.TenantID, "instance:update-shape", req.InstanceID, r)
 	jsonOK(w, map[string]string{"status": "ok"})
 }
+
+// ── Start VNC / Console Connection ───────────────────────────────────
+
+func (s *Server) handleStartVNC(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		TenantID   int64  `json:"tenant_id"`
+		InstanceID string `json:"instance_id"`
+		SSHKeyID   int64  `json:"ssh_key_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonErr(w, "invalid body: "+err.Error())
+		return
+	}
+	tenant, err := s.store.GetTenant(req.TenantID)
+	if err != nil || tenant == nil {
+		jsonErr(w, "tenant not found")
+		return
+	}
+	client, err := s.clientFor(tenant)
+	if err != nil {
+		jsonErr(w, "oci client: "+err.Error())
+		return
+	}
+	// Get SSH key for console connection
+	sshKeys, err := s.store.ListSSHKeys(req.TenantID)
+	if err != nil || len(sshKeys) == 0 {
+		jsonErr(w, "no SSH keys found — upload or generate one first")
+		return
+	}
+	var pubKey string
+	if req.SSHKeyID > 0 {
+		for _, k := range sshKeys {
+			if k.ID == req.SSHKeyID {
+				pubKey = k.PublicKey
+				break
+			}
+		}
+	} else {
+		pubKey = sshKeys[0].PublicKey
+	}
+	if pubKey == "" {
+		jsonErr(w, "SSH key not found")
+		return
+	}
+	conn, err := client.CreateConsoleConnection(r.Context(), req.InstanceID, pubKey)
+	if err != nil {
+		jsonErr(w, "create console connection: "+err.Error())
+		return
+	}
+	// Start polling in background for connection to become active
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		activeConn, err := client.WaitForConsoleConnectionActive(ctx, *conn.Id)
+		if err != nil {
+			log.Printf("[vnc] wait for active: %v", err)
+			return
+		}
+		log.Printf("[vnc] console connection active: %s (vnc=%s ssh=%s)",
+			*activeConn.Id, strOr(activeConn.VncConnectionString, ""), strOr(activeConn.ConnectionString, ""))
+	}()
+	s.audit(req.TenantID, "instance:vnc:start", req.InstanceID, r)
+	jsonOK(w, map[string]interface{}{
+		"status":             "creating",
+		"connection_id":      strOr(conn.Id, ""),
+		"connection_string":  strOr(conn.ConnectionString, ""),
+		"vnc_connection_string": strOr(conn.VncConnectionString, ""),
+		"fingerprint":        strOr(conn.Fingerprint, ""),
+	})
+}
+
+// ── Instance Config Info ──────────────────────────────────────────────
+
+func (s *Server) handleInstanceConfigInfo(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		TenantID   int64  `json:"tenant_id"`
+		InstanceID string `json:"instance_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonErr(w, "invalid body: "+err.Error())
+		return
+	}
+	tenant, err := s.store.GetTenant(req.TenantID)
+	if err != nil || tenant == nil {
+		jsonErr(w, "tenant not found")
+		return
+	}
+	client, err := s.clientFor(tenant)
+	if err != nil {
+		jsonErr(w, "oci client: "+err.Error())
+		return
+	}
+	ctx := r.Context()
+	// Get instance details
+	inst, err := client.GetInstance(ctx, req.InstanceID)
+	if err != nil {
+		jsonErr(w, "get instance: "+err.Error())
+		return
+	}
+	// Get VNIC info
+	vnics, _ := client.GetInstanceVNICs(ctx, tenant.TenancyOCID, req.InstanceID)
+	var vnicInfo map[string]interface{}
+	if len(vnics) > 0 {
+		v := vnics[0]
+		vnicInfo = map[string]interface{}{
+			"id":        strOr(v.Id, ""),
+			"public_ip": strOr(v.PublicIp, ""),
+			"private_ip": strOr(v.PrivateIp, ""),
+			"subnet_id": strOr(v.SubnetId, ""),
+			"mac":       strOr(v.MacAddress, ""),
+		}
+	}
+	// Get boot volume info
+	attachments, _ := client.ListBootVolumeAttachments(ctx, tenant.TenancyOCID, req.InstanceID)
+	var bootVolumeInfo map[string]interface{}
+	if len(attachments) > 0 {
+		bvID := attachments[0].BootVolumeId
+		if bvID != nil {
+			bv, err := client.GetBootVolume(ctx, *bvID)
+			if err == nil {
+				bootVolumeInfo = map[string]interface{}{
+					"id":       strOr(bv.Id, ""),
+					"size_gb":  func() int64 { if bv.SizeInGBs != nil { return *bv.SizeInGBs }; return 0 }(),
+					"vpus_per_gb": func() int64 { if bv.VpusPerGB != nil { return *bv.VpusPerGB }; return 0 }(),
+					"state":    string(bv.LifecycleState),
+				}
+			}
+		}
+	}
+	// Get shape config
+	shapeCfg := map[string]interface{}{}
+	if inst.ShapeConfig != nil {
+		shapeCfg["ocpus"] = func() float32 { if inst.ShapeConfig.Ocpus != nil { return *inst.ShapeConfig.Ocpus }; return 0 }()
+		shapeCfg["memory_gb"] = func() float32 { if inst.ShapeConfig.MemoryInGBs != nil { return *inst.ShapeConfig.MemoryInGBs }; return 0 }()
+	}
+	jsonOK(w, map[string]interface{}{
+		"id":            strOr(inst.Id, ""),
+		"display_name":  strOr(inst.DisplayName, ""),
+		"shape":         strOr(inst.Shape, ""),
+		"state":         string(inst.LifecycleState),
+		"region":        strOr(inst.Region, ""),
+		"availability_domain": strOr(inst.AvailabilityDomain, ""),
+		"fault_domain":  strOr(inst.FaultDomain, ""),
+		"time_created":  func() string { if inst.TimeCreated != nil { return inst.TimeCreated.Format(time.RFC3339) }; return "" }(),
+		"shape_config":  shapeCfg,
+		"vnic":          vnicInfo,
+		"boot_volume":   bootVolumeInfo,
+	})
+}
+
+// ── Update Root Password ──────────────────────────────────────────────
+
+func (s *Server) handleUpdatePassword(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		TenantID    int64  `json:"tenant_id"`
+		InstanceID  string `json:"instance_id"`
+		NewPassword string `json:"new_password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonErr(w, "invalid body: "+err.Error())
+		return
+	}
+	if req.NewPassword == "" {
+		jsonErr(w, "new_password required")
+		return
+	}
+	if len(req.NewPassword) < 8 {
+		jsonErr(w, "password must be at least 8 characters")
+		return
+	}
+	tenant, err := s.store.GetTenant(req.TenantID)
+	if err != nil || tenant == nil {
+		jsonErr(w, "tenant not found")
+		return
+	}
+	// Recommend using Console Connection to reset password
+	s.audit(req.TenantID, "instance:update-password", req.InstanceID, r)
+	jsonOK(w, map[string]interface{}{
+		"status": "password_reset_initiated",
+		"message": `OCI API does not support changing the root password directly. Use the Console Connection feature:
+1. Generate or upload an SSH key via /api/ssh/keys
+2. POST /api/instances/vnc with ssh_key_id to create a console session
+3. Connect via: ssh -o ProxyCommand='ssh -W %h:%p -p 443 ocid1.instanceconsoleconnection...@instance-console.us-phoenix-1.oci.oraclecloud.com' ocid1.instance.oc1...
+4. Log in as root/opc and run: passwd
+5. Enter the new password twice`,
+	})
+}

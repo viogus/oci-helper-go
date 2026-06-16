@@ -1,5 +1,4 @@
 // Package oci wraps the OCI Go SDK (v65) for compute, VCN, identity, block storage, monitoring, limits, and NLB operations.
-//
 package oci
 
 import (
@@ -94,7 +93,6 @@ func NewClient(t *db.Tenant) (*Client, error) {
 		nlb:        nlb,
 	}, nil
 }
-
 
 func (c *Client) ListInstances(ctx context.Context, compartmentID string) ([]core.Instance, error) {
 	var all []core.Instance
@@ -341,7 +339,7 @@ func (c *Client) UpdateBootVolume(ctx context.Context, id string, sizeInGBs int6
 		details.DisplayName = common.String(displayName)
 	}
 	req := core.UpdateBootVolumeRequest{
-		BootVolumeId:           common.String(id),
+		BootVolumeId:            common.String(id),
 		UpdateBootVolumeDetails: details,
 	}
 	resp, err := c.bootVolume.UpdateBootVolume(ctx, req)
@@ -476,13 +474,13 @@ type MetricValue struct {
 }
 
 type InstanceMetrics struct {
-	CPU       MetricValue `json:"cpu"`
-	Memory    MetricValue `json:"memory"`
-	NetworkIn MetricValue `json:"networkIn"`
+	CPU        MetricValue `json:"cpu"`
+	Memory     MetricValue `json:"memory"`
+	NetworkIn  MetricValue `json:"networkIn"`
 	NetworkOut MetricValue `json:"networkOut"`
-	DiskRead  MetricValue `json:"diskRead"`
-	DiskWrite MetricValue `json:"diskWrite"`
-	Updated   time.Time   `json:"updated"`
+	DiskRead   MetricValue `json:"diskRead"`
+	DiskWrite  MetricValue `json:"diskWrite"`
+	Updated    time.Time   `json:"updated"`
 }
 
 func (c *Client) GetMetrics(ctx context.Context, instanceID string) (*InstanceMetrics, error) {
@@ -513,6 +511,7 @@ func (c *Client) GetMetrics(ctx context.Context, instanceID string) (*InstanceMe
 
 			mv := MetricValue{Unit: q.unit}
 			req := monitoring.SummarizeMetricsDataRequest{
+				CompartmentId: common.String(c.tenant.TenancyOCID),
 				SummarizeMetricsDataDetails: monitoring.SummarizeMetricsDataDetails{
 					Namespace: common.String("oci_computeagent"),
 					Query:     common.String(fmt.Sprintf(`%s[1m]{instanceId="%s"}.mean()`, q.name, instanceID)),
@@ -536,22 +535,34 @@ func (c *Client) GetMetrics(ctx context.Context, instanceID string) (*InstanceMe
 	wg.Wait()
 
 	m := &InstanceMetrics{Updated: time.Now()}
-	if v, ok := results["cpu"]; ok { m.CPU = v }
-	if v, ok := results["memory"]; ok { m.Memory = v }
-	if v, ok := results["networkIn"]; ok { m.NetworkIn = v }
-	if v, ok := results["networkOut"]; ok { m.NetworkOut = v }
-	if v, ok := results["diskRead"]; ok { m.DiskRead = v }
-	if v, ok := results["diskWrite"]; ok { m.DiskWrite = v }
+	if v, ok := results["cpu"]; ok {
+		m.CPU = v
+	}
+	if v, ok := results["memory"]; ok {
+		m.Memory = v
+	}
+	if v, ok := results["networkIn"]; ok {
+		m.NetworkIn = v
+	}
+	if v, ok := results["networkOut"]; ok {
+		m.NetworkOut = v
+	}
+	if v, ok := results["diskRead"]; ok {
+		m.DiskRead = v
+	}
+	if v, ok := results["diskWrite"]; ok {
+		m.DiskWrite = v
+	}
 	return m, nil
 }
 
 // Traffic
 
 type TrafficDataPoint struct {
-	Timestamp       string  `json:"timestamp"`
-	BytesInPerSec   float64 `json:"bytesInPerSec"`
-	BytesOutPerSec  float64 `json:"bytesOutPerSec"`
-	PacketsInPerSec float64 `json:"packetsInPerSec"`
+	Timestamp        string  `json:"timestamp"`
+	BytesInPerSec    float64 `json:"bytesInPerSec"`
+	BytesOutPerSec   float64 `json:"bytesOutPerSec"`
+	PacketsInPerSec  float64 `json:"packetsInPerSec"`
 	PacketsOutPerSec float64 `json:"packetsOutPerSec"`
 }
 
@@ -563,6 +574,7 @@ func (c *Client) GetVNICTtraffic(ctx context.Context, vnicID string, startTime, 
 
 	for _, name := range metricNames {
 		req := monitoring.SummarizeMetricsDataRequest{
+			CompartmentId: common.String(c.tenant.TenancyOCID),
 			SummarizeMetricsDataDetails: monitoring.SummarizeMetricsDataDetails{
 				Namespace: common.String(namespace),
 				Query:     common.String(fmt.Sprintf("%s[1m]{resourceId=\"%s\"}.mean()", name, vnicID)),
@@ -756,8 +768,8 @@ func (c *Client) AddIngressRule(ctx context.Context, vcnID, protocol, port, sour
 	sl := resp.Items[0]
 	ingressRules := sl.IngressSecurityRules
 	newRule := core.IngressSecurityRule{
-		Protocol:  common.String(protocol),
-		Source:    common.String(source),
+		Protocol: common.String(protocol),
+		Source:   common.String(source),
 	}
 	if protocol == "TCP" || protocol == "UDP" {
 		parts := strings.Split(port, "-")
@@ -805,7 +817,7 @@ func (c *Client) AddEgressRule(ctx context.Context, vcnID, protocol, port, dest 
 	newRule := core.EgressSecurityRule{
 		Protocol:    common.String(protocol),
 		Destination: common.String(dest),
-			}
+	}
 	if protocol == "TCP" || protocol == "UDP" {
 		parts := strings.Split(port, "-")
 		minPort, _ := strconv.Atoi(parts[0])
@@ -834,12 +846,12 @@ func (c *Client) AddEgressRule(ctx context.Context, vcnID, protocol, port, dest 
 }
 
 type ruleFilter struct {
-	direction     string
-	protocol      string
-	sourceOrDest  string
-	portMin       int
-	portMax       int
-	hasPort       bool
+	direction    string
+	protocol     string
+	sourceOrDest string
+	portMin      int
+	portMax      int
+	hasPort      bool
 }
 
 func (c *Client) RemoveSecurityRules(ctx context.Context, vcnID string, ruleIDs []string) error {
@@ -989,9 +1001,9 @@ func (c *Client) ReleaseAllPorts(ctx context.Context, vcnID string) error {
 	for _, sl := range resp.Items {
 		ingressRules := sl.IngressSecurityRules
 		ingressRules = append(ingressRules, core.IngressSecurityRule{
-			Protocol:  common.String("all"),
-			Source:    common.String("0.0.0.0/0"),
-			})
+			Protocol: common.String("all"),
+			Source:   common.String("0.0.0.0/0"),
+		})
 		updateReq := core.UpdateSecurityListRequest{
 			SecurityListId: sl.Id,
 			UpdateSecurityListDetails: core.UpdateSecurityListDetails{
@@ -1030,9 +1042,9 @@ func (c *Client) GetLimits(ctx context.Context, tenantID int64, serviceName stri
 	var result []LimitInfo
 	for _, def := range resp.Items {
 		valReq := limits.GetResourceAvailabilityRequest{
-			ServiceName:    common.String(serviceName),
-			LimitName:      def.Name,
-			CompartmentId:  common.String(compartmentID),
+			ServiceName:        common.String(serviceName),
+			LimitName:          def.Name,
+			CompartmentId:      common.String(compartmentID),
 			AvailabilityDomain: common.String(c.tenant.Region),
 		}
 		valResp, err := c.limits.GetResourceAvailability(ctx, valReq)
@@ -1091,12 +1103,12 @@ func (c *Client) Enable500Mbps(ctx context.Context, instanceID string) error {
 
 	createReq := networkloadbalancer.CreateNetworkLoadBalancerRequest{
 		CreateNetworkLoadBalancerDetails: networkloadbalancer.CreateNetworkLoadBalancerDetails{
-			CompartmentId:                common.String(compartmentID),
-			DisplayName:                  common.String(displayName),
-			SubnetId:                     common.String(subnetID),
-			IsPreserveSourceDestination:  common.Bool(true),
-			IsPrivate:                    common.Bool(false),
-			FreeformTags:                 map[string]string{"oci-helper-instance-id": instanceID},
+			CompartmentId:               common.String(compartmentID),
+			DisplayName:                 common.String(displayName),
+			SubnetId:                    common.String(subnetID),
+			IsPreserveSourceDestination: common.Bool(true),
+			IsPrivate:                   common.Bool(false),
+			FreeformTags:                map[string]string{"oci-helper-instance-id": instanceID},
 			BackendSets: map[string]networkloadbalancer.BackendSetDetails{
 				bsName: {
 					Policy: networkloadbalancer.NetworkLoadBalancingPolicyFiveTuple,
@@ -1352,7 +1364,7 @@ func ipInCIDR(ipStr, cidrStr string) bool {
 
 const (
 	consoleConnectionPollInterval = 5 * time.Second
-	consoleConnectionTimeout     = 2 * time.Minute
+	consoleConnectionTimeout      = 2 * time.Minute
 )
 
 func (c *Client) CreateConsoleConnection(ctx context.Context, instanceID, publicKey string) (*core.InstanceConsoleConnection, error) {

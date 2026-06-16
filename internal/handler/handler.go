@@ -57,14 +57,11 @@ func (s *Server) clientFor(t *db.Tenant) (*ociclient.Client, error) {
 	if keyPath != "" && !filepath.IsAbs(keyPath) {
 		keyPath = filepath.Join(s.cfg.KeysDir, keyPath)
 	}
-	log.Printf("[clientFor] tenant=%d keyFile=%q resolved=%q keysDir=%q", t.ID, t.KeyFile, keyPath, s.cfg.KeysDir)
 
 	// verify file exists and is readable before passing to SDK
 	if keyPath != "" {
-		if fi, err := os.Stat(keyPath); err != nil {
+		if _, err := os.Stat(keyPath); err != nil {
 			log.Printf("[clientFor] key file stat error: %v", err)
-		} else {
-			log.Printf("[clientFor] key file found: size=%d mode=%v", fi.Size(), fi.Mode())
 		}
 	}
 

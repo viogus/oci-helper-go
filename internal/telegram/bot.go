@@ -1,3 +1,5 @@
+// Package telegram implements a Telegram Bot API client.
+//
 package telegram
 
 import (

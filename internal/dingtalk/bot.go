@@ -1,3 +1,5 @@
+// Package dingtalk implements a DingTalk (钉钉) bot client for sending text and markdown messages.
+//
 package dingtalk
 
 import (

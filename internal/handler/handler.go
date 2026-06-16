@@ -1,3 +1,5 @@
+// Package handler implements the HTTP API and SPA frontend server for oci-helper.
+//
 package handler
 
 import (

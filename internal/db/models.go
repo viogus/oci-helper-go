@@ -2,6 +2,7 @@ package db
 
 import "time"
 
+// Tenant represents an OCI tenant / tenancy configuration.
 type Tenant struct {
 	ID            int64     `json:"id"`
 	Name          string    `json:"name"`
@@ -17,6 +18,8 @@ type Tenant struct {
 	UpdatedAt     time.Time `json:"updatedAt"`
 }
 
+// Instance represents a single OCI compute instance, keyed by composite
+// ID (tenantID:ocid). Synced by the sync worker.
 type Instance struct {
 	ID            string    `json:"id"`
 	TenantID      int64     `json:"tenantId"`
@@ -37,6 +40,7 @@ type Instance struct {
 	SyncedAt      time.Time `json:"syncedAt"`
 }
 
+// Task represents an asynchronous background operation (batch create, batch start, etc.).
 type Task struct {
 	ID          int64     `json:"id"`
 	TenantID    int64     `json:"tenantId"`
@@ -51,6 +55,7 @@ type Task struct {
 	FinishedAt  *time.Time `json:"finishedAt,omitempty"`
 }
 
+// AuditLog records an auditable action performed through the panel.
 type AuditLog struct {
 	ID        int64     `json:"id"`
 	TenantID  int64     `json:"tenantId,omitempty"`
@@ -60,11 +65,13 @@ type AuditLog struct {
 	CreatedAt time.Time `json:"createdAt"`
 }
 
+// ConfigKV is a simple key-value store for runtime config (MFA secrets, API keys, etc.).
 type ConfigKV struct {
 	Key   string `json:"key"`
 	Value string `json:"value"`
 }
 
+// CfCfg stores a named Cloudflare configuration (token, zone, API key).
 type CfCfg struct {
 	ID        int64     `json:"id"`
 	Name      string    `json:"name"`
@@ -77,6 +84,7 @@ type CfCfg struct {
 	UpdatedAt time.Time `json:"updatedAt"`
 }
 
+// IpData stores IP address data (CIDR ranges) used for IP management and filtering.
 type IpData struct {
 	ID        int64     `json:"id"`
 	TenantID  int64     `json:"tenantId"`
@@ -87,6 +95,7 @@ type IpData struct {
 	CreatedAt time.Time `json:"createdAt"`
 }
 
+// SSHKey stores SSH public keys (and optionally private keys) for console connections.
 type SSHKey struct {
 	ID          int64     `json:"id"`
 	Name        string    `json:"name"`
@@ -97,6 +106,8 @@ type SSHKey struct {
 	CreatedAt   time.Time `json:"createdAt"`
 }
 
+// InstancePlan is a saved launch template with predefined shape, image, subnet,
+// and resource sizing for quick instance creation.
 type InstancePlan struct {
 	ID                int64     `json:"id"`
 	Name              string    `json:"name"`
@@ -111,6 +122,7 @@ type InstancePlan struct {
 	CreatedAt         time.Time `json:"createdAt"`
 }
 
+// User represents an authenticated panel user with role-based access.
 type User struct {
 	ID           int64     `json:"id"`
 	Username     string    `json:"username"`

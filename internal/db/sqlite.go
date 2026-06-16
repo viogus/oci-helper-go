@@ -1,3 +1,5 @@
+// Package db provides a pure-Go SQLite data layer for oci-helper.
+//
 package db
 
 import (

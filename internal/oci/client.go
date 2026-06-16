@@ -1,3 +1,5 @@
+// Package oci wraps the OCI Go SDK (v65) for compute, VCN, identity, block storage, monitoring, limits, and NLB operations.
+//
 package oci
 
 import (
@@ -467,28 +469,80 @@ func (c *Client) AssignIPv6(ctx context.Context, vnicID string) error {
 
 // Metrics
 
-func (c *Client) GetMetrics(ctx context.Context, instanceID string) (map[string]float64, error) {
-	metricNames := []string{"CpuUtilization", "MemoryUtilization", "NetworkBytesIn", "NetworkBytesOut", "DiskBytesRead", "DiskBytesWrite"}
-	result := make(map[string]float64)
+type MetricValue struct {
+	Value *float64 `json:"value,omitempty"`
+	Unit  string   `json:"unit"`
+	Error string   `json:"error,omitempty"`
+}
 
-	for _, name := range metricNames {
-		req := monitoring.SummarizeMetricsDataRequest{
-			SummarizeMetricsDataDetails: monitoring.SummarizeMetricsDataDetails{
-				Namespace: common.String("oci_computeagent"),
-				Query:     common.String(name + `[1m]{instanceId="` + instanceID + `"}.mean()`),
-				StartTime: &common.SDKTime{Time: time.Now().Add(-5 * time.Minute)},
-				EndTime:   &common.SDKTime{Time: time.Now()},
-			},
-		}
-		resp, err := c.monitoring.SummarizeMetricsData(ctx, req)
-		if err != nil {
-			continue
-		}
-		if len(resp.Items) > 0 && len(resp.Items[0].AggregatedDatapoints) > 0 && resp.Items[0].AggregatedDatapoints[0].Value != nil {
-			result[name] = *resp.Items[0].AggregatedDatapoints[0].Value
-		}
+type InstanceMetrics struct {
+	CPU       MetricValue `json:"cpu"`
+	Memory    MetricValue `json:"memory"`
+	NetworkIn MetricValue `json:"networkIn"`
+	NetworkOut MetricValue `json:"networkOut"`
+	DiskRead  MetricValue `json:"diskRead"`
+	DiskWrite MetricValue `json:"diskWrite"`
+	Updated   time.Time   `json:"updated"`
+}
+
+func (c *Client) GetMetrics(ctx context.Context, instanceID string) (*InstanceMetrics, error) {
+	type queryDef struct {
+		key  string
+		name string
+		unit string
 	}
-	return result, nil
+
+	queries := []queryDef{
+		{"cpu", "CpuUtilization", "%"},
+		{"memory", "MemoryUtilization", "%"},
+		{"networkIn", "NetworkBytesIn", "bytes/s"},
+		{"networkOut", "NetworkBytesOut", "bytes/s"},
+		{"diskRead", "DiskBytesRead", "bytes/s"},
+		{"diskWrite", "DiskBytesWrite", "bytes/s"},
+	}
+
+	results := make(map[string]MetricValue)
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+
+	for _, q := range queries {
+		wg.Add(1)
+		q := q
+		go func() {
+			defer wg.Done()
+
+			mv := MetricValue{Unit: q.unit}
+			req := monitoring.SummarizeMetricsDataRequest{
+				SummarizeMetricsDataDetails: monitoring.SummarizeMetricsDataDetails{
+					Namespace: common.String("oci_computeagent"),
+					Query:     common.String(fmt.Sprintf(`%s[1m]{instanceId="%s"}.mean()`, q.name, instanceID)),
+					StartTime: &common.SDKTime{Time: time.Now().Add(-30 * time.Minute)},
+					EndTime:   &common.SDKTime{Time: time.Now()},
+				},
+			}
+			resp, err := c.monitoring.SummarizeMetricsData(ctx, req)
+			if err != nil {
+				mv.Error = err.Error()
+			} else if len(resp.Items) > 0 && len(resp.Items[0].AggregatedDatapoints) > 0 && resp.Items[0].AggregatedDatapoints[0].Value != nil {
+				mv.Value = resp.Items[0].AggregatedDatapoints[0].Value
+			}
+
+			mu.Lock()
+			results[q.key] = mv
+			mu.Unlock()
+		}()
+	}
+
+	wg.Wait()
+
+	m := &InstanceMetrics{Updated: time.Now()}
+	if v, ok := results["cpu"]; ok { m.CPU = v }
+	if v, ok := results["memory"]; ok { m.Memory = v }
+	if v, ok := results["networkIn"]; ok { m.NetworkIn = v }
+	if v, ok := results["networkOut"]; ok { m.NetworkOut = v }
+	if v, ok := results["diskRead"]; ok { m.DiskRead = v }
+	if v, ok := results["diskWrite"]; ok { m.DiskWrite = v }
+	return m, nil
 }
 
 // Traffic

@@ -1,3 +1,5 @@
+// Package cloudflare provides a lightweight HTTP client for the Cloudflare API v4.
+//
 package cloudflare
 
 import (

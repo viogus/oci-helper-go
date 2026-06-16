@@ -1,3 +1,5 @@
+// Package main provides the oci-helper HTTP server entry point.
+//
 package main
 
 import (

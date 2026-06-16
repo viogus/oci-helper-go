@@ -1,3 +1,5 @@
+// Package ai provides a chat client for SiliconFlow's API (OpenAI-compatible)
+//
 package ai
 
 import (

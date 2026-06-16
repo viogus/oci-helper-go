@@ -15,12 +15,15 @@ import (
 
 const pollInterval = 5 * time.Second
 
+// Worker runs pending background tasks (batch start, batch create) asynchronously.
+// Runs in its own goroutine started by Server.New().
 type Worker struct {
 	store   *db.Store
 	keysDir string
 	restarts int
 }
 
+// NewWorker creates a Worker with the given store and keys directory.
 func NewWorker(store *db.Store, keysDir string) *Worker {
 	return &Worker{store: store, keysDir: keysDir}
 }
@@ -34,6 +37,8 @@ func (w *Worker) newClient(t *db.Tenant) (*ociclient.Client, error) {
 	return ociclient.NewClient(t)
 }
 
+// Run starts the worker loop. Picks one pending task per poll interval (5s).
+// Auto-restarts on panic with exponential backoff (up to 5 restarts).
 func (w *Worker) Run() {
 	log.Println("[worker] started")
 	defer func() {

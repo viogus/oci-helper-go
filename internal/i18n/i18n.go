@@ -1,3 +1,5 @@
+// Package i18n provides simple locale-aware message translation for zh_CN and en_US.
+//
 package i18n
 
 import (

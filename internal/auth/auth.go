@@ -1,3 +1,5 @@
+// Package auth provides session-based authentication with bcrypt password validation,
+//
 package auth
 
 import (

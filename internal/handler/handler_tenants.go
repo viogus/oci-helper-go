@@ -61,6 +61,43 @@ func (s *Server) handleTenantByID(w http.ResponseWriter, r *http.Request) {
 	}
 
 	switch r.Method {
+	case http.MethodPatch:
+		var req struct {
+			Name         string `json:"name"`
+			NotifyTG     string `json:"notify_tg"`
+			NotifyDingtalk string `json:"notify_dingtalk"`
+			Region       string `json:"region"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			jsonErr(w, "invalid body: "+err.Error())
+			return
+		}
+		t, _ := s.store.GetTenant(id)
+		if t == nil {
+			jsonErr(w, "not found")
+			return
+		}
+		if req.Name != "" {
+			t.Name = req.Name
+		}
+		if req.Region != "" {
+			t.Region = req.Region
+		}
+		// Notification settings stored in config table
+		if req.NotifyTG != "" {
+			s.store.SetConfig(fmt.Sprintf("tenant_ntg_%d", id), req.NotifyTG)
+		}
+		if req.NotifyDingtalk != "" {
+			s.store.SetConfig(fmt.Sprintf("tenant_ndtalk_%d", id), req.NotifyDingtalk)
+		}
+		// Update tenant in DB
+		if _, err := s.store.DB().Exec(`UPDATE tenants SET name=?, region=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`,
+			t.Name, t.Region, id); err != nil {
+			jsonErr(w, "update tenant: "+err.Error())
+			return
+		}
+		s.audit(id, "tenant:update", t.Name, r)
+		jsonOK(w, t)
 	case http.MethodGet:
 		t, _ := s.store.GetTenant(id)
 		if t == nil {
@@ -79,4 +116,3 @@ func (s *Server) handleTenantByID(w http.ResponseWriter, r *http.Request) {
 }
 
 // --- instances ---
-

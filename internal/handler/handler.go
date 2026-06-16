@@ -104,6 +104,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/notify/test", s.withAuth(s.handleNotifyTest))
 	// SSH keys
 	s.mux.HandleFunc("/api/ssh/keys", s.withAuth(s.handleSSHKeys))
+	// Users
+	s.mux.HandleFunc("/api/users", s.withAuth(s.handleUsers))
 	// Instance VNC & config
 	s.mux.HandleFunc("/api/instances/vnc", s.withAuth(s.handleStartVNC))
 	s.mux.HandleFunc("/api/instances/config-info", s.withAuth(s.handleInstanceConfigInfo))
@@ -151,6 +153,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/keys/", s.withAuth(s.handleKeyByID))
 	s.mux.HandleFunc("/api/vcns/", s.withAuth(s.handleVCNByID))
 	s.mux.HandleFunc("/api/ssh/keys/", s.withAuth(s.handleSSHKeyByID))
+	s.mux.HandleFunc("/api/users/", s.withAuth(s.handleUserByID))
 	s.mux.HandleFunc("/api/sync/", s.withAuth(s.handleSync))
 
 	// Static files (frontend)

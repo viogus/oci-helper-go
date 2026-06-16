@@ -3,6 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -49,7 +50,12 @@ func (s *Server) handleTraffic(w http.ResponseWriter, r *http.Request) {
 	// if no VNIC specified, get the first VNIC of the instance
 	vnicID := req.VnicID
 	if vnicID == "" {
-		vnics, err := client.GetInstanceVNICs(r.Context(), tenant.TenancyOCID, req.InstanceID)
+		// Instance ID may be composite "tenantID:ocid"; extract raw OCID
+		instanceID := req.InstanceID
+		if i := strings.IndexByte(instanceID, ':'); i >= 0 {
+			instanceID = instanceID[i+1:]
+		}
+		vnics, err := client.GetInstanceVNICs(r.Context(), tenant.TenancyOCID, instanceID)
 		if err != nil || len(vnics) == 0 {
 			jsonErr(w, "no VNIC found for instance")
 			return

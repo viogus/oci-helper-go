@@ -87,9 +87,9 @@ func (s *Server) handleTelegramWebhook(w http.ResponseWriter, r *http.Request) {
 			kb := tgMainKeyboard()
 			bot.SendKeyboard(chatID, "oci-helper Bot — Main Menu\nSelect an option:", kb)
 		case text == "/instances":
-				s.tgSendInstanceList(bot, chatID, 0, 0)
-	case text == "/tasks":
-		s.tgSendTaskList(bot, chatID, 0, 0)
+			s.tgSendInstanceList(bot, chatID, 0, 0)
+		case text == "/tasks":
+			s.tgSendTaskList(bot, chatID, 0, 0)
 		case text == "/status":
 			tenants, _ := s.store.ListTenants()
 			instances, _ := s.store.ListInstances(0)

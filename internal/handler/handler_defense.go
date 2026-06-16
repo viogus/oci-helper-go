@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/oracle/oci-go-sdk/v65/common"
 	"github.com/oracle/oci-go-sdk/v65/core"
@@ -57,30 +58,28 @@ func (s *Server) handleDefenseEnable(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sl := slResp.Items[0]
-	ingressRules := sl.IngressSecurityRules
 
-	// Add DENY rules for each blacklisted CIDR
-	for _, cidr := range req.Blacklist {
-		alreadyBlocked := false
-		for _, existing := range ingressRules {
-			if existing.Source != nil && *existing.Source == cidr && existing.Protocol != nil && *existing.Protocol == "all" {
-				alreadyBlocked = true
+	// Filter OUT any ingress rule that ALLOWS traffic from blacklisted CIDRs.
+	// OCI security lists use ALLOW semantics only, so to block an IP we
+	// remove all existing rules that permit traffic from that source.
+	var filteredRules []core.IngressSecurityRule
+	for _, existing := range sl.IngressSecurityRules {
+		remove := false
+		for _, cidr := range req.Blacklist {
+			if existing.Source != nil && *existing.Source == cidr {
+				remove = true
 				break
-			}
+			}			
 		}
-		if !alreadyBlocked {
-			ingressRules = append(ingressRules, core.IngressSecurityRule{
-				Protocol:    common.String("all"),
-				Source:      common.String(cidr),
-				IsStateless: common.Bool(false),
-			})
+		if !remove {
+			filteredRules = append(filteredRules, existing)
 		}
 	}
 
 	updateReq := core.UpdateSecurityListRequest{
 		SecurityListId: sl.Id,
 		UpdateSecurityListDetails: core.UpdateSecurityListDetails{
-			IngressSecurityRules: ingressRules,
+			IngressSecurityRules: filteredRules,
 			EgressSecurityRules:  sl.EgressSecurityRules,
 		},
 	}
@@ -92,6 +91,7 @@ func (s *Server) handleDefenseEnable(w http.ResponseWriter, r *http.Request) {
 	s.store.SetConfig("defense_enabled", "true")
 	s.store.SetConfig("defense_tenant", strconv.FormatInt(req.TenantID, 10))
 	s.store.SetConfig("defense_vcn", req.VcnID)
+	s.store.SetConfig("defense_cidrs", strings.Join(req.Blacklist, ","))
 	s.audit(req.TenantID, "defense:enable", strconv.Itoa(len(req.Blacklist))+" IPs blocked", r)
 	jsonOK(w, map[string]interface{}{"status": "ok", "blocked": len(req.Blacklist)})
 }
@@ -142,19 +142,16 @@ func (s *Server) handleDefenseDisable(w http.ResponseWriter, r *http.Request) {
 	}
 	sl := slResp.Items[0]
 
-	var keepRules []core.IngressSecurityRule
-	for _, rule := range sl.IngressSecurityRules {
-		if rule.Protocol != nil && *rule.Protocol == "all" {
-			// Skip DENY ALL rules (these are the defense mode rules)
-			continue
-		}
-		keepRules = append(keepRules, rule)
-	}
+	// Restore: add back an allow-all ingress rule to undo the blacklist
+	restoredRules := append(sl.IngressSecurityRules, core.IngressSecurityRule{
+		Protocol: common.String("all"),
+		Source:   common.String("0.0.0.0/0"),
+	})
 
 	updateReq := core.UpdateSecurityListRequest{
 		SecurityListId: sl.Id,
 		UpdateSecurityListDetails: core.UpdateSecurityListDetails{
-			IngressSecurityRules: keepRules,
+			IngressSecurityRules: restoredRules,
 			EgressSecurityRules:  sl.EgressSecurityRules,
 		},
 	}
@@ -164,6 +161,7 @@ func (s *Server) handleDefenseDisable(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.store.SetConfig("defense_enabled", "false")
+	s.store.SetConfig("defense_cidrs", "")
 	s.audit(req.TenantID, "defense:disable", req.VcnID, r)
 	jsonOK(w, map[string]string{"status": "ok"})
 }

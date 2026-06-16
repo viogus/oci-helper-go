@@ -3,7 +3,6 @@ package handler
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
 	"strconv"
@@ -67,36 +66,40 @@ func (s *Server) handleTelegramWebhook(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, "invalid body")
 		return
 	}
-	if update.Message.MessageID == 0 {
-		jsonOK(w, map[string]string{"status": "ignored"})
-		return
-	}
 	bot := telegram.New(token)
-	text := update.Message.Text
-	chatID := update.Message.Chat.ID
-	var reply string
-	switch {
-	case text == "/start":
-		reply = "oci-helper Telegram Bot\n/instances - List\n/status - General status"
-	case text == "/instances":
-		instances, _ := s.store.ListInstances(0)
-		infos := make([]telegram.InstanceInfo, 0, len(instances))
-		for _, i := range instances {
-			infos = append(infos, telegram.InstanceInfo{Name: i.Name, State: i.State, Shape: i.Shape, PublicIP: i.PublicIP, OCPU: i.OCPU, MemoryGB: i.MemoryGB})
-		}
-		reply = telegram.FormatInstances(infos)
-	case text == "/status":
-		tenants, _ := s.store.ListTenants()
-		instances, _ := s.store.ListInstances(0)
-		reply = fmt.Sprintf("Tenants: %d\nInstances: %d", len(tenants), len(instances))
-	default:
-		reply = "Unknown command. /start for help."
-	}
-	if err := bot.SendMessage(chatID, reply); err != nil {
-		log.Printf("[telegram] send: %v", err)
-		jsonErr(w, "send failed")
+
+	// Handle callback queries (button clicks)
+	if update.CallbackQuery != nil {
+		s.handleTGCallback(bot, update.CallbackQuery.Message.Chat.ID,
+			update.CallbackQuery.Message.MessageID,
+			update.CallbackQuery.ID, update.CallbackQuery.Data)
+		jsonOK(w, map[string]string{"status": "ok"})
 		return
 	}
+
+	// Handle regular messages
+	if update.Message != nil && update.Message.MessageID > 0 {
+		chatID := update.Message.Chat.ID
+		text := update.Message.Text
+
+		switch {
+		case text == "/start":
+			kb := tgMainKeyboard()
+			bot.SendKeyboard(chatID, "oci-helper Bot — Main Menu\nSelect an option:", kb)
+		case text == "/instances":
+				s.tgSendInstanceList(bot, chatID, 0, 0)
+	case text == "/tasks":
+		s.tgSendTaskList(bot, chatID, 0, 0)
+		case text == "/status":
+			tenants, _ := s.store.ListTenants()
+			instances, _ := s.store.ListInstances(0)
+			text := fmt.Sprintf("📊 Statistics\n\nTenants: %d\nInstances: %d", len(tenants), len(instances))
+			bot.SendMessage(chatID, text)
+		default:
+			bot.SendMessage(chatID, "Unknown command. Use /start for main menu.")
+		}
+	}
+
 	jsonOK(w, map[string]string{"status": "ok"})
 }
 

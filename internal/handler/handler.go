@@ -575,6 +575,9 @@ func (s *Server) handleAIChat(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 		return
 	}
+
+	stream := r.URL.Query().Get("stream") == "true" || r.Header.Get("Accept") == "text/event-stream"
+
 	apiKey, _ := s.store.GetConfig("siliconflow_key")
 	if apiKey == "" {
 		jsonErr(w, "siliconflow_key not configured")
@@ -589,7 +592,44 @@ func (s *Server) handleAIChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	client := ai.New(apiKey, "")
+	model, _ := s.store.GetConfig("siliconflow_model")
+	client := ai.New(apiKey, model)
+
+	// Optionally search DuckDuckGo for context
+	searchEnabled, _ := s.store.GetConfig("ai_search_enabled")
+	if searchEnabled == "true" && len(req.Messages) > 0 {
+		lastMsg := req.Messages[len(req.Messages)-1].Content
+		if searchResults, err := ai.Search(lastMsg); err == nil && len(searchResults) > 0 {
+			req.Messages = append([]ai.ChatMessage{
+				{Role: "system", Content: "Search results for additional context:\n" + searchResults},
+			}, req.Messages...)
+		}
+	}
+
+	if stream {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			jsonErr(w, "streaming not supported")
+			return
+		}
+		ch, err := client.ChatStream(r.Context(), req.Messages)
+		if err != nil {
+			fmt.Fprintf(w, "event: error\ndata: %s\n\n", err.Error())
+			flusher.Flush()
+			return
+		}
+		for token := range ch {
+			fmt.Fprintf(w, "data: %s\n\n", token)
+			flusher.Flush()
+		}
+		fmt.Fprintf(w, "data: [DONE]\n\n")
+		flusher.Flush()
+		return
+	}
+
 	resp, err := client.Chat(req.Messages)
 	if err != nil {
 		jsonErr(w, "ai: "+err.Error())

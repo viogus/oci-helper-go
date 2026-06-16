@@ -18,12 +18,15 @@ func (s *Server) handleSecurityRules(w http.ResponseWriter, r *http.Request) {
 		Keyword  string   `json:"keyword"`
 		Page     int      `json:"page"`
 		Size     int      `json:"size"`
-		// for add/remove
-		Protocol string   `json:"protocol"`
-		Port     string   `json:"port"`
-		Source   string   `json:"source"`
-		Dest     string   `json:"dest"`
-		RuleIDs  []string `json:"rule_ids"`
+	// for add/remove
+	Protocol string   `json:"protocol"`
+	Port     string   `json:"port"`
+	Source   string   `json:"source"`
+	Dest     string   `json:"dest"`
+	RuleIDs  []string `json:"rule_ids"`
+	// for batch update
+	IngressRules []json.RawMessage `json:"ingress_rules"`
+	EgressRules  []json.RawMessage `json:"egress_rules"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonErr(w, "invalid body: "+err.Error())
@@ -82,6 +85,20 @@ func (s *Server) handleSecurityRules(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.audit(req.TenantID, "security-rule:release", req.VcnID, r)
+		jsonOK(w, map[string]string{"status": "ok"})
+	case "release_by_vcn":
+		if err := client.ReleaseAllPorts(r.Context(), req.VcnID); err != nil {
+			jsonErr(w, "release by vcn: "+err.Error())
+			return
+		}
+		s.audit(req.TenantID, "security-rule:release-by-vcn", req.VcnID, r)
+		jsonOK(w, map[string]string{"status": "ok"})
+	case "update_batch":
+		if err := client.UpdateSecurityListBatch(r.Context(), req.VcnID, req.IngressRules, req.EgressRules); err != nil {
+			jsonErr(w, "update batch: "+err.Error())
+			return
+		}
+		s.audit(req.TenantID, "security-rule:update-batch", req.VcnID, r)
 		jsonOK(w, map[string]string{"status": "ok"})
 	default:
 		jsonErr(w, "unknown action: "+req.Action)

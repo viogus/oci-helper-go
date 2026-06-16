@@ -2,6 +2,7 @@ package oci
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net"
@@ -1366,4 +1367,100 @@ func (c *Client) WaitForConsoleConnectionActive(ctx context.Context, connectionI
 		}
 	}
 	return nil, fmt.Errorf("console connection timed out after %v", consoleConnectionTimeout)
+}
+
+// ── Boot Volume Operations ────────────────────────────────────────────
+
+func (c *Client) DeleteBootVolume(ctx context.Context, bootVolumeID string) error {
+	req := core.DeleteBootVolumeRequest{
+		BootVolumeId: common.String(bootVolumeID),
+	}
+	_, err := c.bootVolume.DeleteBootVolume(ctx, req)
+	if err != nil {
+		return fmt.Errorf("delete boot volume: %w", err)
+	}
+	return nil
+}
+
+func (c *Client) UpdateBootVolumeWithVPU(ctx context.Context, id string, sizeInGBs int64, displayName string, vpusPerGB int64) (*core.BootVolume, error) {
+	details := core.UpdateBootVolumeDetails{}
+	if sizeInGBs > 0 {
+		details.SizeInGBs = common.Int64(sizeInGBs)
+	}
+	if displayName != "" {
+		details.DisplayName = common.String(displayName)
+	}
+	if vpusPerGB > 0 {
+		details.VpusPerGB = common.Int64(vpusPerGB)
+	}
+	req := core.UpdateBootVolumeRequest{
+		BootVolumeId:            common.String(id),
+		UpdateBootVolumeDetails: details,
+	}
+	resp, err := c.bootVolume.UpdateBootVolume(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("update boot volume: %w", err)
+	}
+	return &resp.BootVolume, nil
+}
+
+// ── VCN Operations ────────────────────────────────────────────────────
+
+func (c *Client) DeleteVcn(ctx context.Context, vcnID string) error {
+	req := core.DeleteVcnRequest{
+		VcnId: common.String(vcnID),
+	}
+	_, err := c.vcn.DeleteVcn(ctx, req)
+	if err != nil {
+		return fmt.Errorf("delete vcn: %w", err)
+	}
+	return nil
+}
+
+// UpdateSecurityListBatch replaces the entire security list rules with the provided ones.
+func (c *Client) UpdateSecurityListBatch(ctx context.Context, vcnID string, ingressRaw, egressRaw []json.RawMessage) error {
+	req := core.ListSecurityListsRequest{
+		CompartmentId: common.String(c.tenant.TenancyOCID),
+		VcnId:         common.String(vcnID),
+		Limit:         common.Int(1),
+	}
+	resp, err := c.vcn.ListSecurityLists(ctx, req)
+	if err != nil {
+		return fmt.Errorf("list security lists: %w", err)
+	}
+	if len(resp.Items) == 0 {
+		return fmt.Errorf("no security list found for VCN")
+	}
+
+	sl := resp.Items[0]
+
+	// Parse ingress rules
+	var ingressRules []core.IngressSecurityRule
+	for _, raw := range ingressRaw {
+		var rule core.IngressSecurityRule
+		if err := json.Unmarshal(raw, &rule); err != nil {
+			return fmt.Errorf("parse ingress rule: %w", err)
+		}
+		ingressRules = append(ingressRules, rule)
+	}
+
+	// Parse egress rules
+	var egressRules []core.EgressSecurityRule
+	for _, raw := range egressRaw {
+		var rule core.EgressSecurityRule
+		if err := json.Unmarshal(raw, &rule); err != nil {
+			return fmt.Errorf("parse egress rule: %w", err)
+		}
+		egressRules = append(egressRules, rule)
+	}
+
+	updateReq := core.UpdateSecurityListRequest{
+		SecurityListId: sl.Id,
+		UpdateSecurityListDetails: core.UpdateSecurityListDetails{
+			IngressSecurityRules: ingressRules,
+			EgressSecurityRules:  egressRules,
+		},
+	}
+	_, err = c.vcn.UpdateSecurityList(ctx, updateReq)
+	return err
 }

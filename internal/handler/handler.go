@@ -149,6 +149,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/public-ips/", s.withAuth(s.handlePublicIPByID))
 	s.mux.HandleFunc("/api/boot-volumes/", s.withAuth(s.handleBootVolumeByID))
 	s.mux.HandleFunc("/api/keys/", s.withAuth(s.handleKeyByID))
+	s.mux.HandleFunc("/api/vcns/", s.withAuth(s.handleVCNByID))
 	s.mux.HandleFunc("/api/ssh/keys/", s.withAuth(s.handleSSHKeyByID))
 	s.mux.HandleFunc("/api/sync/", s.withAuth(s.handleSync))
 
@@ -484,6 +485,9 @@ func (s *Server) handleListShapes(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleListVCNs(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodDelete {
+		return // handled by handleVCNByID wildcard route
+	}
 	client, t, ok := s.ociClientFromQuery(w, r)
 	if !ok {
 		return
@@ -493,7 +497,31 @@ func (s *Server) handleListVCNs(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, "list vcns: "+err.Error())
 		return
 	}
-	jsonOK(w, vcns)
+
+	// In-memory pagination
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	if page < 1 {
+		page = 1
+	}
+	size, _ := strconv.Atoi(r.URL.Query().Get("size"))
+	if size < 1 {
+		size = 20
+	}
+	start := (page - 1) * size
+	end := start + size
+	if start > len(vcns) {
+		start = len(vcns)
+	}
+	if end > len(vcns) {
+		end = len(vcns)
+	}
+
+	jsonOK(w, map[string]interface{}{
+		"data":  vcns[start:end],
+		"total": len(vcns),
+		"page":  page,
+		"size":  size,
+	})
 }
 
 func (s *Server) handleListSubnets(w http.ResponseWriter, r *http.Request) {

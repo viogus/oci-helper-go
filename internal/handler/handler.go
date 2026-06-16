@@ -449,6 +449,10 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, "instance_id required")
 		return
 	}
+	// Strip composite ID prefix (tenantID:ocid)
+	if i := strings.IndexByte(instanceID, ':'); i >= 0 {
+		instanceID = instanceID[i+1:]
+	}
 	metrics, err := client.GetMetrics(r.Context(), instanceID)
 	if err != nil {
 		jsonErr(w, "metrics: "+err.Error())

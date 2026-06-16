@@ -33,6 +33,7 @@ type Server struct {
 	auth   *auth.Service
 	mux    *http.ServeMux
 	worker *Worker
+	ratelimit *loginRateLimiter
 }
 
 func New(cfg *config.Config, store *db.Store) *Server {
@@ -42,6 +43,7 @@ func New(cfg *config.Config, store *db.Store) *Server {
 		auth:   auth.New(cfg.Username, cfg.Password, cfg.MFASecret, cfg.MFA),
 		mux:    http.NewServeMux(),
 		worker: NewWorker(store, cfg.KeysDir),
+		ratelimit: newLoginRateLimiter(),
 	}
 	s.routes()
 	go s.worker.Run()
@@ -191,6 +193,13 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, "method not allowed")
 		return
 	}
+	// Check rate limit before proceeding
+	ip := extractIP(r)
+	if !s.ratelimit.allow(ip) {
+		log.Printf("[login] rate limit exceeded for %s", maskIP(ip))
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
 	// check MFA BEFORE setting session — prevents MFA status leak
 	mfaEnabled, mfaErr := s.store.GetConfig("mfa_enabled")
 	if mfaErr != nil {
@@ -214,6 +223,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if !s.auth.Login(w, r) {
 		return
 	}
+	s.ratelimit.reset(ip)
 	jsonOK(w, map[string]string{"status": "ok"})
 }
 
@@ -276,7 +286,8 @@ func (s *Server) handleGoogleCallback(w http.ResponseWriter, r *http.Request) {
 	body := fmt.Sprintf("code=%s&client_id=%s&client_secret=%s&redirect_uri=%s&grant_type=authorization_code",
 		code, s.cfg.GoogleOAuth.ClientID, s.cfg.GoogleOAuth.ClientSecret, s.cfg.GoogleOAuth.RedirectURL)
 
-	resp, err := http.Post(tokenURL, "application/x-www-form-urlencoded", strings.NewReader(body))
+	httpClient := &http.Client{Timeout: 15 * time.Second}
+	resp, err := httpClient.Post(tokenURL, "application/x-www-form-urlencoded", strings.NewReader(body))
 	if err != nil {
 		jsonErr(w, "token exchange: "+err.Error())
 		return
@@ -708,12 +719,22 @@ func isTrustedProxy(addr string) bool {
 }
 
 func maskIP(s string) string {
-	parts := strings.Split(s, ".")
-	if len(parts) == 4 {
-		parts[3] = "***"
-		return strings.Join(parts, ".")
+	ip := net.ParseIP(s)
+	if ip == nil {
+		return s
 	}
-	return s
+	if ip.To4() != nil {
+		v4 := ip.To4()
+		return fmt.Sprintf("%d.%d.%d.***", v4[0], v4[1], v4[2])
+	}
+	// IPv6: mask the last 80 bits (last 5 hex groups)
+	s6 := ip.String()
+	parts := strings.Split(s6, ":")
+	if len(parts) >= 3 {
+		parts[len(parts)-1] = "****"
+		parts[len(parts)-2] = "****"
+	}
+	return strings.Join(parts, ":")
 }
 
 // --- key file management ---

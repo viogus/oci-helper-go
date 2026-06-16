@@ -398,7 +398,7 @@ func (s *Server) handleChangeShape(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, "oci client: "+err.Error())
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
 	defer cancel()
 	if err := client.UpdateInstance(ctx, req.InstanceID, req.Shape, req.Ocpus, req.MemoryGB); err != nil {
 		jsonErr(w, "update instance: "+err.Error())
@@ -431,7 +431,7 @@ func (s *Server) handleChangeBootVolume(w http.ResponseWriter, r *http.Request) 
 		jsonErr(w, "oci client: "+err.Error())
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
 	defer cancel()
 	attachment, err := client.GetBootVolumeAttachment(ctx, tenant.TenancyOCID, req.InstanceID)
 	if err != nil {
@@ -468,7 +468,7 @@ func (s *Server) handleAttachIPv6(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, "oci client: "+err.Error())
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
 	defer cancel()
 	vnics, err := client.GetInstanceVNICs(ctx, tenant.TenancyOCID, req.InstanceID)
 	if err != nil {
@@ -510,7 +510,7 @@ func (s *Server) handleUpdateInstanceName(w http.ResponseWriter, r *http.Request
 		jsonErr(w, "oci client: "+err.Error())
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
 	defer cancel()
 	if err := client.UpdateInstanceDisplayName(ctx, req.InstanceID, req.Name); err != nil {
 		jsonErr(w, "update name: "+err.Error())
@@ -701,7 +701,7 @@ func (s *Server) handleAutoRescue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Minute)
 	defer cancel()
 
 	type step struct {
@@ -791,7 +791,7 @@ func (s *Server) handleUpdateShape(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, "oci client: "+err.Error())
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
 	defer cancel()
 	if err := client.UpdateInstance(ctx, req.InstanceID, req.Shape, 0, 0); err != nil {
 		jsonErr(w, "update shape: "+err.Error())

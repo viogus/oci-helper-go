@@ -2,6 +2,7 @@ package db
 
 import (
 	"database/sql"
+	"fmt"
 	"time"
 )
 
@@ -190,11 +191,17 @@ func (s *Store) ClearAllTx(tx *sql.Tx) error {
 	return nil
 }
 
-// ClearAll removes all data (for restore, non-transactional)
-func (s *Store) ClearAll() {
-	s.db.Exec(`DELETE FROM instances`)
-	s.db.Exec(`DELETE FROM tenants`)
-	s.db.Exec(`DELETE FROM config`)
+// ClearAll removes all data using a transaction (for restore)
+func (s *Store) ClearAll() error {
+	tx, err := s.BeginTx()
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback()
+	if err := s.ClearAllTx(tx); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // CreateTenantImportTx inserts a tenant within a transaction.

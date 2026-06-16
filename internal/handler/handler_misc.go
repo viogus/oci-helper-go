@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"time"
 	"os"
 	"strconv"
 	"strings"
@@ -272,7 +273,8 @@ func (s *Server) handleUpdateCheck(w http.ResponseWriter, r *http.Request) {
 	repos := []string{"viogus/oci-helper-go", "Yohann0617/oci-helper"}
 	for _, repo := range repos {
 		url := fmt.Sprintf("https://api.github.com/repos/%s/releases/latest", repo)
-		resp, err := http.Get(url)
+		httpClient := &http.Client{Timeout: 15 * time.Second}
+		resp, err := httpClient.Get(url)
 		if err != nil {
 			continue
 		}

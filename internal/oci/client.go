@@ -1274,7 +1274,7 @@ func (c *Client) ChangeInstanceIP(ctx context.Context, instanceID string, cidrLi
 	// Delete old public IP
 	// Find the public IP OCID by listing
 	pipReq := core.ListPublicIpsRequest{
-		Scope:         core.ListPublicIpsScopeAvailabilityDomain,
+		Scope:         core.ListPublicIpsScopeRegion,
 		CompartmentId: common.String(c.tenant.TenancyOCID),
 		Limit:         common.Int(100),
 	}

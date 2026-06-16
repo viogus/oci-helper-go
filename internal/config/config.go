@@ -73,6 +73,8 @@ func envOr(k, fallback string) string {
 
 func randStr(n int) string {
 	b := make([]byte, n)
-	rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		return fmt.Sprintf("%x", os.Getpid())[:n]
+	}
 	return base64.RawURLEncoding.EncodeToString(b)[:n]
 }

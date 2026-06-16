@@ -6,7 +6,6 @@ COPY frontend/ ./
 RUN npm run build
 
 FROM golang:1.26-alpine AS builder
-RUN apk add --no-cache gcc musl-dev
 
 # create nobody user/group for scratch runtime
 RUN echo "nobody:x:65534:65534:nobody:/:/sbin/nologin" > /etc/passwd && \

@@ -3,9 +3,7 @@ package handler
 import (
 	"crypto/rand"
 	"crypto/rsa"
-	"crypto/sha256"
 	"crypto/x509"
-	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
 	"net/http"
@@ -105,7 +103,7 @@ func (s *Server) handleSSHKeyGenerate(w http.ResponseWriter, r *http.Request, re
 	key := &db.SSHKey{
 		Name:        req.Name,
 		PublicKey:   strings.TrimSpace(string(pubBytes)),
-		PrivateKey:  string(privPEM),
+		PrivateKey:  encryptSSHPrivateKey(privPEM),
 		Fingerprint: fingerprint,
 		TenantID:    req.TenantID,
 	}
@@ -114,11 +112,6 @@ func (s *Server) handleSSHKeyGenerate(w http.ResponseWriter, r *http.Request, re
 		return
 	}
 
-	// Sanitized hash for display
-	hashDisplay := base64.RawStdEncoding.EncodeToString(sha256.New().Sum(nil))[:12]
-	_ = hashDisplay
-
-	s.audit(req.TenantID, "ssh:key:generate", fingerprint, r)
 	jsonOK(w, map[string]interface{}{
 		"id":          key.ID,
 		"name":        key.Name,

@@ -112,6 +112,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/users", s.withAuth(s.handleUsers))
 	// Instance VNC & config
 	s.mux.HandleFunc("/api/instances/vnc", s.withAuth(s.handleStartVNC))
+	s.mux.HandleFunc("/api/instances/vnc/stop", s.withAuth(s.handleStopVNC))
+	s.mux.HandleFunc("/api/instances/vnc/wait", s.withAuth(s.handleConsoleWait))
 	s.mux.HandleFunc("/api/instances/config-info", s.withAuth(s.handleInstanceConfigInfo))
 	s.mux.HandleFunc("/api/instances/update-password", s.withAuth(s.handleUpdatePassword))
 

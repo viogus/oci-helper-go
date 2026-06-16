@@ -566,18 +566,55 @@ type TrafficDataPoint struct {
 	PacketsOutPerSec float64 `json:"packetsOutPerSec"`
 }
 
+
+// intervalForDuration returns an OCI monitoring query interval that is
+// compatible with the given time range. 1-minute intervals are limited
+// to roughly 7 days, 5-minute to 30 days, and 1-hour beyond that.
+func intervalForDuration(d time.Duration) (string, time.Duration) {
+	const (
+		day    = 24 * time.Hour
+		seven  = 7 * day
+		thirty = 30 * day
+	)
+	switch {
+	case d <= seven:
+		return "[1m]", time.Minute
+	case d <= thirty:
+		return "[5m]", 5 * time.Minute
+	default:
+		return "[1h]", time.Hour
+	}
+}
+
+// minDataPoints estimates the number of data points for a given duration and
+// aggregation step. Used to synthesise a regular interval in the response.
+func minDataPoints(totalDuration, step time.Duration) int {
+	if step <= 0 {
+		return 0
+	}
+	n := int(totalDuration / step)
+	if n < 1 {
+		n = 1
+	}
+	return n
+}
+
 func (c *Client) GetVNICTtraffic(ctx context.Context, vnicID string, startTime, endTime time.Time) ([]TrafficDataPoint, error) {
 	namespace := "oci_vcn"
 
 	results := make(map[string][]float64)
 	metricNames := []string{"VnicBytesIn", "VnicBytesOut", "VnicPacketsIn", "VnicPacketsOut"}
 
+	totalDuration := endTime.Sub(startTime)
+	intervalStr, step := intervalForDuration(totalDuration)
+	log.Printf("[GetVNICTtraffic] range=%v interval=%s step=%v", totalDuration, intervalStr, step)
+
 	for _, name := range metricNames {
 		req := monitoring.SummarizeMetricsDataRequest{
 			CompartmentId: common.String(c.tenant.TenancyOCID),
 			SummarizeMetricsDataDetails: monitoring.SummarizeMetricsDataDetails{
 				Namespace: common.String(namespace),
-				Query:     common.String(fmt.Sprintf("%s[1m]{resourceId=\"%s\"}.mean()", name, vnicID)),
+				Query:     common.String(fmt.Sprintf("%s%s{resourceId=\"%s\"}.mean()", name, intervalStr, vnicID)),
 				StartTime: &common.SDKTime{Time: startTime},
 				EndTime:   &common.SDKTime{Time: endTime},
 			},
@@ -599,32 +636,28 @@ func (c *Client) GetVNICTtraffic(ctx context.Context, vnicID string, startTime, 
 		results[name] = values
 	}
 
-	// Combine into time series
+	// Build aligned time series using the chosen step
+	maxLen := minDataPoints(totalDuration, step)
 	var data []TrafficDataPoint
-	maxLen := 0
-	for _, v := range results {
-		if len(v) > maxLen {
-			maxLen = len(v)
-		}
-	}
 	for i := 0; i < maxLen; i++ {
 		dp := TrafficDataPoint{
-			Timestamp: startTime.Add(time.Duration(i) * time.Minute).Format(time.RFC3339),
+			Timestamp: startTime.Add(time.Duration(i) * step).Format(time.RFC3339),
 		}
-		if i < len(results["VnicBytesIn"]) {
-			dp.BytesInPerSec = results["VnicBytesIn"][i]
+		if vals := results["VnicBytesIn"]; i < len(vals) {
+			dp.BytesInPerSec = vals[i]
 		}
-		if i < len(results["VnicBytesOut"]) {
-			dp.BytesOutPerSec = results["VnicBytesOut"][i]
+		if vals := results["VnicBytesOut"]; i < len(vals) {
+			dp.BytesOutPerSec = vals[i]
 		}
-		if i < len(results["VnicPacketsIn"]) {
-			dp.PacketsInPerSec = results["VnicPacketsIn"][i]
+		if vals := results["VnicPacketsIn"]; i < len(vals) {
+			dp.PacketsInPerSec = vals[i]
 		}
-		if i < len(results["VnicPacketsOut"]) {
-			dp.PacketsOutPerSec = results["VnicPacketsOut"][i]
+		if vals := results["VnicPacketsOut"]; i < len(vals) {
+			dp.PacketsOutPerSec = vals[i]
 		}
 		data = append(data, dp)
 	}
+	log.Printf("[GetVNICTtraffic] returned %d data points (step=%v)", len(data), step)
 	return data, nil
 }
 

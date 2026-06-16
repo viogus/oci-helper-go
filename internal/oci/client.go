@@ -93,7 +93,6 @@ func NewClient(t *db.Tenant) (*Client, error) {
 	}, nil
 }
 
-func (c *Client) Tenant() *db.Tenant { return c.tenant }
 
 func (c *Client) ListInstances(ctx context.Context, compartmentID string) ([]core.Instance, error) {
 	var all []core.Instance
@@ -1464,3 +1463,11 @@ func (c *Client) UpdateSecurityListBatch(ctx context.Context, vcnID string, ingr
 	_, err = c.vcn.UpdateSecurityList(ctx, updateReq)
 	return err
 }
+
+// VcnClient returns the raw VCN client for direct SDK access.
+func (c *Client) VcnClient() core.VirtualNetworkClient { return c.vcn }
+
+// ComputeClient returns the raw Compute client for direct SDK access.
+func (c *Client) ComputeClient() core.ComputeClient { return c.compute }
+
+// Tenant returns the tenant config.

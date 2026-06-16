@@ -134,6 +134,11 @@ func (s *Server) routes() {
 
 	// batch create tasks
 	s.mux.HandleFunc("/api/instances/batch-create", s.withAuth(s.handleBatchCreate))
+	s.mux.HandleFunc("/api/instance-plans", s.withAuth(s.handleInstancePlans))
+	s.mux.HandleFunc("/api/ip-data", s.withAuth(s.handleIpData))
+	s.mux.HandleFunc("/api/defense/enable", s.withAuth(s.handleDefenseEnable))
+	s.mux.HandleFunc("/api/defense/disable", s.withAuth(s.handleDefenseDisable))
+	s.mux.HandleFunc("/api/ip-blacklist", s.withAuth(s.handleIPBlacklist))
 	s.mux.HandleFunc("/api/create-tasks", s.withAuth(s.handleCreateTasks))
 
 	// in-memory tasks
@@ -156,6 +161,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/keys/", s.withAuth(s.handleKeyByID))
 	s.mux.HandleFunc("/api/vcns/", s.withAuth(s.handleVCNByID))
 	s.mux.HandleFunc("/api/ssh/keys/", s.withAuth(s.handleSSHKeyByID))
+	s.mux.HandleFunc("/api/instance-plans/", s.withAuth(s.handleInstancePlanByID))
+	s.mux.HandleFunc("/api/ip-data/", s.withAuth(s.handleIpDataByID))
 	s.mux.HandleFunc("/api/users/", s.withAuth(s.handleUserByID))
 	s.mux.HandleFunc("/api/sync/", s.withAuth(s.handleSync))
 

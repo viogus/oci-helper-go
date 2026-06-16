@@ -18,6 +18,7 @@ type Config struct {
 	DBPath     string
 	KeysDir    string
 	LogLevel   string
+	LogFile    string
 }
 
 type GoogleOAuthConfig struct {
@@ -35,6 +36,7 @@ func Load() *Config {
 		DBPath:   envOr("OCI_DB_PATH", "/app/oci-helper/oci-helper.db"),
 		KeysDir:  envOr("OCI_KEYS_DIR", "/app/oci-helper/keys"),
 		LogLevel: envOr("OCI_LOG_LEVEL", "info"),
+		LogFile:  envOr("OCI_LOG_FILE", "/app/oci-helper/oci-helper.log"),
 	}
 
 	if c.Password == "" {

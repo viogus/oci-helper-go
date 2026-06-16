@@ -97,6 +97,11 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/metrics", s.withAuth(s.handleMetrics))
 	s.mux.HandleFunc("/api/boot-volumes", s.withAuth(s.handleBootVolumes))
 	s.mux.HandleFunc("/api/keys", s.withAuth(s.handleKeys))
+	s.mux.HandleFunc("/api/dingtalk/notify", s.withAuth(s.handleDingTalkNotify))
+	s.mux.HandleFunc("/api/dingtalk/test", s.withAuth(s.handleDingTalkTest))
+	s.mux.HandleFunc("/api/update/check", s.withAuth(s.handleUpdateCheck))
+	s.mux.HandleFunc("/api/update/now", s.withAuth(s.handleUpdateNow))
+	s.mux.HandleFunc("/api/notify/test", s.withAuth(s.handleNotifyTest))
 
 	// NEW exact-path routes
 	// instance mutations

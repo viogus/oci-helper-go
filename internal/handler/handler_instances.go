@@ -275,18 +275,100 @@ func (s *Server) handleSync(w http.ResponseWriter, r *http.Request) {
 			log.Printf("[sync] upsert %s: %v", strOr(inst.Id, ""), err)
 		}
 	}
+
+	// Best-effort VNIC sync for public IP / private IP / subnet
+	s.syncVNICs(r.Context(), tenantID)
+
 	s.audit(tenantID, "sync", fmt.Sprintf("synced %d instances", len(instances)), r)
 	jsonOK(w, map[string]int{"count": len(instances)})
 }
 
 func ociToDB(i core.Instance, tenantID int64) *db.Instance {
+	var ocpu, memGB float64
+	var bootVolGB int64
+	var imageID, ad, fd string
+	if i.ShapeConfig != nil {
+		if i.ShapeConfig.Ocpus != nil {
+			ocpu = float64(*i.ShapeConfig.Ocpus)
+		}
+		if i.ShapeConfig.MemoryInGBs != nil {
+			memGB = float64(*i.ShapeConfig.MemoryInGBs)
+		}
+	}
+	if i.ImageId != nil {
+		imageID = *i.ImageId
+	}
+	if sd, ok := i.SourceDetails.(core.InstanceSourceViaImageDetails); ok {
+		if sd.ImageId != nil {
+			imageID = *sd.ImageId
+		}
+		if sd.BootVolumeSizeInGBs != nil {
+			bootVolGB = *sd.BootVolumeSizeInGBs
+		}
+	}
+	if i.AvailabilityDomain != nil {
+		ad = *i.AvailabilityDomain
+	}
+	if i.FaultDomain != nil {
+		fd = *i.FaultDomain
+	}
 	return &db.Instance{
-		ID:       strOr(i.Id, ""),
+		ID:       fmt.Sprintf("%d:%s", tenantID, strOr(i.Id, "")),
 		TenantID: tenantID,
 		Name:     strOr(i.DisplayName, ""),
 		OCID:     strOr(i.Id, ""),
 		Shape:    strOr(i.Shape, ""),
 		State:    string(i.LifecycleState),
+		OCPU:       ocpu,
+		MemoryGB:   memGB,
+		BootVolumeGB: bootVolGB,
+		ImageID:    imageID,
+		AvailabilityDomain: ad,
+		FaultDomain: fd,
+	}
+}
+
+func (s *Server) syncVNICs(ctx context.Context, tenantID int64) {
+	instances, err := s.store.ListInstances(tenantID)
+	if err != nil {
+		log.Printf("[syncVnics] list instances: %v", err)
+		return
+	}
+	for _, inst := range instances {
+		parts := strings.SplitN(inst.OCID, ":", 2)
+		ocid := parts[len(parts)-1]
+		if ocid == "" {
+			continue
+		}
+		tenant, err := s.store.GetTenant(tenantID)
+		if err != nil || tenant == nil {
+			continue
+		}
+		client, err := s.clientFor(tenant)
+		if err != nil {
+			continue
+		}
+		vnics, err := client.GetInstanceVNICs(ctx, tenant.TenancyOCID, ocid)
+		if err != nil || len(vnics) == 0 {
+			continue
+		}
+		vnic := vnics[0]
+		pubIP := ""
+		privIP := ""
+		subnetID := ""
+		if vnic.PublicIp != nil {
+			pubIP = *vnic.PublicIp
+		}
+		if vnic.PrivateIp != nil {
+			privIP = *vnic.PrivateIp
+		}
+		if vnic.SubnetId != nil {
+			subnetID = *vnic.SubnetId
+		}
+		inst.PublicIP = pubIP
+		inst.PrivateIP = privIP
+		inst.SubnetID = subnetID
+		s.store.UpsertInstance(&inst)
 	}
 }
 

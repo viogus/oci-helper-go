@@ -3,10 +3,12 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -30,6 +32,18 @@ func main() {
 	}
 
 	cfg := config.Load()
+
+	// set up dual logging: stderr + log file
+	if cfg.LogFile != "" {
+		logDir := filepath.Dir(cfg.LogFile)
+		if err := os.MkdirAll(logDir, 0755); err == nil {
+			f, err := os.OpenFile(cfg.LogFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+			if err == nil {
+				log.SetOutput(io.MultiWriter(os.Stderr, f))
+				defer f.Close()
+			}
+		}
+	}
 
 	// ensure keys dir exists and is writable (nobody user in container)
 	if err := os.MkdirAll(cfg.KeysDir, 0777); err != nil {

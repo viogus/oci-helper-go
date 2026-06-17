@@ -453,7 +453,12 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	if i := strings.IndexByte(instanceID, ':'); i >= 0 {
 		instanceID = instanceID[i+1:]
 	}
-	metrics, err := client.GetMetrics(r.Context(), instanceID)
+	inst, err := client.GetInstance(r.Context(), instanceID)
+	if err != nil {
+		jsonErr(w, "get instance: "+err.Error())
+		return
+	}
+	metrics, err := client.GetMetrics(r.Context(), *inst.CompartmentId, instanceID)
 	if err != nil {
 		jsonErr(w, "metrics: "+err.Error())
 		return

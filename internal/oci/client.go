@@ -513,8 +513,7 @@ type InstanceMetrics struct {
 	Updated    time.Time   `json:"updated"`
 }
 
-func (c *Client) GetMetrics(ctx context.Context, instanceID string) (*InstanceMetrics, error) {
-	defer withSubtreeInterceptor(&c.monitoring.Interceptor)()
+func (c *Client) GetMetrics(ctx context.Context, compartmentID, instanceID string) (*InstanceMetrics, error) {
 	type queryDef struct {
 		key  string
 		name string
@@ -542,7 +541,7 @@ func (c *Client) GetMetrics(ctx context.Context, instanceID string) (*InstanceMe
 
 			mv := MetricValue{Unit: q.unit}
 			req := monitoring.SummarizeMetricsDataRequest{
-				CompartmentId: common.String(c.tenant.TenancyOCID),
+				CompartmentId: common.String(compartmentID),
 				SummarizeMetricsDataDetails: monitoring.SummarizeMetricsDataDetails{
 					Namespace: common.String("oci_computeagent"),
 					Query:     common.String(fmt.Sprintf(`%s[1m]{instanceId="%s"}.mean()`, q.name, instanceID)),

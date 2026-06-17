@@ -117,6 +117,10 @@ func (s *Server) handleLimits(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, "invalid body: "+err.Error())
 		return
 	}
+	if req.ServiceName == "" {
+		jsonErr(w, "service_name is required")
+		return
+	}
 	tenant, err := s.store.GetTenant(req.TenantID)
 	if err != nil || tenant == nil {
 		jsonErr(w, "tenant not found")

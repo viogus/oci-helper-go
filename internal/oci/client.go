@@ -630,8 +630,7 @@ func minDataPoints(totalDuration, step time.Duration) int {
 	return n
 }
 
-func (c *Client) GetVNICTtraffic(ctx context.Context, vnicID string, startTime, endTime time.Time) ([]TrafficDataPoint, error) {
-	defer withSubtreeInterceptor(&c.monitoring.Interceptor)()
+func (c *Client) GetVNICTtraffic(ctx context.Context, compartmentID, vnicID string, startTime, endTime time.Time) ([]TrafficDataPoint, error) {
 	namespace := "oci_vcn"
 
 	results := make(map[string][]float64)
@@ -639,11 +638,11 @@ func (c *Client) GetVNICTtraffic(ctx context.Context, vnicID string, startTime, 
 
 	totalDuration := endTime.Sub(startTime)
 	intervalStr, step := intervalForDuration(totalDuration)
-	log.Printf("[GetVNICTtraffic] range=%v interval=%s step=%v", totalDuration, intervalStr, step)
+	log.Printf("[GetVNICTtraffic] compartment=%s range=%v interval=%s step=%v", compartmentID, totalDuration, intervalStr, step)
 
 	for _, name := range metricNames {
 		req := monitoring.SummarizeMetricsDataRequest{
-			CompartmentId: common.String(c.tenant.TenancyOCID),
+			CompartmentId: common.String(compartmentID),
 			SummarizeMetricsDataDetails: monitoring.SummarizeMetricsDataDetails{
 				Namespace: common.String(namespace),
 				Query:     common.String(fmt.Sprintf("%s%s{resourceId=\"%s\"}.mean()", name, intervalStr, vnicID)),

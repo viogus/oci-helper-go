@@ -47,10 +47,11 @@ func (s *Server) handleTraffic(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// if no VNIC specified, get the first VNIC of the instance
+	// Determine VNIC compartment and ID.
+	// VNIC ID may be composite "tenantID:ocid"; strip prefix if present.
 	vnicID := req.VnicID
+	vnicCompartment := tenant.TenancyOCID
 	if vnicID == "" {
-		// Instance ID may be composite "tenantID:ocid"; extract raw OCID
 		instanceID := req.InstanceID
 		if i := strings.IndexByte(instanceID, ':'); i >= 0 {
 			instanceID = instanceID[i+1:]
@@ -61,9 +62,14 @@ func (s *Server) handleTraffic(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		vnicID = *vnics[0].Id
+		if vnics[0].CompartmentId != nil {
+			vnicCompartment = *vnics[0].CompartmentId
+		}
+	} else if i := strings.IndexByte(vnicID, ':'); i >= 0 {
+		vnicID = vnicID[i+1:]
 	}
 
-	data, err := client.GetVNICTtraffic(r.Context(), vnicID, startTime, endTime)
+	data, err := client.GetVNICTtraffic(r.Context(), vnicCompartment, vnicID, startTime, endTime)
 	if err != nil {
 		jsonErr(w, "get traffic: "+err.Error())
 		return

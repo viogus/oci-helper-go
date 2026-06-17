@@ -185,6 +185,12 @@ func (c *Client) TerminateInstance(ctx context.Context, instanceID string) error
 // field pointer that adds compartmentIdInSubtree=true to all requests. This
 // enables recursive cross-compartment resource listing.
 // Returns a cleanup function to restore the previous interceptor (or nil).
+// withSubtreeInterceptor sets an interceptor on the given embedded BaseClient
+// field pointer that adds compartmentIdInSubtree=true to all requests. The SDK's
+// BaseClient.Interceptor runs before CallWithServiceAndOperationName signs the
+// request, so query params added here are included in the signed URL.
+// This enables recursive cross-compartment resource listing.
+// Returns a cleanup function to restore the previous interceptor (or nil).
 func withSubtreeInterceptor(interceptor *common.RequestInterceptor) func() {
 	prev := *interceptor
 	*interceptor = func(r *http.Request) error {
@@ -618,19 +624,6 @@ func intervalForDuration(d time.Duration) (string, time.Duration) {
 	}
 }
 
-// minDataPoints estimates the number of data points for a given duration and
-// aggregation step. Used to synthesise a regular interval in the response.
-func minDataPoints(totalDuration, step time.Duration) int {
-	if step <= 0 {
-		return 0
-	}
-	n := int(totalDuration / step)
-	if n < 1 {
-		n = 1
-	}
-	return n
-}
-
 func (c *Client) GetVNICTtraffic(ctx context.Context, compartmentID, vnicID string, startTime, endTime time.Time) ([]TrafficDataPoint, error) {
 	namespace := "oci_vcn"
 
@@ -652,30 +645,6 @@ func (c *Client) GetVNICTtraffic(ctx context.Context, compartmentID, vnicID stri
 				EndTime:   &common.SDKTime{Time: endTime},
 			},
 		}
-		// DEBUG: also try query without resourceId filter to check if namespace has any data
-		debugReq := monitoring.SummarizeMetricsDataRequest{
-			CompartmentId: common.String(compartmentID),
-			CompartmentIdInSubtree: common.Bool(compartmentID == c.tenant.TenancyOCID),
-			SummarizeMetricsDataDetails: monitoring.SummarizeMetricsDataDetails{
-				Namespace: common.String(namespace),
-				Query:     common.String(fmt.Sprintf("%s%s.mean()", name, intervalStr)),
-				StartTime: &common.SDKTime{Time: startTime},
-				EndTime:   &common.SDKTime{Time: endTime},
-			},
-		}
-		debugResp, debugErr := c.monitoring.SummarizeMetricsData(ctx, debugReq)
-		if debugErr != nil {
-			log.Printf("[GetVNICTtraffic_debug] %s no-filter ERROR: %v", name, debugErr)
-		} else {
-			totalDps := 0
-			for _, it := range debugResp.Items {
-				if it.AggregatedDatapoints != nil {
-					totalDps += len(it.AggregatedDatapoints)
-				}
-			}
-			log.Printf("[GetVNICTtraffic_debug] %s no-filter items=%d totalDps=%d", name, len(debugResp.Items), totalDps)
-		}
-
 		resp, err := c.monitoring.SummarizeMetricsData(ctx, req)
 		if err != nil {
 			return nil, fmt.Errorf("%s query: %w", name, err)

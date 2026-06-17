@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"strings"
 	"strconv"
 	"time"
 )
@@ -52,7 +53,7 @@ func (s *Server) handleStopVNC(w http.ResponseWriter, r *http.Request) {
 
 	// Otherwise delete all console connections for the instance
 	instanceID := req.InstanceID
-	if idx := stringsIndexByte(instanceID, ':'); idx >= 0 {
+	if idx := strings.IndexByte(instanceID, ':'); idx >= 0 {
 		instanceID = instanceID[idx+1:]
 	}
 	conns, err := client.ListConsoleConnections(r.Context(), instanceID)
@@ -154,14 +155,4 @@ func (s *Server) handleConsoleWait(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	jsonOK(w, map[string]string{"status": "pending"})
-}
-
-// stringsIndexByte is a minimal helper to avoid importing the "strings" package.
-func stringsIndexByte(s string, c byte) int {
-	for i := 0; i < len(s); i++ {
-		if s[i] == c {
-			return i
-		}
-	}
-	return -1
 }

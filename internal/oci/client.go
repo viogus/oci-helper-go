@@ -514,6 +514,7 @@ type InstanceMetrics struct {
 }
 
 func (c *Client) GetMetrics(ctx context.Context, compartmentID, instanceID string) (*InstanceMetrics, error) {
+	log.Printf("[GetMetrics] compartment=%s instance=%s", compartmentID, instanceID)
 	type queryDef struct {
 		key  string
 		name string
@@ -550,6 +551,7 @@ func (c *Client) GetMetrics(ctx context.Context, compartmentID, instanceID strin
 				},
 			}
 			resp, err := c.monitoring.SummarizeMetricsData(ctx, req)
+				log.Printf("[GetMetrics] %s items=%d", q.name, len(resp.Items))
 			if err != nil {
 				mv.Error = err.Error()
 			} else if len(resp.Items) > 0 && len(resp.Items[0].AggregatedDatapoints) > 0 && resp.Items[0].AggregatedDatapoints[0].Value != nil {
@@ -663,6 +665,7 @@ func (c *Client) GetVNICTtraffic(ctx context.Context, compartmentID, vnicID stri
 				}
 			}
 		}
+			log.Printf("[GetVNICTtraffic] %s items=%d datapoints=%d", name, len(resp.Items), len(values))
 		results[name] = values
 	}
 

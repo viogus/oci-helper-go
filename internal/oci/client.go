@@ -543,6 +543,7 @@ func (c *Client) GetMetrics(ctx context.Context, compartmentID, instanceID strin
 			mv := MetricValue{Unit: q.unit}
 			req := monitoring.SummarizeMetricsDataRequest{
 				CompartmentId: common.String(compartmentID),
+				CompartmentIdInSubtree: common.Bool(compartmentID == c.tenant.TenancyOCID),
 				SummarizeMetricsDataDetails: monitoring.SummarizeMetricsDataDetails{
 					Namespace: common.String("oci_computeagent"),
 					Query:     common.String(fmt.Sprintf(`%s[1m]{instanceId="%s"}.mean()`, q.name, instanceID)),
@@ -608,13 +609,10 @@ func intervalForDuration(d time.Duration) (string, time.Duration) {
 	const (
 		day    = 24 * time.Hour
 		seven  = 7 * day
-		thirty = 30 * day
 	)
 	switch {
 	case d <= seven:
 		return "[1m]", time.Minute
-	case d <= thirty:
-		return "[5m]", 5 * time.Minute
 	default:
 		return "[1h]", time.Hour
 	}
@@ -646,6 +644,7 @@ func (c *Client) GetVNICTtraffic(ctx context.Context, compartmentID, vnicID stri
 	for _, name := range metricNames {
 		req := monitoring.SummarizeMetricsDataRequest{
 			CompartmentId: common.String(compartmentID),
+			CompartmentIdInSubtree: common.Bool(compartmentID == c.tenant.TenancyOCID),
 			SummarizeMetricsDataDetails: monitoring.SummarizeMetricsDataDetails{
 				Namespace: common.String(namespace),
 				Query:     common.String(fmt.Sprintf("%s%s{resourceId=\"%s\"}.mean()", name, intervalStr, vnicID)),

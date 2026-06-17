@@ -551,11 +551,14 @@ func (c *Client) GetMetrics(ctx context.Context, compartmentID, instanceID strin
 				},
 			}
 			resp, err := c.monitoring.SummarizeMetricsData(ctx, req)
-				log.Printf("[GetMetrics] %s items=%d", q.name, len(resp.Items))
 			if err != nil {
 				mv.Error = err.Error()
+				log.Printf("[GetMetrics] %s ERROR: %v", q.name, err)
 			} else if len(resp.Items) > 0 && len(resp.Items[0].AggregatedDatapoints) > 0 && resp.Items[0].AggregatedDatapoints[0].Value != nil {
+				log.Printf("[GetMetrics] %s value=%.2f items=%d", q.name, *resp.Items[0].AggregatedDatapoints[0].Value, len(resp.Items))
 				mv.Value = resp.Items[0].AggregatedDatapoints[0].Value
+			} else {
+				log.Printf("[GetMetrics] %s no data items=%d", q.name, len(resp.Items))
 			}
 
 			mu.Lock()
@@ -597,7 +600,6 @@ type TrafficDataPoint struct {
 	PacketsInPerSec  float64 `json:"packetsInPerSec"`
 	PacketsOutPerSec float64 `json:"packetsOutPerSec"`
 }
-
 
 // intervalForDuration returns an OCI monitoring query interval that is
 // compatible with the given time range. 1-minute intervals are limited
@@ -665,7 +667,7 @@ func (c *Client) GetVNICTtraffic(ctx context.Context, compartmentID, vnicID stri
 				}
 			}
 		}
-			log.Printf("[GetVNICTtraffic] %s items=%d datapoints=%d", name, len(resp.Items), len(values))
+		log.Printf("[GetVNICTtraffic] %s items=%d datapoints=%d", name, len(resp.Items), len(values))
 		results[name] = values
 	}
 

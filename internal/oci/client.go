@@ -652,6 +652,30 @@ func (c *Client) GetVNICTtraffic(ctx context.Context, compartmentID, vnicID stri
 				EndTime:   &common.SDKTime{Time: endTime},
 			},
 		}
+		// DEBUG: also try query without resourceId filter to check if namespace has any data
+		debugReq := monitoring.SummarizeMetricsDataRequest{
+			CompartmentId: common.String(compartmentID),
+			CompartmentIdInSubtree: common.Bool(compartmentID == c.tenant.TenancyOCID),
+			SummarizeMetricsDataDetails: monitoring.SummarizeMetricsDataDetails{
+				Namespace: common.String(namespace),
+				Query:     common.String(fmt.Sprintf("%s%s.mean()", name, intervalStr)),
+				StartTime: &common.SDKTime{Time: startTime},
+				EndTime:   &common.SDKTime{Time: endTime},
+			},
+		}
+		debugResp, debugErr := c.monitoring.SummarizeMetricsData(ctx, debugReq)
+		if debugErr != nil {
+			log.Printf("[GetVNICTtraffic_debug] %s no-filter ERROR: %v", name, debugErr)
+		} else {
+			totalDps := 0
+			for _, it := range debugResp.Items {
+				if it.AggregatedDatapoints != nil {
+					totalDps += len(it.AggregatedDatapoints)
+				}
+			}
+			log.Printf("[GetVNICTtraffic_debug] %s no-filter items=%d totalDps=%d", name, len(debugResp.Items), totalDps)
+		}
+
 		resp, err := c.monitoring.SummarizeMetricsData(ctx, req)
 		if err != nil {
 			return nil, fmt.Errorf("%s query: %w", name, err)

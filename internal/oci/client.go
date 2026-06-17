@@ -639,7 +639,7 @@ func (c *Client) GetVNICTtraffic(ctx context.Context, compartmentID, vnicID stri
 
 	totalDuration := endTime.Sub(startTime)
 	intervalStr, step := intervalForDuration(totalDuration)
-	log.Printf("[GetVNICTtraffic] compartment=%s range=%v interval=%s step=%v", compartmentID, totalDuration, intervalStr, step)
+	log.Printf("[GetVNICTtraffic] vnic=%s compartment=%s range=%v interval=%s step=%v", vnicID, compartmentID, totalDuration, intervalStr, step)
 
 	for _, name := range metricNames {
 		req := monitoring.SummarizeMetricsDataRequest{

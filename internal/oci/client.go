@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"net/http"
 	"os"
 	"strconv"
 	"strings"
@@ -180,11 +181,30 @@ func (c *Client) TerminateInstance(ctx context.Context, instanceID string) error
 	return err
 }
 
+// withSubtreeInterceptor sets an interceptor on the given embedded BaseClient
+// field pointer that adds compartmentIdInSubtree=true to all requests. This
+// enables recursive cross-compartment resource listing.
+// Returns a cleanup function to restore the previous interceptor (or nil).
+func withSubtreeInterceptor(interceptor *common.RequestInterceptor) func() {
+	prev := *interceptor
+	*interceptor = func(r *http.Request) error {
+		q := r.URL.Query()
+		q.Set("compartmentIdInSubtree", "true")
+		r.URL.RawQuery = q.Encode()
+		return nil
+	}
+	if prev != nil {
+		return func() { *interceptor = prev }
+	}
+	return func() { *interceptor = nil }
+}
+
 func (c *Client) ListVCNs(ctx context.Context, compartmentID string) ([]core.Vcn, error) {
 	req := core.ListVcnsRequest{
 		CompartmentId: common.String(compartmentID),
 		Limit:         common.Int(1000),
 	}
+	defer withSubtreeInterceptor(&c.vcn.Interceptor)()
 	resp, err := c.vcn.ListVcns(ctx, req)
 	if err != nil {
 		return nil, err
@@ -198,6 +218,7 @@ func (c *Client) ListSubnets(ctx context.Context, compartmentID, vcnID string) (
 		VcnId:         common.String(vcnID),
 		Limit:         common.Int(1000),
 	}
+	defer withSubtreeInterceptor(&c.vcn.Interceptor)()
 	resp, err := c.vcn.ListSubnets(ctx, req)
 	if err != nil {
 		return nil, err
@@ -206,6 +227,7 @@ func (c *Client) ListSubnets(ctx context.Context, compartmentID, vcnID string) (
 }
 
 func (c *Client) ListAvailabilityDomains(ctx context.Context, compartmentID string) ([]identity.AvailabilityDomain, error) {
+	defer withSubtreeInterceptor(&c.identity.Interceptor)()
 	req := identity.ListAvailabilityDomainsRequest{
 		CompartmentId: common.String(compartmentID),
 	}
@@ -217,6 +239,7 @@ func (c *Client) ListAvailabilityDomains(ctx context.Context, compartmentID stri
 }
 
 func (c *Client) ListImages(ctx context.Context, compartmentID, os string) ([]core.Image, error) {
+	defer withSubtreeInterceptor(&c.compute.Interceptor)()
 	req := core.ListImagesRequest{
 		CompartmentId:   common.String(compartmentID),
 		OperatingSystem: common.String(os),
@@ -234,6 +257,7 @@ func (c *Client) ListImages(ctx context.Context, compartmentID, os string) ([]co
 // VNIC
 
 func (c *Client) ListVnicAttachments(ctx context.Context, compartmentID, instanceID string) ([]core.VnicAttachment, error) {
+	defer withSubtreeInterceptor(&c.compute.Interceptor)()
 	req := core.ListVnicAttachmentsRequest{
 		CompartmentId: common.String(compartmentID),
 		InstanceId:    common.String(instanceID),
@@ -258,6 +282,7 @@ func (c *Client) GetVnic(ctx context.Context, vnicID string) (*core.Vnic, error)
 // Public IP
 
 func (c *Client) ListPublicIPs(ctx context.Context, compartmentID string) ([]core.PublicIp, error) {
+	defer withSubtreeInterceptor(&c.vcn.Interceptor)()
 	req := core.ListPublicIpsRequest{
 		CompartmentId: common.String(compartmentID),
 		Scope:         core.ListPublicIpsScopeRegion,
@@ -295,6 +320,7 @@ func (c *Client) GetPublicIP(ctx context.Context, publicIPID string) (*core.Publ
 }
 
 func (c *Client) ListShapes(ctx context.Context, compartmentID, imageID string) ([]core.Shape, error) {
+	defer withSubtreeInterceptor(&c.compute.Interceptor)()
 	req := core.ListShapesRequest{
 		CompartmentId: common.String(compartmentID),
 		ImageId:       common.String(imageID),
@@ -310,6 +336,7 @@ func (c *Client) ListShapes(ctx context.Context, compartmentID, imageID string) 
 // Boot Volumes
 
 func (c *Client) ListBootVolumes(ctx context.Context, compartmentID string) ([]core.BootVolume, error) {
+	defer withSubtreeInterceptor(&c.bootVolume.Interceptor)()
 	req := core.ListBootVolumesRequest{
 		CompartmentId: common.String(compartmentID),
 		Limit:         common.Int(1000),
@@ -350,6 +377,7 @@ func (c *Client) UpdateBootVolume(ctx context.Context, id string, sizeInGBs int6
 }
 
 func (c *Client) ListBootVolumeAttachments(ctx context.Context, compartmentID, instanceID string) ([]core.BootVolumeAttachment, error) {
+	defer withSubtreeInterceptor(&c.compute.Interceptor)()
 	req := core.ListBootVolumeAttachmentsRequest{
 		CompartmentId: common.String(compartmentID),
 		InstanceId:    common.String(instanceID),
@@ -421,6 +449,7 @@ func (c *Client) UpdateInstanceDisplayName(ctx context.Context, instanceID, disp
 }
 
 func (c *Client) GetBootVolumeAttachment(ctx context.Context, compartmentID, instanceID string) (*core.BootVolumeAttachment, error) {
+	defer withSubtreeInterceptor(&c.compute.Interceptor)()
 	req := core.ListBootVolumeAttachmentsRequest{
 		CompartmentId: common.String(compartmentID),
 		InstanceId:    common.String(instanceID),
@@ -437,6 +466,7 @@ func (c *Client) GetBootVolumeAttachment(ctx context.Context, compartmentID, ins
 }
 
 func (c *Client) GetInstanceVNICs(ctx context.Context, compartmentID, instanceID string) ([]core.Vnic, error) {
+	defer withSubtreeInterceptor(&c.compute.Interceptor)()
 	attachments, err := c.ListVnicAttachments(ctx, compartmentID, instanceID)
 	if err != nil {
 		return nil, err
@@ -484,6 +514,7 @@ type InstanceMetrics struct {
 }
 
 func (c *Client) GetMetrics(ctx context.Context, instanceID string) (*InstanceMetrics, error) {
+	defer withSubtreeInterceptor(&c.monitoring.Interceptor)()
 	type queryDef struct {
 		key  string
 		name string
@@ -600,6 +631,7 @@ func minDataPoints(totalDuration, step time.Duration) int {
 }
 
 func (c *Client) GetVNICTtraffic(ctx context.Context, vnicID string, startTime, endTime time.Time) ([]TrafficDataPoint, error) {
+	defer withSubtreeInterceptor(&c.monitoring.Interceptor)()
 	namespace := "oci_vcn"
 
 	results := make(map[string][]float64)
@@ -637,7 +669,12 @@ func (c *Client) GetVNICTtraffic(ctx context.Context, vnicID string, startTime, 
 	}
 
 	// Build aligned time series using the chosen step
-	maxLen := minDataPoints(totalDuration, step)
+	maxLen := 0
+	for _, v := range results {
+		if len(v) > maxLen {
+			maxLen = len(v)
+		}
+	}
 	var data []TrafficDataPoint
 	for i := 0; i < maxLen; i++ {
 		dp := TrafficDataPoint{
@@ -706,6 +743,7 @@ func securityRuleID(slID, direction string, protocol, source, dest *string, tcpO
 }
 
 func (c *Client) ListSecurityRules(ctx context.Context, vcnID, keyword string, page, size int) ([]SecurityRuleInfo, int64, error) {
+	defer withSubtreeInterceptor(&c.vcn.Interceptor)()
 	compartmentID := c.tenant.TenancyOCID
 	req := core.ListSecurityListsRequest{
 		CompartmentId: common.String(compartmentID),
@@ -1062,6 +1100,7 @@ type LimitInfo struct {
 }
 
 func (c *Client) GetLimits(ctx context.Context, tenantID int64, serviceName string) ([]LimitInfo, error) {
+	defer withSubtreeInterceptor(&c.limits.Interceptor)()
 	compartmentID := c.tenant.TenancyOCID
 	req := limits.ListLimitDefinitionsRequest{
 		CompartmentId: common.String(compartmentID),
@@ -1434,6 +1473,7 @@ func (c *Client) DeleteConsoleConnection(ctx context.Context, connectionID strin
 }
 
 func (c *Client) ListConsoleConnections(ctx context.Context, instanceID string) ([]core.InstanceConsoleConnection, error) {
+	defer withSubtreeInterceptor(&c.compute.Interceptor)()
 	req := core.ListInstanceConsoleConnectionsRequest{
 		CompartmentId: common.String(c.tenant.TenancyOCID),
 		InstanceId:    common.String(instanceID),

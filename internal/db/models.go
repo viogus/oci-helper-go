@@ -8,6 +8,7 @@ type Tenant struct {
 	Name          string    `json:"name"`
 	UserOCID      string    `json:"userOcid"`
 	TenancyOCID   string    `json:"tenancyOcid"`
+	CompartmentID string    `json:"compartmentId"`
 	Region        string    `json:"region"`
 	Fingerprint   string    `json:"fingerprint"`
 	KeyFile       string    `json:"keyFile"`
@@ -16,6 +17,16 @@ type Tenant struct {
 	Subscribed    string    `json:"subscribed,omitempty"`
 	CreatedAt     time.Time `json:"createdAt"`
 	UpdatedAt     time.Time `json:"updatedAt"`
+}
+
+// Compartment returns the compartment OCID to use for OCI API calls.
+// When CompartmentID is explicitly set it is returned; otherwise falls back
+// to the tenancy OCID (root compartment) for backward compatibility.
+func (t *Tenant) Compartment() string {
+	if t.CompartmentID != "" {
+		return t.CompartmentID
+	}
+	return t.TenancyOCID
 }
 
 // Instance represents a single OCI compute instance, keyed by composite

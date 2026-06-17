@@ -1,7 +1,7 @@
 <template>
   <div class="dashboard">
     <div class="page-header">
-      <h3>Dashboard</h3>
+      <h3>{{ $t('home.dashboard') }}</h3>
     </div>
 
     <!-- Stat Cards -->
@@ -17,7 +17,7 @@
         </div>
         <div class="stat-body">
           <div class="stat-value">{{ stat.value }}</div>
-          <div class="stat-label">{{ stat.label }}</div>
+          <div class="stat-label">{{ $t(stat.labelKey) }}</div>
         </div>
         <div class="stat-trend" v-if="stat.trend !== undefined">
           <span :class="stat.trend >= 0 ? 'up' : 'down'">
@@ -31,7 +31,7 @@
     <div class="dashboard-grid">
       <!-- Quick Access -->
       <div class="dash-section">
-        <h4>Quick Access</h4>
+        <h4>{{ $t('home.quickAccess') }}</h4>
         <div class="action-grid">
           <div
             v-for="link in links"
@@ -42,29 +42,29 @@
             <div class="action-icon" :style="{ background: link.bg }">
               <el-icon :size="22"><component :is="link.icon" /></el-icon>
             </div>
-            <div class="action-label">{{ link.label }}</div>
+            <div class="action-label">{{ $t(link.labelKey) }}</div>
           </div>
         </div>
       </div>
 
       <!-- Recent Activity -->
       <div class="dash-section">
-        <h4>Resources</h4>
+        <h4>{{ $t('home.resources') }}</h4>
         <div class="info-grid">
           <div class="info-item">
-            <span class="info-label">Regions</span>
+            <span class="info-label">{{ $t('home.region') }}</span>
             <span class="info-value">{{ regionCount }}</span>
           </div>
           <div class="info-item">
-            <span class="info-label">Running Instances</span>
+            <span class="info-label">{{ $t('home.runningInstances') }}</span>
             <span class="info-value">{{ runningCount }}</span>
           </div>
           <div class="info-item">
-            <span class="info-label">Active Tasks</span>
+            <span class="info-label">{{ $t('home.activeTasks') }}</span>
             <span class="info-value">{{ activeTasks }}</span>
           </div>
           <div class="info-item">
-            <span class="info-label">Synced Tenants</span>
+            <span class="info-label">{{ $t('home.syncedTenants') }}</span>
             <span class="info-value">{{ syncedTenants }}</span>
           </div>
         </div>
@@ -88,21 +88,21 @@ const activeTasks = ref(0)
 const syncedTenants = ref(0)
 
 const stats = reactive([
-  { label: 'Tenants', value: '—', icon: 'User', color: '#2563eb' },
-  { label: 'Instances', value: '—', icon: 'Monitor', color: '#10b981' },
-  { label: 'Running', value: '—', icon: 'Timer', color: '#f59e0b' },
-  { label: 'Tasks Active', value: '—', icon: 'Timer', color: '#8b5cf6' },
+  { labelKey: 'home.tenant', value: '—', icon: 'User', color: '#2563eb' },
+  { labelKey: 'home.instance', value: '—', icon: 'Monitor', color: '#10b981' },
+  { labelKey: 'home.running', value: '—', icon: 'Timer', color: '#f59e0b' },
+  { labelKey: 'home.activeTasks', value: '—', icon: 'Timer', color: '#8b5cf6' },
 ])
 
 const links = [
-  { label: 'Instances', path: '/instances', icon: 'Monitor', bg: 'linear-gradient(135deg,#2563eb,#6366f1)' },
-  { label: 'Create', path: '/instances/create', icon: 'Plus', bg: 'linear-gradient(135deg,#10b981,#059669)' },
-  { label: 'Security', path: '/security-rules', icon: 'Lock', bg: 'linear-gradient(135deg,#f59e0b,#d97706)' },
-  { label: 'Network', path: '/traffic', icon: 'Connection', bg: 'linear-gradient(135deg,#8b5cf6,#7c3aed)' },
-  { label: 'Cloudflare', path: '/cloudflare', icon: 'Cloudy', bg: 'linear-gradient(135deg,#06b6d4,#0891b2)' },
-  { label: 'AI Chat', path: '/ai-chat', icon: 'ChatDotRound', bg: 'linear-gradient(135deg,#ec4899,#db2777)' },
-  { label: 'Tenants', path: '/tenants', icon: 'User', bg: 'linear-gradient(135deg,#64748b,#475569)' },
-  { label: 'Settings', path: '/settings', icon: 'Setting', bg: 'linear-gradient(135deg,#78716c,#57534e)' },
+  { labelKey: 'home.instance', path: '/instances', icon: 'Monitor', bg: 'linear-gradient(135deg,#2563eb,#6366f1)' },
+  { labelKey: 'home.create', path: '/instances/create', icon: 'Plus', bg: 'linear-gradient(135deg,#10b981,#059669)' },
+  { labelKey: 'home.security', path: '/security-rules', icon: 'Lock', bg: 'linear-gradient(135deg,#f59e0b,#d97706)' },
+  { labelKey: 'home.network', path: '/traffic', icon: 'Connection', bg: 'linear-gradient(135deg,#8b5cf6,#7c3aed)' },
+  { labelKey: 'home.cloudflare', path: '/cloudflare', icon: 'Cloudy', bg: 'linear-gradient(135deg,#06b6d4,#0891b2)' },
+  { labelKey: 'home.aiChat', path: '/ai-chat', icon: 'ChatDotRound', bg: 'linear-gradient(135deg,#ec4899,#db2777)' },
+  { labelKey: 'home.tenant', path: '/tenants', icon: 'User', bg: 'linear-gradient(135deg,#64748b,#475569)' },
+  { labelKey: 'home.settings', path: '/settings', icon: 'Setting', bg: 'linear-gradient(135deg,#78716c,#57534e)' },
 ]
 
 onMounted(async () => {

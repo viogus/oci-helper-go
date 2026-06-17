@@ -1,14 +1,14 @@
 <template>
   <div class="security-rules-page">
     <div class="page-header">
-      <h3>Security Rules</h3>
+      <h3>安全规则</h3>
     </div>
 
     <!-- Selectors -->
     <div class="filter-bar">
       <el-select
         v-model="tenantId"
-        placeholder="Select tenant"
+        placeholder="选择租户"
         :loading="loadingTenants"
         :disabled="loadingTenants"
         style="width: 240px"
@@ -24,7 +24,7 @@
 
       <el-select
         v-model="vcnId"
-        placeholder="Select VCN"
+        placeholder="选择 VCN"
         :loading="loadingVCNs"
         :disabled="!tenantId"
         style="width: 400px"
@@ -40,7 +40,7 @@
 
       <el-input
         v-model="keyword"
-        placeholder="Filter rules..."
+        placeholder="过滤规则..."
         clearable
         :disabled="!vcnId"
         style="width: 240px"
@@ -60,14 +60,14 @@
         :disabled="!vcnId"
         @click="dialogVisible = true"
       >
-        <el-icon><Plus /></el-icon> Add Rule
+        <el-icon><Plus /></el-icon> 添加规则
       </el-button>
       <el-button
         type="danger"
         :disabled="!vcnId"
         @click="handleRelease"
       >
-        <el-icon><WarningFilled /></el-icon> Open All Ports
+        <el-icon><WarningFilled /></el-icon> 放开所有端口
       </el-button>
     </div>
 
@@ -77,28 +77,28 @@
       v-loading="loading"
       stripe
       border
-      empty-text="No security rules found"
+      empty-text="未找到安全规则"
       style="width: 100%"
     >
-      <el-table-column prop="name" label="Name" min-width="200" show-overflow-tooltip />
-      <el-table-column prop="protocol" label="Protocol" width="100" align="center">
+      <el-table-column prop="name" label="名称" min-width="200" show-overflow-tooltip />
+      <el-table-column prop="protocol" label="协议" width="100" align="center">
         <template #default="{ row }">
           <el-tag :type="protocolTagType(row.protocol)" size="small">
             {{ row.protocol || 'all' }}
           </el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="Source / Dest" min-width="180">
+      <el-table-column label="来源 / 目标" min-width="180">
         <template #default="{ row }">
           <span>{{ row.type === 'ingress' ? row.source : row.dest }}</span>
         </template>
       </el-table-column>
-      <el-table-column prop="port" label="Port" width="120" align="center">
+      <el-table-column prop="port" label="端口" width="120" align="center">
         <template #default="{ row }">
           <span>{{ row.port || 'all' }}</span>
         </template>
       </el-table-column>
-      <el-table-column label="Type" width="100" align="center">
+      <el-table-column label="类型" width="100" align="center">
         <template #default="{ row }">
           <el-tag
             :type="row.type === 'ingress' ? 'warning' : 'success'"
@@ -109,7 +109,7 @@
           </el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="Actions" width="80" fixed="right" align="center">
+      <el-table-column label="操作" width="80" fixed="right" align="center">
         <template #default="{ row }">
           <el-button
             type="danger"
@@ -127,7 +127,7 @@
     <!-- Empty state when no VCN selected -->
     <el-empty
       v-if="!vcnId && !loading"
-      description="Select a tenant and VCN to view security rules"
+      description="选择租户和 VCN 查看安全规则"
     />
 
     <!-- Pagination -->
@@ -143,23 +143,23 @@
       />
     </div>
 
-    <!-- Add Rule Dialog -->
+    <!-- 添加规则 Dialog -->
     <el-dialog
       v-model="dialogVisible"
-      title="Add Security Rule"
+      title="添加安全规则"
       width="520px"
       :close-on-click-modal="false"
       @closed="onDialogClosed"
     >
       <el-form :model="ruleForm" label-width="100px">
-        <el-form-item label="Type" required>
+        <el-form-item label="类型" required>
           <el-radio-group v-model="ruleForm.type">
-            <el-radio value="ingress">Ingress</el-radio>
-            <el-radio value="egress">Egress</el-radio>
+            <el-radio value="ingress">入站</el-radio>
+            <el-radio value="egress">出站</el-radio>
           </el-radio-group>
         </el-form-item>
 
-        <el-form-item label="Protocol" required>
+        <el-form-item label="协议" required>
           <el-select v-model="ruleForm.protocol" style="width: 100%">
             <el-option label="TCP" value="TCP" />
             <el-option label="UDP" value="UDP" />
@@ -168,21 +168,21 @@
           </el-select>
         </el-form-item>
 
-        <el-form-item label="Port" required>
+        <el-form-item label="端口" required>
           <el-input
             v-model="ruleForm.port"
             placeholder="e.g. 80, 443, or 3000-4000"
           />
         </el-form-item>
 
-        <el-form-item v-if="ruleForm.type === 'ingress'" label="Source" required>
+        <el-form-item v-if="ruleForm.type === 'ingress'" label="来源" required>
           <el-input
             v-model="ruleForm.source"
             placeholder="0.0.0.0/0"
           />
         </el-form-item>
 
-        <el-form-item v-if="ruleForm.type === 'egress'" label="Destination" required>
+        <el-form-item v-if="ruleForm.type === 'egress'" label="目标" required>
           <el-input
             v-model="ruleForm.dest"
             placeholder="0.0.0.0/0"
@@ -191,7 +191,7 @@
       </el-form>
 
       <template #footer>
-        <el-button @click="dialogVisible = false">Cancel</el-button>
+        <el-button @click="dialogVisible = false">取消</el-button>
         <el-button type="primary" :loading="saving" @click="handleAdd">
           Add
         </el-button>
@@ -360,7 +360,7 @@ function protocolTagType(protocol) {
 }
 
 // ---------------------------------------------------------------------------
-// Add Rule
+// 添加规则
 // ---------------------------------------------------------------------------
 function onDialogClosed() {
   ruleForm.type = 'ingress'
@@ -413,13 +413,13 @@ async function handleAdd() {
 }
 
 // ---------------------------------------------------------------------------
-// Delete Rule
+// 删除规则
 // ---------------------------------------------------------------------------
 async function handleDelete(rule) {
   try {
     await ElMessageBox.confirm(
       `Delete this ${rule.type} rule from "${rule.name}"?`,
-      'Delete Rule',
+      '删除规则',
       {
         confirmButtonText: 'Delete',
         cancelButtonText: 'Cancel',
@@ -459,9 +459,9 @@ async function handleRelease() {
   try {
     await ElMessageBox.confirm(
       'This will open all TCP and UDP ports (0-65535) for both ingress and egress on this VCN. This is a security risk. Continue?',
-      'Open All Ports',
+      '放开所有端口',
       {
-        confirmButtonText: 'Yes, open all ports',
+        confirmButtonText: '确认放开所有端口',
         cancelButtonText: 'Cancel',
         type: 'warning',
         confirmButtonClass: 'el-button--danger'

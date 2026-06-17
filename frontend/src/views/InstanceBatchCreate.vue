@@ -1,6 +1,6 @@
 <template>
   <div class="batch-create-page">
-    <h3>Batch Create Instances</h3>
+    <h3>批量创建实例</h3>
 
     <el-card shadow="never" class="form-card">
       <el-form
@@ -10,11 +10,11 @@
         @submit.prevent="handleBatchCreate"
       >
         <!-- Tenant Selector (multiple) -->
-        <el-form-item label="Tenants" required>
+        <el-form-item label="租户" required>
           <el-select
             v-model="form.tenantIds"
             multiple
-            placeholder="Select tenants..."
+            placeholder="选择租户..."
             @change="onTenantChange"
             :loading="loadingTenants"
             style="width: 400px"
@@ -34,12 +34,12 @@
             size="small"
             style="margin-left: 8px"
           >
-            {{ form.tenantIds.length }} selected
+            {{ form.tenantIds.length }} 已选
           </el-tag>
         </el-form-item>
 
         <!-- Instances Per Tenant -->
-        <el-form-item label="Instances Per Tenant">
+        <el-form-item label="每租户实例数">
           <el-input-number
             v-model="form.instancesPerTenant"
             :min="1"
@@ -48,7 +48,7 @@
             style="width: 180px"
           />
           <span style="margin-left: 8px; color: var(--el-text-color-secondary); font-size: 13px;">
-            Total: {{ form.instancesPerTenant * form.tenantIds.length }}
+            总共: {{ form.instancesPerTenant * form.tenantIds.length }}
           </span>
         </el-form-item>
 
@@ -62,7 +62,7 @@
         </el-form-item>
 
         <!-- Availability Domain -->
-        <el-form-item label="Availability Domain" required>
+        <el-form-item label="可用性域" required>
           <el-select
             v-model="form.availabilityDomain"
             placeholder="Select AD..."
@@ -80,7 +80,7 @@
         </el-form-item>
 
         <!-- Image -->
-        <el-form-item label="Image" required>
+        <el-form-item label="镜像" required>
           <el-select
             v-model="form.imageId"
             placeholder="Select Image..."
@@ -99,7 +99,7 @@
         </el-form-item>
 
         <!-- Shape -->
-        <el-form-item label="Shape" required>
+        <el-form-item label="规格" required>
           <el-select
             v-model="form.shape"
             placeholder="Select Shape..."
@@ -136,7 +136,7 @@
         </el-form-item>
 
         <!-- Subnet -->
-        <el-form-item label="Subnet" required>
+        <el-form-item label="子网" required>
           <el-select
             v-model="form.subnetId"
             placeholder="Select Subnet..."
@@ -154,7 +154,7 @@
         </el-form-item>
 
         <!-- Boot Volume Size -->
-        <el-form-item label="Boot Volume (GB)">
+        <el-form-item label="引导卷 (GB)">
           <el-input-number
             v-model="form.bootVolumeSizeGB"
             :min="50"
@@ -168,7 +168,7 @@
         </el-form-item>
 
         <!-- Display Name Prefix -->
-        <el-form-item label="Display Name Prefix">
+        <el-form-item label="实例名称前缀">
           <el-input
             v-model="form.displayNamePrefix"
             placeholder="oci-helper"
@@ -184,10 +184,10 @@
             @click="handleBatchCreate"
             :disabled="form.tenantIds.length === 0"
           >
-            Start Batch Create
+            开始批量创建
           </el-button>
           <el-button @click="$router.push('/create-tasks')">
-            View Tasks
+            查看任务
           </el-button>
         </el-form-item>
       </el-form>

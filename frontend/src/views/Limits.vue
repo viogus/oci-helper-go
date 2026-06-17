@@ -1,14 +1,14 @@
 <template>
   <div class="limits-page">
     <div class="page-header">
-      <h3>Limits &amp; Quotas</h3>
+      <h3>配额与限制</h3>
     </div>
 
     <!-- Filter Bar -->
     <div class="filter-bar">
       <el-select
         v-model="tenantId"
-        placeholder="Select a tenant"
+        placeholder="选择租户"
         @change="loadLimits"
         style="width: 220px"
       >
@@ -21,7 +21,7 @@
       </el-select>
       <el-input
         v-model="serviceName"
-        placeholder="Service name filter..."
+        placeholder="按服务名筛选..."
         clearable
         @input="onServiceInput"
         style="width: 240px"
@@ -32,15 +32,15 @@
     <div v-if="limits.length > 0" class="summary-row">
       <el-card class="summary-card" shadow="never">
         <div class="summary-value">{{ summary.total }}</div>
-        <div class="summary-label">Total Limits</div>
+        <div class="summary-label">总计</div>
       </el-card>
       <el-card class="summary-card critical" shadow="never">
         <div class="summary-value">{{ summary.critical }}</div>
-        <div class="summary-label">Critical (&gt;80%)</div>
+        <div class="summary-label">严重 (&gt;Critical (&gt;80%)&lt;80%)</div>
       </el-card>
       <el-card class="summary-card warning" shadow="never">
         <div class="summary-value">{{ summary.warning }}</div>
-        <div class="summary-label">Warning (60-80%)</div>
+        <div class="summary-label">警告 (60-80%)</div>
       </el-card>
     </div>
 
@@ -51,32 +51,32 @@
       stripe
       border
       style="width: 100%"
-      empty-text="No limits found"
+      empty-text="未找到配额"
     >
-      <el-table-column label="Service Name" width="160">
+      <el-table-column label="服务名" width="160">
         <template #default="{ row }">
           <el-tag type="primary" effect="plain" size="small">
             {{ row.serviceName }}
           </el-tag>
         </template>
       </el-table-column>
-      <el-table-column prop="name" label="Limit Name" min-width="220" />
-      <el-table-column label="Used" width="140" align="right">
+      <el-table-column prop="name" label="配额名称" min-width="220" />
+      <el-table-column label="已用" width="140" align="right">
         <template #default="{ row }">
           {{ used(row.used) }}
         </template>
       </el-table-column>
-      <el-table-column label="Available" width="140" align="right">
+      <el-table-column label="可用" width="140" align="right">
         <template #default="{ row }">
           {{ available(row) }}
         </template>
       </el-table-column>
-      <el-table-column label="Max / Quota" width="140" align="right">
+      <el-table-column label="最大 / 配额" width="140" align="right">
         <template #default="{ row }">
           {{ max(row.max) }}
         </template>
       </el-table-column>
-      <el-table-column label="Usage %" width="200" align="center">
+      <el-table-column label="使用率 %" width="200" align="center">
         <template #default="{ row }">
           <el-progress
             :percentage="usagePct(row)"
@@ -91,7 +91,7 @@
     <!-- Empty State -->
     <el-empty
       v-if="!tenantId && !loading"
-      description="Select a tenant to view limits"
+      description="选择租户查看配额"
     />
   </div>
 </template>
@@ -184,7 +184,7 @@ async function loadLimits() {
     const res = await getLimits(payload)
     limits.value = Array.isArray(res) ? res : res.data || []
   } catch (e) {
-    ElMessage.error(e.response?.data?.error || 'Failed to load limits')
+    ElMessage.error(e.response?.data?.error || '无法加载配额')
     limits.value = []
   } finally {
     loading.value = false

@@ -4,7 +4,7 @@
     <div class="filter-bar">
       <el-select
         v-model="tenantId"
-        placeholder="All tenants"
+        :placeholder="$t('instance.allTenants')"
         clearable
         @change="handleSearch"
         style="width: 200px"
@@ -18,7 +18,7 @@
       </el-select>
       <el-input
         v-model="keyword"
-        placeholder="Search by name, IP, or OCID..."
+        :placeholder="$t('instance.searchPlaceholder')"
         clearable
         @input="handleSearch"
         style="width: 320px"
@@ -27,7 +27,7 @@
 
     <!-- Batch Action Bar -->
     <div v-if="selectedRows.length > 0" class="batch-bar">
-      <span class="batch-info">{{ selectedRows.length }} instance(s) selected</span>
+      <span class="batch-info">{{ $t('instance.selected', { count: selectedRows.length }) }}</span>
       <el-button type="primary" size="small" @click="handleBatchStart">
         Batch Start
       </el-button>
@@ -48,7 +48,7 @@
       stripe
       style="width: 100%"
       row-key="id"
-      element-loading-text="Loading instances..."
+      :element-loading-text="$t('instance.loading')"
     >
       <el-table-column type="selection" width="50" />
       <el-table-column label="Name" min-width="200">
@@ -58,26 +58,32 @@
           </el-button>
         </template>
       </el-table-column>
-      <el-table-column prop="shape" label="Shape" width="150" />
+      <el-table-column :label="$t('instance.shape')" width="150">
+        <template #default="{ row }">{{ row.shape }}</template>
+      </el-table-column>
       <el-table-column prop="ocpu" label="OCPU" width="80" align="center" />
-      <el-table-column prop="memoryGB" label="Memory (GB)" width="110" align="center" />
-      <el-table-column label="State" width="130" align="center">
+      <el-table-column :label="$t('instance.memoryGB')" width="110" align="center">
+        <template #default="{ row }">{{ row.memoryGB }}</template>
+      </el-table-column>
+      <el-table-column :label="$t('instance.state')" width="130" align="center">
         <template #default="{ row }">
           <el-tag :type="stateTagType(row.state)" effect="dark" size="small">
             {{ row.state }}
           </el-tag>
         </template>
       </el-table-column>
-      <el-table-column prop="publicIp" label="Public IP" width="150" />
-      <el-table-column prop="tenantId" label="Tenant ID" width="90" align="center" />
-      <el-table-column label="Actions" width="140" fixed="right" align="center">
+      <el-table-column prop="publicIp" :label="$t('instance.publicIP')" width="150" />
+      <el-table-column :label="$t('instance.tenantID')" width="90" align="center">
+        <template #default="{ row }">{{ row.tenantId }}</template>
+      </el-table-column>
+      <el-table-column :label="$t('instance.actions')" width="140" fixed="right" align="center">
         <template #default="{ row }">
           <el-dropdown
             trigger="click"
             @command="(cmd) => handleDropdownAction(row, cmd)"
           >
             <el-button type="primary" size="small">
-              Actions
+              {{ $t('instance.actions') }}
               <el-icon><ArrowDown /></el-icon>
             </el-button>
             <template #dropdown>
@@ -127,7 +133,7 @@
     </el-table>
 
     <!-- Empty State Override -->
-    <el-empty v-if="!loading && instances.length === 0" description="No instances found" />
+    <el-empty v-if="!loading && instances.length === 0" :description="$t('instance.notFound')" />
 
     <!-- Pagination -->
     <div class="pagination-wrapper">
@@ -143,12 +149,12 @@
     </div>
 
     <!-- Change Shape Dialog -->
-    <el-dialog v-model="shapeDialogVisible" title="Change Shape" width="420px" :close-on-click-modal="false">
+    <el-dialog v-model="shapeDialogVisible" :title="$t('instance.changeShape')" width="420px" :close-on-click-modal="false">
       <el-form :model="shapeForm" label-width="120px">
-        <el-form-item label="Shape" required>
+        <el-form-item :label="$t('instance.shape')" required>
           <el-input v-model="shapeForm.shape" placeholder="e.g. VM.Standard.E3.Flex" />
         </el-form-item>
-        <el-form-item label="OCPUs" required>
+        <el-form-item label="OCPU" required>
           <el-input-number
             v-model="shapeForm.ocpus"
             :min="1"
@@ -157,7 +163,7 @@
             style="width: 180px"
           />
         </el-form-item>
-        <el-form-item label="Memory (GB)" required>
+        <el-form-item :label="$t('instance.memoryGB')" required>
           <el-input-number
             v-model="shapeForm.memoryGB"
             :min="1"
@@ -168,20 +174,20 @@
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="shapeDialogVisible = false">Cancel</el-button>
+        <el-button @click="shapeDialogVisible = false">{{ $t('common.cancel') }}</el-button>
         <el-button type="primary" :loading="saving" @click="handleChangeShape">
-          Save
+          {{ $t('common.save') }}
         </el-button>
       </template>
     </el-dialog>
 
     <!-- Change Boot Volume Dialog -->
-    <el-dialog v-model="volumeDialogVisible" title="Change Boot Volume" width="420px" :close-on-click-modal="false">
+    <el-dialog v-model="volumeDialogVisible" :title="$t('instance.changeBootVolume')" width="420px" :close-on-click-modal="false">
       <p style="margin-bottom: 16px;">
         Resize boot volume for <strong>{{ currentInstance?.name }}</strong>
       </p>
       <el-form :model="volumeForm" label-width="120px">
-        <el-form-item label="Size (GB)" required>
+        <el-form-item :label="$t('instance.bootVolumeSize')" required>
           <el-input-number
             v-model="volumeForm.sizeGB"
             :min="50"
@@ -192,22 +198,22 @@
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="volumeDialogVisible = false">Cancel</el-button>
+        <el-button @click="volumeDialogVisible = false">{{ $t('common.cancel') }}</el-button>
         <el-button type="primary" :loading="saving" @click="handleChangeBootVolume">
-          Save
+          {{ $t('common.save') }}
         </el-button>
       </template>
     </el-dialog>
 
     <!-- Attach IPv6 Dialog -->
-    <el-dialog v-model="attachIPv6Visible" title="Attach IPv6" width="420px" :close-on-click-modal="false">
+    <el-dialog v-model="attachIPv6Visible" :title="$t('instance.attachIPv6')" width="420px" :close-on-click-modal="false">
       <p>
         Attach an IPv6 address to <strong>{{ currentInstance?.name }}</strong>?
       </p>
       <template #footer>
-        <el-button @click="attachIPv6Visible = false">Cancel</el-button>
+        <el-button @click="attachIPv6Visible = false">{{ $t('common.cancel') }}</el-button>
         <el-button type="primary" :loading="saving" @click="handleAttachIPv6">
-          Confirm
+          {{ $t('common.confirm') }}
         </el-button>
       </template>
     </el-dialog>
@@ -216,17 +222,17 @@
     <MetricsDialog v-model:visible="metricsVisible" :instance="currentInstance" />
 
     <!-- Check Alive Results Dialog -->
-    <el-dialog v-model="checkAliveVisible" title="Check Alive Results" width="540px">
+    <el-dialog v-model="checkAliveVisible" :title="$t('instance.aliveCheckResult')" width="540px">
       <el-table :data="checkAliveResults" stripe border size="small">
-        <el-table-column prop="instance_id" label="Instance ID" min-width="200" show-overflow-tooltip />
-        <el-table-column prop="alive" label="Status" width="100" align="center">
+        <el-table-column prop="instance_id" :label="$t('instance.instanceID')" min-width="200" show-overflow-tooltip />
+        <el-table-column :label="$t('instance.aliveState')" width="100" align="center">
           <template #default="{ row }">
             <el-tag :type="row.alive ? 'success' : 'danger'" effect="dark" size="small">
-              {{ row.alive ? 'Alive' : 'Dead' }}
+              {{ row.alive ? $t('instance.alive') : $t('instance.dead') }}
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="error" label="Error" min-width="150" show-overflow-tooltip>
+        <el-table-column :label="$t('instance.errorInfo')" min-width="150" show-overflow-tooltip>
           <template #default="{ row }">
             <span v-if="row.error" style="color: #F56C6C; font-size: 12px;">{{ row.error }}</span>
             <span v-else>-</span>
@@ -234,7 +240,7 @@
         </el-table-column>
       </el-table>
       <template #footer>
-        <el-button @click="checkAliveVisible = false">Close</el-button>
+        <el-button @click="checkAliveVisible = false">{{ $t('instance.close') }}</el-button>
       </template>
     </el-dialog>
   </div>

@@ -2,9 +2,9 @@
   <div class="public-ips-page">
     <!-- Page Header -->
     <div class="page-header">
-      <h3>Public IPs</h3>
+      <h3>公网 IP</h3>
       <el-button type="primary" :disabled="!tenantId" @click="openReserveDialog">
-        <el-icon><Plus /></el-icon> Reserve New
+        <el-icon><Plus /></el-icon> 预留新 IP
       </el-button>
     </div>
 
@@ -12,7 +12,7 @@
     <div class="filter-bar">
       <el-select
         v-model="tenantId"
-        placeholder="Select tenant"
+        placeholder="选择租户"
         clearable
         @change="handleTenantChange"
         style="width: 240px"
@@ -29,12 +29,12 @@
     <!-- Replace IP Section -->
     <el-card v-if="tenantId" shadow="never" class="replace-ip-card">
       <template #header>
-        <span style="font-weight: 600">Replace Instance IP</span>
+        <span style="font-weight: 600">更换实例 IP</span>
       </template>
       <div class="replace-ip-row">
         <el-select
           v-model="replaceForm.instanceId"
-          placeholder="Select instance"
+          placeholder="选择实例"
           filterable
           style="width: 320px"
         >
@@ -47,7 +47,7 @@
         </el-select>
         <el-input
           v-model="replaceForm.cidrList"
-          placeholder="CIDR filter (optional, comma-separated)"
+          placeholder="CIDR 过滤（可选，逗号分隔）"
           clearable
           style="width: 300px"
         />
@@ -63,13 +63,13 @@
     </el-card>
 
     <!-- Empty State: no tenant selected -->
-    <el-empty v-if="!tenantId" description="Select a tenant to view public IPs" />
+    <el-empty v-if="!tenantId" description="选择租户查看公网 IP" />
 
     <!-- Loading State -->
     <el-skeleton v-else-if="loading" :rows="5" animated />
 
     <!-- Empty State: no IPs -->
-    <el-empty v-else-if="publicIPs.length === 0" description="No public IPs found" />
+    <el-empty v-else-if="publicIPs.length === 0" description="未找到公网 IP" />
 
     <!-- Table -->
     <template v-else>
@@ -78,20 +78,20 @@
         stripe
         style="width: 100%"
       >
-        <el-table-column prop="displayName" label="Name" min-width="180" />
-        <el-table-column label="IP Address" width="180">
+        <el-table-column prop="displayName" label="名称" min-width="180" />
+        <el-table-column label="IP 地址" width="180">
           <template #default="{ row }">
             <code>{{ row.ipAddress || 'N/A' }}</code>
           </template>
         </el-table-column>
-        <el-table-column label="Scope" width="110">
+        <el-table-column label="范围" width="110">
           <template #default="{ row }">
             <el-tag :type="row.scope === 'REGION' ? 'primary' : 'warning'" size="small">
               {{ row.scope || 'N/A' }}
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="State" width="110">
+        <el-table-column label="状态" width="110">
           <template #default="{ row }">
             <el-tag
               :type="row.lifecycleState === 'ASSIGNED' ? 'success' : 'info'"
@@ -102,7 +102,7 @@
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="Actions" width="120" fixed="right" align="center">
+        <el-table-column label="操作" width="120" fixed="right" align="center">
           <template #default="{ row }">
             <el-button
               type="danger"
@@ -129,21 +129,21 @@
       </div>
     </template>
 
-    <!-- Reserve New Dialog -->
+    <!-- 预留新 IP Dialog -->
     <el-dialog
       v-model="reserveDialogVisible"
-      title="Reserve New Public IP"
+      title="预留新 IP Public IP"
       width="420px"
       :close-on-click-modal="false"
       @closed="reserveForm.displayName = ''"
     >
       <el-form label-position="top">
-        <el-form-item label="Display Name" required>
-          <el-input v-model="reserveForm.displayName" placeholder="e.g. my-reserved-ip" />
+        <el-form-item label="显示名称" required>
+          <el-input v-model="reserveForm.displayName" placeholder="例如: my-reserved-ip" />
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="reserveDialogVisible = false">Cancel</el-button>
+        <el-button @click="reserveDialogVisible = false">取消</el-button>
         <el-button type="primary" :loading="reserving" @click="handleReserve">
           Reserve
         </el-button>
@@ -250,7 +250,7 @@ function onSizeChange() {
 }
 
 // ---------------------------------------------------------------------------
-// Reserve New
+// 预留新 IP
 // ---------------------------------------------------------------------------
 function openReserveDialog() {
   reserveForm.value = { displayName: '' }
@@ -286,7 +286,7 @@ async function handleDelete(ip) {
   try {
     await ElMessageBox.confirm(
       `Delete public IP "${ip.displayName || ip.ipAddress}"? This action cannot be undone.`,
-      'Confirm Delete',
+      '确认删除',
       {
         confirmButtonText: 'Delete',
         cancelButtonText: 'Cancel',

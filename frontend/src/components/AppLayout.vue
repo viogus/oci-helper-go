@@ -16,65 +16,65 @@
       >
         <el-menu-item index="/home">
           <el-icon><HomeFilled /></el-icon>
-          <template #title>Home</template>
+          <template #title>{{ $t('menu.home') }}</template>
         </el-menu-item>
 
         <el-sub-menu index="resources">
           <template #title>
             <el-icon><Monitor /></el-icon>
-            <span>Resources</span>
+            <span>{{ $t('menu.resources') }}</span>
           </template>
-          <el-menu-item index="/instances">Instances</el-menu-item>
-          <el-menu-item index="/instances/create">Create</el-menu-item>
-          <el-menu-item index="/instances/batch-create">Batch Create</el-menu-item>
-          <el-menu-item index="/ips">Public IPs</el-menu-item>
-          <el-menu-item index="/volumes">Boot Volumes</el-menu-item>
-          <el-menu-item index="/limits">Limits</el-menu-item>
+          <el-menu-item index="/instances">{{ $t('menu.instances') }}</el-menu-item>
+          <el-menu-item index="/instances/create">{{ $t('menu.create') }}</el-menu-item>
+          <el-menu-item index="/instances/batch-create">{{ $t('menu.batchCreate') }}</el-menu-item>
+          <el-menu-item index="/ips">{{ $t('menu.publicIPs') }}</el-menu-item>
+          <el-menu-item index="/volumes">{{ $t('menu.bootVolumes') }}</el-menu-item>
+          <el-menu-item index="/limits">{{ $t('menu.limits') }}</el-menu-item>
         </el-sub-menu>
 
         <el-sub-menu index="network">
           <template #title>
             <el-icon><Connection /></el-icon>
-            <span>Network</span>
+            <span>{{ $t('menu.network') }}</span>
           </template>
-          <el-menu-item index="/security-rules">Security Rules</el-menu-item>
-          <el-menu-item index="/traffic">Traffic</el-menu-item>
-          <el-menu-item index="/cloudflare">Cloudflare</el-menu-item>
-          <el-menu-item index="/vnc">VNC Console</el-menu-item>
+          <el-menu-item index="/security-rules">{{ $t('menu.securityRules') }}</el-menu-item>
+          <el-menu-item index="/traffic">{{ $t('menu.traffic') }}</el-menu-item>
+          <el-menu-item index="/cloudflare">{{ $t('menu.cloudflare') }}</el-menu-item>
+          <el-menu-item index="/vnc">{{ $t('menu.vnc') }}</el-menu-item>
         </el-sub-menu>
 
         <el-sub-menu index="tasks-sub">
           <template #title>
             <el-icon><Timer /></el-icon>
-            <span>Tasks</span>
+            <span>{{ $t('menu.tasks') }}</span>
           </template>
-          <el-menu-item index="/create-tasks">Create Tasks</el-menu-item>
-          <el-menu-item index="/mem-tasks">Memory Tasks</el-menu-item>
+          <el-menu-item index="/create-tasks">{{ $t('menu.createTasks') }}</el-menu-item>
+          <el-menu-item index="/mem-tasks">{{ $t('menu.memTasks') }}</el-menu-item>
         </el-sub-menu>
 
         <el-sub-menu index="system">
           <template #title>
             <el-icon><Tools /></el-icon>
-            <span>System</span>
+            <span>{{ $t('menu.system') }}</span>
           </template>
-          <el-menu-item index="/tenants">Tenants</el-menu-item>
-          <el-menu-item index="/ai-chat">AI Chat</el-menu-item>
-          <el-menu-item index="/logs">Logs</el-menu-item>
-          <el-menu-item index="/audit">Audit Log</el-menu-item>
+          <el-menu-item index="/tenants">{{ $t('menu.tenants') }}</el-menu-item>
+          <el-menu-item index="/ai-chat">{{ $t('menu.aiChat') }}</el-menu-item>
+          <el-menu-item index="/logs">{{ $t('menu.logs') }}</el-menu-item>
+          <el-menu-item index="/audit">{{ $t('menu.audit') }}</el-menu-item>
         </el-sub-menu>
 
         <el-menu-item index="/backup">
           <el-icon><Upload /></el-icon>
-          <template #title>Backup</template>
+          <template #title>{{ $t('menu.backup') }}</template>
         </el-menu-item>
         <el-menu-item index="/settings">
           <el-icon><Setting /></el-icon>
-          <template #title>Settings</template>
+          <template #title>{{ $t('menu.settings') }}</template>
         </el-menu-item>
       </el-menu>
 
       <div class="sidebar-footer">
-        <el-tooltip :content="collapsed ? 'Expand' : 'Collapse'" placement="right">
+        <el-tooltip :content="collapsed ? $t('app.expand') : $t('app.collapse')" placement="right">
           <el-button text :icon="Fold" @click="collapsed = !collapsed" class="collapse-btn" />
         </el-tooltip>
       </div>
@@ -87,6 +87,12 @@
           <el-button text :icon="Fold" @click="collapsed = !collapsed" class="header-collapse" />
         </div>
         <div class="header-right">
+          <!-- Language Switcher -->
+          <div class="locale-switch">
+            <span :class="{ active: $i18n.locale === 'zh-CN' }" @click="setLocale('zh-CN')">中</span>
+            <span class="divider">|</span>
+            <span :class="{ active: $i18n.locale === 'en' }" @click="setLocale('en')">EN</span>
+          </div>
           <el-switch
             v-model="isDark"
             inline-prompt
@@ -96,7 +102,7 @@
             class="theme-switch"
           />
           <span class="user-name">{{ auth.user?.name }}</span>
-          <el-button text class="logout-btn" @click="handleLogout">Logout</el-button>
+          <el-button text class="logout-btn" @click="handleLogout">{{ $t('app.logout') }}</el-button>
         </div>
       </header>
 
@@ -132,6 +138,14 @@ function toggleDark(v) {
 }
 
 watch(collapsed, v => localStorage.setItem('sidebar_collapsed', v))
+
+// Locale toggle: update i18n locale and persist
+import { useI18n } from "vue-i18n"
+const { locale } = useI18n()
+function setLocale(lang) {
+  locale.value = lang
+  localStorage.setItem('locale', lang)
+}
 
 async function handleLogout() {
   await auth.doLogout()
@@ -303,6 +317,42 @@ async function handleLogout() {
 .header-collapse:hover { color: var(--text-primary) !important; }
 
 .theme-switch { margin: 0 4px; }
+
+.locale-switch {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  user-select: none;
+  cursor: default;
+}
+
+.locale-switch span {
+  padding: 2px 6px;
+  cursor: pointer;
+  transition: color var(--transition);
+}
+
+.locale-switch span:hover {
+  color: var(--text-primary);
+}
+
+.locale-switch span.active {
+  color: var(--primary);
+  font-weight: 700;
+}
+
+.locale-switch span.divider {
+  color: var(--border-color);
+  cursor: default;
+  padding: 0 2px;
+}
+
+.locale-switch span.divider:hover {
+  color: var(--border-color);
+}
 
 .user-name {
   font-size: 13px;

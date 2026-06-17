@@ -1,12 +1,12 @@
 <template>
   <div class="create-tasks-page">
-    <h3>Create Tasks</h3>
+    <h3>创建任务</h3>
 
     <!-- Search & Refresh Bar -->
     <div class="toolbar">
       <el-input
         v-model="keyword"
-        placeholder="Search tasks..."
+        placeholder="搜索任务..."
         clearable
         @input="handleSearch"
         style="width: 320px"
@@ -18,7 +18,7 @@
 
     <!-- Batch Action Bar -->
     <div v-if="selectedRows.length > 0" class="batch-bar">
-      <span class="batch-info">{{ selectedRows.length }} task(s) selected</span>
+      <span class="batch-info">{{ selectedRows.length }} 个任务已选中</span>
       <el-button type="warning" size="small" @click="handleBatchAction('stop')">
         Batch Stop
       </el-button>
@@ -42,19 +42,19 @@
       stripe
       style="width: 100%"
       row-key="id"
-      element-loading-text="Loading tasks..."
+      element-loading-text="正在加载任务..."
     >
       <el-table-column type="selection" width="50" />
       <el-table-column label="ID" prop="id" width="70" align="center" />
-      <el-table-column label="Tenant ID" prop="tenantId" width="100" align="center" />
-      <el-table-column label="Status" width="110" align="center">
+      <el-table-column label="租户 ID" prop="tenantId" width="100" align="center" />
+      <el-table-column label="状态" width="110" align="center">
         <template #default="{ row }">
           <el-tag :type="statusTagType(row.status)" effect="dark" size="small">
             {{ row.status }}
           </el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="Progress" width="160" align="center">
+      <el-table-column label="进度" width="160" align="center">
         <template #default="{ row }">
           <el-progress
             :percentage="row.progress"
@@ -64,17 +64,17 @@
           />
         </template>
       </el-table-column>
-      <el-table-column label="Message" min-width="200">
+      <el-table-column label="消息" min-width="200">
         <template #default="{ row }">
           <span class="task-message">{{ row.message || '-' }}</span>
         </template>
       </el-table-column>
-      <el-table-column label="Created At" width="170" align="center">
+      <el-table-column label="创建时间" width="170" align="center">
         <template #default="{ row }">
           {{ formatDate(row.createdAt) }}
         </template>
       </el-table-column>
-      <el-table-column label="Actions" width="260" fixed="right" align="center">
+      <el-table-column label="操作" width="260" fixed="right" align="center">
         <template #default="{ row }">
           <el-button
             v-if="row.status === 'running'"
@@ -119,7 +119,7 @@
     </el-table>
 
     <!-- Empty State -->
-    <el-empty v-if="!loading && tasks.length === 0" description="No create tasks found" />
+    <el-empty v-if="!loading && tasks.length === 0" description="未找到创建任务" />
 
     <!-- Pagination -->
     <div class="pagination-wrapper">
@@ -137,12 +137,12 @@
     <!-- Edit Dialog -->
     <el-dialog
       v-model="editDialogVisible"
-      title="Edit Task"
+      title="编辑任务"
       width="500px"
       :close-on-click-modal="false"
     >
       <el-form :model="editForm" label-width="180px">
-        <el-form-item label="Instances Per Tenant">
+        <el-form-item label="每租户实例数">
           <el-input-number
             v-model="editForm.instancesPerTenant"
             :min="1"
@@ -151,10 +151,10 @@
             style="width: 180px"
           />
         </el-form-item>
-        <el-form-item label="Region">
+        <el-form-item label="区域">
           <el-input v-model="editForm.region" style="width: 280px" />
         </el-form-item>
-        <el-form-item label="Boot Volume (GB)">
+        <el-form-item label="引导卷 (GB)">
           <el-input-number
             v-model="editForm.bootVolumeSizeGB"
             :min="50"
@@ -163,12 +163,12 @@
             style="width: 180px"
           />
         </el-form-item>
-        <el-form-item label="Display Name Prefix">
+        <el-form-item label="实例名称前缀">
           <el-input v-model="editForm.displayNamePrefix" style="width: 280px" />
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="editDialogVisible = false">Cancel</el-button>
+        <el-button @click="editDialogVisible = false">取消</el-button>
         <el-button type="primary" :loading="savingEdit" @click="handleSaveEdit">
           Save
         </el-button>
@@ -310,7 +310,7 @@ async function handleAction(action, taskIds) {
     try {
       await ElMessageBox.confirm(
         `Are you sure you want to delete ${taskIds.length} task(s)?`,
-        'Confirm Delete',
+        '确认删除',
         {
           confirmButtonText: 'Delete',
           cancelButtonText: 'Cancel',
@@ -349,9 +349,9 @@ async function handleBatchAction(action) {
     try {
       await ElMessageBox.confirm(
         `Are you sure you want to delete ${ids.length} task(s)?`,
-        'Confirm Batch Delete',
+        '确认批量删除',
         {
-          confirmButtonText: 'Delete All',
+          confirmButtonText: '删除全部',
           cancelButtonText: 'Cancel',
           type: 'warning'
         }

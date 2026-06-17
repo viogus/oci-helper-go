@@ -1,16 +1,16 @@
 <template>
   <div class="tenants-page">
     <div class="page-header">
-      <h3>Tenants</h3>
+      <h3>{{ $t('tenant.title') }}</h3>
       <el-button type="primary" @click="handleAdd">
-        <el-icon><Plus /></el-icon> Add Tenant
+        <el-icon><Plus /></el-icon> {{ $t('tenant.add') }}
       </el-button>
     </div>
 
     <div class="search-bar">
       <el-input
         v-model="keyword"
-        placeholder="Search tenants by name or region..."
+        :placeholder="$t('tenant.searchPlaceholder')"
         clearable
         @input="handleSearch"
         @clear="handleSearch"
@@ -21,11 +21,11 @@
       </el-input>
     </div>
 
-    <el-table :data="tenants" stripe v-loading="loading" empty-text="No tenants found">
-      <el-table-column prop="id" label="ID" width="70" />
-      <el-table-column prop="name" label="Name" min-width="160" />
-      <el-table-column prop="region" label="Region" width="160" />
-      <el-table-column prop="status" label="Status" width="110">
+    <el-table :data="tenants" stripe v-loading="loading" :empty-text="$t('tenant.notFound')">
+      <el-table-column prop="id" :label="$t('tenant.id')" width="70" />
+      <el-table-column prop="name" :label="$t('tenant.name')" min-width="160" />
+      <el-table-column prop="region" :label="$t('tenant.region')" width="160" />
+      <el-table-column :label="$t('tenant.status')" width="110">
         <template #default="{ row }">
           <el-tag
             :type="row.status === 'active' ? 'success' : row.status === 'error' ? 'danger' : 'info'"
@@ -35,7 +35,7 @@
           </el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="Actions" width="180" fixed="right">
+      <el-table-column :label="$t('tenant.actions')" width="180" fixed="right">
         <template #default="{ row }">
           <el-button
             type="primary"
@@ -45,10 +45,10 @@
             :disabled="syncingId !== null"
             @click="handleSync(row.id)"
           >
-            Sync
+            {{ $t('common.sync') }}
           </el-button>
           <el-button type="danger" link size="small" @click="handleDelete(row.id)">
-            Delete
+            {{ $t('common.delete') }}
           </el-button>
         </template>
       </el-table-column>
@@ -67,17 +67,17 @@
     <!-- Add Tenant Dialog -->
     <el-dialog
       v-model="dialogVisible"
-      title="Add Tenant"
+      :title="$t('tenant.addTitle')"
       width="650px"
       :close-on-click-modal="false"
       @closed="onDialogClosed"
     >
       <el-form label-position="top">
-        <el-form-item label="Name">
-          <el-input v-model="form.name" placeholder="Tenant name" />
+        <el-form-item :label="$t('tenant.displayName')">
+          <el-input v-model="form.name" :placeholder="$t('tenant.displayName')" />
         </el-form-item>
 
-        <el-form-item label="OCI Config (paste to auto-fill)">
+        <el-form-item :label="$t('tenant.ociConfig')">
           <el-input
             type="textarea"
             v-model="configPaste"
@@ -94,12 +94,12 @@ key_file=~/.oci/key.pem"
 
         <el-row :gutter="16">
           <el-col :span="12">
-            <el-form-item label="Tenancy OCID">
+            <el-form-item :label="$t('tenant.tenancyOcid')">
               <el-input v-model="form.tenancyOcid" placeholder="ocid1.tenancy.oc1.." />
             </el-form-item>
           </el-col>
           <el-col :span="12">
-            <el-form-item label="User OCID">
+            <el-form-item :label="$t('tenant.userOcid')">
               <el-input v-model="form.userOcid" placeholder="ocid1.user.oc1.." />
             </el-form-item>
           </el-col>
@@ -107,21 +107,21 @@ key_file=~/.oci/key.pem"
 
         <el-row :gutter="16">
           <el-col :span="12">
-            <el-form-item label="Region">
+            <el-form-item :label="$t('tenant.region')">
               <el-input v-model="form.region" placeholder="us-ashburn-1" />
             </el-form-item>
           </el-col>
           <el-col :span="12">
-            <el-form-item label="Fingerprint">
+            <el-form-item :label="$t('tenant.fingerprint')">
               <el-input v-model="form.fingerprint" placeholder="xx:xx:xx:..." />
             </el-form-item>
           </el-col>
         </el-row>
 
-        <el-form-item label="Private Key (.pem)">
+        <el-form-item :label="$t('tenant.keyFile')">
           <div class="key-section">
-            <el-select v-model="form.keyFile" placeholder="Choose uploaded key..." @change="onKeySelect">
-              <el-option label="Choose uploaded key..." value="" />
+            <el-select v-model="form.keyFile" :placeholder="$t('tenant.selectKey')" @change="onKeySelect">
+              <el-option :label="$t('tenant.selectKey')" value="" />
               <el-option
                 v-for="k in keys"
                 :key="k.name"
@@ -158,15 +158,15 @@ key_file=~/.oci/key.pem"
             @dragleave="dragOver = false"
             @drop.prevent="handleDrop"
           >
-            Drop .pem file here
+            {{ $t('tenant.dragHere') }}
           </div>
           <div v-if="keyInfo" class="key-info">{{ keyInfo }}</div>
         </el-form-item>
       </el-form>
 
       <template #footer>
-        <el-button @click="dialogVisible = false">Cancel</el-button>
-        <el-button type="primary" :loading="saving" @click="handleSave">Save</el-button>
+        <el-button @click="dialogVisible = false">{{ $t('tenant.cancel') }}</el-button>
+        <el-button type="primary" :loading="saving" @click="handleSave">{{ $t('tenant.save') }}</el-button>
       </template>
     </el-dialog>
   </div>
@@ -176,6 +176,8 @@ key_file=~/.oci/key.pem"
 import { ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Search } from '@element-plus/icons-vue'
+import { useI18n } from 'vue-i18n'
+const { t } = useI18n()
 import {
   listTenants,
   createTenant,
@@ -184,6 +186,7 @@ import {
   listKeys,
   uploadKeys
 } from '../api/tenants.js'
+
 
 // --- state ---
 const tenants = ref([])
@@ -301,14 +304,14 @@ function parseConfig() {
   if (m.key_file) {
     const bn = m.key_file.replace(/\\/g, '/').split('/').pop()
     form.keyFile = ''
-    keyInfo.value = 'Will use: ' + bn + ' (upload it if not yet on server)'
+    keyInfo.value = t.value('tenant.willUse') + bn + ' (upload it if not yet on server)'
   }
 }
 
 // --- key management ---
 function onKeySelect() {
   if (form.keyFile) {
-    keyInfo.value = 'Using server key: ' + form.keyFile
+    keyInfo.value = t.value('tenant.serverKey') + form.keyFile
   } else {
     keyInfo.value = ''
   }
@@ -350,7 +353,7 @@ async function uploadKeyFile(file) {
     if (result.saved && result.saved.length) {
       const name = result.saved[0]
       form.keyFile = name
-      keyInfo.value = 'Uploaded: ' + name + ' - will use this key'
+      keyInfo.value = t.value('tenant.uploaded') + name + ' - will use this key'
     }
     await loadKeys()
   } catch (e) {

@@ -2,14 +2,14 @@
   <div class="boot-volumes-page">
     <!-- Page Header -->
     <div class="page-header">
-      <h3>Boot Volumes</h3>
+      <h3>引导卷</h3>
     </div>
 
     <!-- Tenant Filter -->
     <div class="filter-bar">
       <el-select
         v-model="tenantId"
-        placeholder="Select tenant"
+        placeholder="选择租户"
         clearable
         @change="handleTenantChange"
         style="width: 240px"
@@ -24,13 +24,13 @@
     </div>
 
     <!-- Empty State: no tenant selected -->
-    <el-empty v-if="!tenantId" description="Select a tenant to view boot volumes" />
+    <el-empty v-if="!tenantId" description="选择租户查看引导卷" />
 
     <!-- Loading State -->
     <el-skeleton v-else-if="loading" :rows="5" animated />
 
     <!-- Empty State: no volumes -->
-    <el-empty v-else-if="bootVolumes.length === 0" description="No boot volumes found" />
+    <el-empty v-else-if="bootVolumes.length === 0" description="未找到引导卷" />
 
     <!-- Table -->
     <template v-else>
@@ -40,12 +40,12 @@
         style="width: 100%"
       >
         <el-table-column prop="displayName" label="Name" min-width="200" />
-        <el-table-column label="Size (GB)" width="110" align="center">
+        <el-table-column label="容量 (GB)" width="110" align="center">
           <template #default="{ row }">
             {{ row.sizeInGBs ?? row.sizeInMBs ? Math.round(row.sizeInMBs / 1024) : 'N/A' }}
           </template>
         </el-table-column>
-        <el-table-column label="State" width="130" align="center">
+        <el-table-column label="状态" width="130" align="center">
           <template #default="{ row }">
             <el-tag
               :type="stateTagType(row.lifecycleState)"
@@ -56,19 +56,19 @@
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="Instance" min-width="200">
+        <el-table-column label="实例" min-width="200">
           <template #default="{ row }">
             <span v-if="row._instanceName" class="instance-name">{{ row._instanceName }}</span>
             <span v-else style="color: var(--el-text-color-placeholder); font-size: 13px;">&mdash;</span>
           </template>
         </el-table-column>
-        <el-table-column label="Actions" width="220" fixed="right" align="center">
+        <el-table-column label="操作" width="220" fixed="right" align="center">
           <template #default="{ row }">
             <el-button type="primary" size="small" @click="openResizeDialog(row)">
               Resize
             </el-button>
             <el-button type="warning" size="small" @click="handleShrink(row)">
-              Shrink to 47GB
+              缩容到 47GB
             </el-button>
           </template>
         </el-table-column>
@@ -90,7 +90,7 @@
     <!-- Resize Dialog -->
     <el-dialog
       v-model="resizeDialogVisible"
-      title="Resize Boot Volume"
+      title="扩容引导卷"
       width="420px"
       :close-on-click-modal="false"
     >
@@ -98,7 +98,7 @@
         Resize <strong>{{ selectedVolume.displayName }}</strong>
       </p>
       <el-form label-position="top">
-        <el-form-item label="New Size (GB)" required>
+        <el-form-item label="新容量 (GB)" required>
           <el-input-number
             v-model="resizeForm.sizeGB"
             :min="47"
@@ -109,7 +109,7 @@
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="resizeDialogVisible = false">Cancel</el-button>
+        <el-button @click="resizeDialogVisible = false">取消</el-button>
         <el-button type="primary" :loading="resizing" @click="handleResize">
           Save
         </el-button>
@@ -313,8 +313,8 @@ async function handleShrink(volume) {
   if (!instanceId) {
     try {
       await ElMessageBox.alert(
-        'No matching instance found for this boot volume. Ensure the instance is synced and try again.',
-        'Instance Required',
+        '未找到与此引导卷匹配的实例。请确保实例已同步后再试。',
+        '需要实例',
         { confirmButtonText: 'OK', type: 'info' }
       )
     } catch {
@@ -325,8 +325,8 @@ async function handleShrink(volume) {
 
   try {
     await ElMessageBox.confirm(
-      'Shrink boot volume for <strong>' + volume._instanceName + '</strong> to 47 GB? The instance will be stopped during this operation.',
-      'Shrink to 47GB',
+      '缩容引导卷 <strong>' + volume._instanceName + '</strong> to 47 GB? 操作期间实例将被停止。',
+      '缩容到 47GB',
       {
         confirmButtonText: 'Shrink',
         cancelButtonText: 'Cancel',

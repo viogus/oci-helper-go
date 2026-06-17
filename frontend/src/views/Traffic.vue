@@ -4,7 +4,7 @@
     <div class="filter-bar">
       <el-select
         v-model="tenantId"
-        placeholder="Select tenant"
+        placeholder="选择租户"
         @change="onTenantChange"
         style="width: 200px"
       >
@@ -18,7 +18,7 @@
 
       <el-select
         v-model="instanceId"
-        placeholder="Select instance"
+        placeholder="选择实例"
         :disabled="!tenantId"
         style="width: 320px"
         filterable
@@ -34,7 +34,7 @@
       <el-date-picker
         v-model="startTime"
         type="datetime"
-        placeholder="Start time"
+        placeholder="开始时间"
         value-format="x"
         style="width: 200px"
       />
@@ -42,7 +42,7 @@
       <el-date-picker
         v-model="endTime"
         type="datetime"
-        placeholder="End time"
+        placeholder="结束时间"
         value-format="x"
         style="width: 200px"
       />
@@ -76,7 +76,7 @@
     <!-- Empty State -->
     <el-empty
       v-if="!loading && !error && trafficData.length === 0"
-      description="Select a tenant and instance, then click Query"
+      description="选择租户和实例，点击查询"
     />
   </div>
 </template>
@@ -106,7 +106,7 @@ const error = ref('')
 // Chart option
 // ---------------------------------------------------------------------------
 const chartOption = computed(() => ({
-  title: { text: 'Traffic Statistics' },
+  title: { text: '流量统计' },
   tooltip: { trigger: 'axis' },
   legend: { data: ['Bytes In', 'Bytes Out', 'Packets In', 'Packets Out'] },
   grid: { left: 60, right: 60, bottom: 40, top: 60 },
@@ -120,21 +120,21 @@ const chartOption = computed(() => ({
   ],
   series: [
     {
-      name: 'Bytes In',
+      name: '入站字节',
       type: 'line',
       data: trafficData.value.map((d) => d.bytesInPerSec || 0),
       smooth: true,
       itemStyle: { color: '#5470c6' }
     },
     {
-      name: 'Bytes Out',
+      name: '出站字节',
       type: 'line',
       data: trafficData.value.map((d) => d.bytesOutPerSec || 0),
       smooth: true,
       itemStyle: { color: '#91cc75' }
     },
     {
-      name: 'Packets In',
+      name: '入站包数',
       type: 'line',
       yAxisIndex: 1,
       data: trafficData.value.map((d) => d.packetsInPerSec || 0),
@@ -142,7 +142,7 @@ const chartOption = computed(() => ({
       itemStyle: { color: '#fac858' }
     },
     {
-      name: 'Packets Out',
+      name: '出站包数',
       type: 'line',
       yAxisIndex: 1,
       data: trafficData.value.map((d) => d.packetsOutPerSec || 0),

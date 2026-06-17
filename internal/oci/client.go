@@ -543,7 +543,6 @@ func (c *Client) GetMetrics(ctx context.Context, compartmentID, instanceID strin
 			mv := MetricValue{Unit: q.unit}
 			req := monitoring.SummarizeMetricsDataRequest{
 				CompartmentId: common.String(compartmentID),
-				CompartmentIdInSubtree: common.Bool(true),
 				SummarizeMetricsDataDetails: monitoring.SummarizeMetricsDataDetails{
 					Namespace: common.String("oci_computeagent"),
 					Query:     common.String(fmt.Sprintf(`%s[1m]{instanceId="%s"}.mean()`, q.name, instanceID)),
@@ -647,7 +646,6 @@ func (c *Client) GetVNICTtraffic(ctx context.Context, compartmentID, vnicID stri
 	for _, name := range metricNames {
 		req := monitoring.SummarizeMetricsDataRequest{
 			CompartmentId: common.String(compartmentID),
-			CompartmentIdInSubtree: common.Bool(true),
 			SummarizeMetricsDataDetails: monitoring.SummarizeMetricsDataDetails{
 				Namespace: common.String(namespace),
 				Query:     common.String(fmt.Sprintf("%s%s{resourceId=\"%s\"}.mean()", name, intervalStr, vnicID)),

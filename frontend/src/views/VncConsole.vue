@@ -1,54 +1,53 @@
 <template>
   <div>
-    <h3>Cloud Shell / VNC Console</h3>
+    <h3>{{ $t('vnc.title') }}</h3>
     <el-card>
       <el-form :model="form" label-width="100px">
-        <el-form-item label="Tenant">
-          <el-select v-model="form.tenantId" placeholder="Select tenant" @change="onTenantChange" style="width:100%">
+        <el-form-item :label="$t('vnc.selectTenant')">
+          <el-select v-model="form.tenantId" :placeholder="$t('vnc.selectTenant')" @change="onTenantChange" style="width:100%">
             <el-option v-for="t in tenants" :key="t.id" :label="t.name" :value="t.id" />
           </el-select>
         </el-form-item>
-        <el-form-item label="Instance">
-          <el-select v-model="form.instanceId" placeholder="Select instance" :disabled="!form.tenantId" filterable style="width:100%">
+        <el-form-item :label="$t('vnc.selectInstance')">
+          <el-select v-model="form.instanceId" :placeholder="$t('vnc.selectInstance')" :disabled="!form.tenantId" filterable style="width:100%">
             <el-option v-for="inst in instances" :key="inst.id" :label="inst.name+' ('+inst.state+')'" :value="inst.id" />
           </el-select>
         </el-form-item>
-        <el-form-item label="SSH Key">
-          <el-select v-model="form.sshKeyId" placeholder="Select SSH key" :disabled="!form.tenantId" style="width:100%">
+        <el-form-item :label="$t('vnc.selectSSHKey')">
+          <el-select v-model="form.sshKeyId" :placeholder="$t('vnc.selectSSHKey')" :disabled="!form.tenantId" style="width:100%">
             <el-option v-for="k in sshKeys" :key="k.id" :label="k.name + ' (' + (k.fingerprint||'').substring(0,16) + '...)'" :value="k.id" />
           </el-select>
         </el-form-item>
         <el-form-item>
-          <el-button type="primary" @click="startSession" :loading="loading" :disabled="!canStart">Start Console</el-button>
-          <el-button type="danger" @click="stopSession" :loading="stopping" :disabled="!session.active">Stop Console</el-button>
+          <el-button type="primary" @click="startSession" :loading="loading" :disabled="!canStart">{{ $t('vnc.startConsole') }}</el-button>
+          <el-button type="danger" @click="stopSession" :loading="stopping" :disabled="!session.active">{{ $t('vnc.stopConsole') }}</el-button>
         </el-form-item>
       </el-form>
 
       <el-alert v-if="error" :title="error" type="error" show-icon :closable="true" @close="error=''" style="margin-bottom:12px" />
 
       <div v-if="session.active" style="margin-top:16px">
-        <el-descriptions title="Session" :column="1" border>
-          <el-descriptions-item label="Connection URL">
+        <el-descriptions :column="1" border>
+          <el-descriptions-item :label="$t('vnc.connectionURL')">
             <code style="word-break:break-all">{{ session.connectionString }}</code>
           </el-descriptions-item>
-          <el-descriptions-item label="Console ID">
+          <el-descriptions-item :label="$t('vnc.consoleID')">
             <code style="word-break:break-all">{{ session.consoleId }}</code>
           </el-descriptions-item>
-          <el-descriptions-item label="Fingerprint">
+          <el-descriptions-item :label="$t('vnc.fingerprint')">
             <code>{{ session.fingerprint }}</code>
           </el-descriptions-item>
-          <el-descriptions-item label="Host Key FP">
+          <el-descriptions-item :label="$t('vnc.hostKeyFP')">
             <code>{{ session.serviceHostKeyFp }}</code>
           </el-descriptions-item>
         </el-descriptions>
 
         <p style="color:#909399;font-size:13px;margin-top:12px">
-          VNC console requires websockify proxy (port 6080). Use the connection URL above with your preferred client,
-          or configure a websockify proxy to bridge it.
+          {{ $t('vnc.websockifyNotice') }}
         </p>
 
         <el-button type="primary" @click="openConsole">
-          Open Console (WebSocket)
+          {{ $t('vnc.openConsole') }}
         </el-button>
       </div>
     </el-card>

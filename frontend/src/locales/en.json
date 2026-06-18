@@ -138,5 +138,119 @@
     "sync": "Sync",
     "enabled": "Enabled",
     "disabled": "Disabled"
+  },
+  "vnc": {
+    "title": "VNC Console",
+    "selectTenant": "Tenant",
+    "selectInstance": "Instance",
+    "selectSSHKey": "SSH Key",
+    "startConsole": "Start Console",
+    "stopConsole": "Stop Console",
+    "connectionURL": "Connection URL",
+    "consoleID": "Console ID",
+    "fingerprint": "Fingerprint",
+    "hostKeyFP": "Host Key FP",
+    "websockifyNotice": "VNC console requires websockify proxy (port 6080). Use the connection URL above with your preferred client, or configure a websockify proxy to bridge it.",
+    "openConsole": "Open Console (WebSocket)"
+  },
+  "metrics": {
+    "title": "Instance Metrics",
+    "metricsFor": "Metrics for",
+    "failedToLoad": "Failed to load metrics.",
+    "noData": "No data",
+    "noMetricsAvailable": "No metrics data available",
+    "cpuUtilization": "CPU Utilization",
+    "memoryUtilization": "Memory Utilization",
+    "networkIO": "Network I/O",
+    "diskIO": "Disk I/O",
+    "close": "Close",
+    "retry": "Retry"
+  },
+  "settings": {
+    "title": "Settings",
+    "password": "Change Password",
+    "currentPassword": "Current Password",
+    "newPassword": "New Password",
+    "confirmPassword": "Confirm Password",
+    "updatePassword": "Update Password",
+    "mfa": "MFA / Two-Factor",
+    "mfaEnabled": "MFA Enabled",
+    "mfaDisabled": "MFA Disabled",
+    "enableMFA": "Enable MFA",
+    "disableMFA": "Disable MFA",
+    "scanQR": "Scan this QR code with your authenticator app",
+    "enterCode": "Enter 6-digit code from your authenticator",
+    "verify": "Verify",
+    "account": "Account",
+    "username": "Username",
+    "passwordUpdated": "Password updated successfully",
+    "passwordsDontMatch": "Passwords do not match"
+  },
+  "cloudflare": {
+    "title": "Cloudflare",
+    "addConfig": "Add Config",
+    "searchPlaceholder": "Search...",
+    "notFound": "No configs found",
+    "name": "Name",
+    "zoneId": "Zone ID",
+    "status": "Status",
+    "actions": "Actions",
+    "enabled": "Enabled",
+    "disabled": "Disabled",
+    "addTitle": "Add Cloudflare Config",
+    "configName": "Config Name",
+    "token": "API Token",
+    "email": "Email",
+    "apiKey": "API Key",
+    "zoneID": "Zone ID",
+    "cancel": "Cancel",
+    "save": "Save"
+  },
+  "aiChat": {
+    "title": "AI Chat",
+    "streamingMode": "Streaming",
+    "searchMode": "Search",
+    "typing": "Typing...",
+    "inputPlaceholder": "Ask about your instances, tenants, or OCI resources...",
+    "send": "Send",
+    "clearConversation": "Clear Conversation"
+  },
+  "logs": {
+    "title": "Logs",
+    "refresh": "Refresh",
+    "autoRefresh": "Auto Refresh",
+    "noLogs": "No log entries"
+  },
+  "audit": {
+    "title": "Audit Logs",
+    "searchPlaceholder": "Search...",
+    "notFound": "No audit logs found",
+    "id": "ID",
+    "tenantId": "Tenant ID",
+    "action": "Action",
+    "detail": "Detail",
+    "ip": "IP",
+    "createdAt": "Time"
+  },
+  "backup": {
+    "title": "Backup & Restore",
+    "backup": "Create Backup",
+    "restore": "Restore from File",
+    "download": "Download",
+    "description": "Backup all tenants, instances, and configuration to a JSON file."
+  },
+  "inMemoryTasks": {
+    "title": "In-Memory Tasks",
+    "notFound": "No active in-memory tasks"
+  },
+  "ipInfo": {
+    "title": "IP Info",
+    "searchPlaceholder": "Enter IP address...",
+    "query": "Query",
+    "ipAddress": "IP Address",
+    "country": "Country",
+    "region": "Region",
+    "city": "City",
+    "isp": "ISP"
   }
 }

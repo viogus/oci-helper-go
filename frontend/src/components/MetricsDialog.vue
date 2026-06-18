@@ -1,7 +1,7 @@
 <template>
   <el-dialog
     v-model="show"
-    title="Instance Metrics"
+    :title="$t('metrics.title')"
     width="700px"
     :close-on-click-modal="false"
     class="metrics-dialog"
@@ -11,7 +11,7 @@
     <!-- Header -->
     <div class="metrics-dialog__header">
       <div class="metrics-dialog__title">
-        Metrics for <strong>{{ instance?.name }}</strong>
+        $t('metrics.metricsFor') + ' <strong>'{{ instance?.name }}</strong>
         <span class="metrics-dialog__shape">{{ instance?.shape }}</span>
       </div>
       <div class="metrics-dialog__toolbar">
@@ -59,8 +59,8 @@
     >
       <template #default>
         <p class="metrics-dialog__error-hint">
-          Failed to load metrics.
-          <el-button size="small" type="primary" @click="refresh">Retry</el-button>
+          {{ $t('metrics.failedToLoad') }}
+          <el-button size="small" type="primary" @click="refresh">{{ $t('metrics.retry') }}</el-button>
         </p>
       </template>
     </el-alert>
@@ -68,7 +68,7 @@
     <!-- Charts -->
     <div v-else-if="metrics" class="metrics-dialog__grid">
       <div class="metrics-dialog__card">
-        <h4 class="metrics-dialog__card-title">CPU Utilization</h4>
+        <h4 class="metrics-dialog__card-title">{{ $t('metrics.cpuUtilization') }}</h4>
         <div class="metrics-dialog__card-body">
           <template v-if="metrics.cpu?.error">
             <el-alert :title="metrics.cpu.error" type="warning" :closable="false" show-icon />
@@ -76,11 +76,11 @@
           <template v-else-if="metrics.cpu?.value != null">
             <VChart :option="cpuGauge" class="gauge-chart" autoresize />
           </template>
-          <el-empty v-else description="No data" :image-size="60" />
+          <el-empty v-else :description="$t('metrics.noData')" :image-size="60" />
         </div>
       </div>
       <div class="metrics-dialog__card">
-        <h4 class="metrics-dialog__card-title">Memory Utilization</h4>
+        <h4 class="metrics-dialog__card-title">{{ $t('metrics.memoryUtilization') }}</h4>
         <div class="metrics-dialog__card-body">
           <template v-if="metrics.memory?.error">
             <el-alert :title="metrics.memory.error" type="warning" :closable="false" show-icon />
@@ -92,23 +92,23 @@
         </div>
       </div>
       <div class="metrics-dialog__card metrics-dialog__card--wide">
-        <h4 class="metrics-dialog__card-title">Network I/O</h4>
+        <h4 class="metrics-dialog__card-title">{{ $t('metrics.networkIO') }}</h4>
         <div class="metrics-dialog__card-body">
           <VChart :option="networkBar" class="bar-chart" autoresize />
         </div>
       </div>
       <div class="metrics-dialog__card metrics-dialog__card--wide">
-        <h4 class="metrics-dialog__card-title">Disk I/O</h4>
+        <h4 class="metrics-dialog__card-title">{{ $t('metrics.diskIO') }}</h4>
         <div class="metrics-dialog__card-body">
           <VChart :option="diskBar" class="bar-chart" autoresize />
         </div>
       </div>
     </div>
 
-    <el-empty v-else description="No metrics data available" :image-size="80" />
+    <el-empty v-else :description="$t('metrics.noMetricsAvailable')" :image-size="80" />
 
     <template #footer>
-      <el-button @click="show = false">Close</el-button>
+      <el-button @click="show = false">{{ $t('metrics.close') }}</el-button>
     </template>
   </el-dialog>
 </template>

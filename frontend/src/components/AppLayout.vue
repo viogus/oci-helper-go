@@ -145,6 +145,7 @@ const { locale } = useI18n()
 function setLocale(lang) {
   locale.value = lang
   localStorage.setItem('locale', lang)
+  document.documentElement.lang = lang === 'zh-CN' ? 'zh-CN' : 'en'
 }
 
 async function handleLogout() {

@@ -5,14 +5,14 @@
       <div class="login-card">
         <div class="login-header">
           <div class="login-logo">O</div>
-          <h1>oci-helper</h1>
-          <p>Oracle Cloud Infrastructure Manager</p>
+          <h1>{{ $t('app.title') }}</h1>
+          <p>{{ $t('app.subtitle') }}</p>
         </div>
         <el-form @submit.prevent="handleLogin" class="login-form">
           <el-form-item>
             <el-input
               v-model="username"
-              placeholder="Username"
+              :placeholder="$t('login.username')"
               size="large"
               :prefix-icon="User"
             />
@@ -22,7 +22,7 @@
               v-model="password"
               type="password"
               show-password
-              placeholder="Password"
+              :placeholder="$t('login.password')"
               size="large"
               :prefix-icon="Lock"
             />
@@ -30,7 +30,7 @@
           <el-form-item v-if="needMfa">
             <el-input
               v-model="totp"
-              placeholder="6-digit MFA code"
+              :placeholder="$t('login.mfaCode')"
               maxlength="6"
               size="large"
             />
@@ -38,14 +38,13 @@
           <div v-if="error" class="login-error">{{ error }}</div>
           <el-form-item>
             <el-button type="primary" native-type="submit" :loading="loading" class="login-btn" size="large">
-              {{ needMfa ? 'Verify' : 'Sign In' }}
+              {{ needMfa ? $t('login.verify') : $t('login.loginBtn') }}
             </el-button>
           </el-form-item>
         </el-form>
         <div class="login-footer">
           <el-button link type="primary" @click="googleLogin" :disabled="loading">
-            
-            Sign in with Google
+            {{ $t('login.googleLogin') }}
           </el-button>
         </div>
       </div>
@@ -57,7 +56,9 @@
 import { ref } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '../stores/auth.js'
-import { User, Lock, Chrome } from '@element-plus/icons-vue'
+import { User, Lock } from '@element-plus/icons-vue'
+import { useI18n } from 'vue-i18n'
+const { t } = useI18n()
 
 const router = useRouter()
 const route = useRoute()
@@ -81,12 +82,12 @@ async function handleLogin() {
     if (status === 401) {
       if (!needMfa.value) {
         needMfa.value = true
-        error.value = 'MFA code required'
+        error.value = t.value('login.mfaRequired')
       } else {
-        error.value = 'Invalid credentials or MFA code'
+        error.value = t.value('login.invalidCredentials')
       }
     } else {
-      error.value = e.response?.data?.error || 'Login failed'
+      error.value = e.response?.data?.error || t.value('login.loginFailed')
     }
   }
   loading.value = false

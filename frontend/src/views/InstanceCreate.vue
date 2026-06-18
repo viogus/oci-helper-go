@@ -1,6 +1,6 @@
 <template>
   <div class="create-instance-page">
-    <h3>Create Instance</h3>
+    <h3>创建实例</h3>
 
     <el-form
       ref="formRef"
@@ -9,10 +9,10 @@
       @submit.prevent="handleLaunch"
     >
       <!-- Tenant Selector -->
-      <el-form-item label="Tenant" required>
+      <el-form-item label="租户" required>
         <el-select
           v-model="form.tenantId"
-          placeholder="Select Tenant..."
+          placeholder="选择租户..."
           @change="onTenantChange"
           :loading="loadingTenants"
           style="width: 400px"
@@ -27,19 +27,19 @@
       </el-form-item>
 
       <!-- Instance Name -->
-      <el-form-item label="Instance Name" required>
+      <el-form-item label="实例名称" required>
         <el-input
           v-model="form.displayName"
-          placeholder="Instance Name"
+          placeholder="实例名称"
           style="width: 400px"
         />
       </el-form-item>
 
       <!-- Availability Domain -->
-      <el-form-item label="Availability Domain" required>
+      <el-form-item label="可用性域" required>
         <el-select
           v-model="form.availabilityDomain"
-          placeholder="Select AD..."
+          placeholder="选择可用性域..."
           :loading="loadingADs"
           :disabled="!form.tenantId"
           style="width: 400px"
@@ -54,10 +54,10 @@
       </el-form-item>
 
       <!-- Image -->
-      <el-form-item label="Image" required>
+      <el-form-item label="镜像" required>
         <el-select
           v-model="form.imageId"
-          placeholder="Select Image..."
+          placeholder="选择镜像..."
           :loading="loadingImages"
           :disabled="!form.tenantId"
           style="width: 400px"
@@ -73,10 +73,10 @@
       </el-form-item>
 
       <!-- Shape -->
-      <el-form-item label="Shape" required>
+      <el-form-item label="规格" required>
         <el-select
           v-model="form.shape"
-          placeholder="Select Shape..."
+          placeholder="选择规格..."
           :loading="loadingShapes"
           :disabled="!form.imageId"
           style="width: 400px"
@@ -94,7 +94,7 @@
       <el-form-item label="VCN">
         <el-select
           v-model="form.vcnId"
-          placeholder="Select VCN..."
+          placeholder="选择 VCN..."
           :loading="loadingVCNs"
           :disabled="!form.tenantId"
           style="width: 400px"
@@ -110,10 +110,10 @@
       </el-form-item>
 
       <!-- Subnet -->
-      <el-form-item label="Subnet" required>
+      <el-form-item label="子网" required>
         <el-select
           v-model="form.subnetId"
-          placeholder="Select Subnet..."
+          placeholder="选择子网..."
           :loading="loadingSubnets"
           :disabled="!form.vcnId"
           style="width: 400px"
@@ -128,7 +128,7 @@
       </el-form-item>
 
       <!-- Boot Volume Size -->
-      <el-form-item label="Boot Volume (GB)">
+      <el-form-item label="引导卷 (GB)">
         <el-input-number
           v-model="form.bootVolumeSizeGB"
           :min="50"
@@ -137,7 +137,7 @@
           style="width: 180px"
         />
         <span style="margin-left: 8px; color: var(--el-text-color-secondary); font-size: 13px;">
-          (default: 50)
+          (默认: 50)
         </span>
       </el-form-item>
 
@@ -215,7 +215,7 @@ async function loadADs() {
     const res = await get('/availability-domains', { tenant_id: form.tenantId })
     ads.value = Array.isArray(res) ? res : []
   } catch (e) {
-    ElMessage.error('Failed to load availability domains')
+    ElMessage.error('无法加载可用性域')
     ads.value = []
   }
   loadingADs.value = false
@@ -228,7 +228,7 @@ async function loadImages() {
     const res = await get('/images', { tenant_id: form.tenantId })
     images.value = Array.isArray(res) ? res : []
   } catch (e) {
-    ElMessage.error('Failed to load images')
+    ElMessage.error('无法加载镜像')
     images.value = []
   }
   loadingImages.value = false
@@ -244,7 +244,7 @@ async function loadShapes() {
     })
     shapes.value = Array.isArray(res) ? res : []
   } catch (e) {
-    ElMessage.error('Failed to load shapes')
+    ElMessage.error('无法加载规格')
     shapes.value = []
   }
   loadingShapes.value = false
@@ -257,7 +257,7 @@ async function loadVCNs() {
     const res = await get('/vcns', { tenant_id: form.tenantId })
     vcns.value = Array.isArray(res) ? res : []
   } catch (e) {
-    ElMessage.error('Failed to load VCNs')
+    ElMessage.error('无法加载 VCN')
     vcns.value = []
   }
   loadingVCNs.value = false
@@ -273,7 +273,7 @@ async function loadSubnets() {
     })
     subnets.value = Array.isArray(res) ? res : []
   } catch (e) {
-    ElMessage.error('Failed to load subnets')
+    ElMessage.error('无法加载子网')
     subnets.value = []
   }
   loadingSubnets.value = false
@@ -317,7 +317,7 @@ async function onVCNChange() {
 
 async function handleLaunch() {
   if (!form.tenantId || !form.displayName || !form.availabilityDomain || !form.imageId || !form.shape || !form.subnetId) {
-    ElMessage.warning('Please fill in all required fields')
+    ElMessage.warning('请填写所有必填字段')
     return
   }
 
@@ -335,10 +335,10 @@ async function handleLaunch() {
       body.bootVolumeSizeGB = form.bootVolumeSizeGB
     }
     await post('/instances', body)
-    ElMessage.success('Instance launch request submitted')
+    ElMessage.success('实例创建请求已提交')
     router.push('/instances')
   } catch (e) {
-    ElMessage.error(e.response?.data?.error || 'Failed to launch instance')
+    ElMessage.error(e.response?.data?.error || '创建实例失败')
   }
   launching.value = false
 }

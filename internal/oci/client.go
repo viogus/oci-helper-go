@@ -626,6 +626,8 @@ func intervalForDuration(d time.Duration) (string, time.Duration) {
 
 func (c *Client) GetVNICTtraffic(ctx context.Context, compartmentID, vnicID string, startTime, endTime time.Time) ([]TrafficDataPoint, error) {
 	namespace := "oci_vcn"
+	log.Printf("========== GetVNICTtraffic ==========")
+	log.Printf("[GetVNICTtraffic] vnic=%s compartment=%s start=%s end=%s range=%v", vnicID, compartmentID, startTime.Format(time.RFC3339), endTime.Format(time.RFC3339), endTime.Sub(startTime))
 
 	results := make(map[string][]float64)
 	metricNames := []string{"VnicBytesIn", "VnicBytesOut", "VnicPacketsIn", "VnicPacketsOut"}
@@ -635,6 +637,7 @@ func (c *Client) GetVNICTtraffic(ctx context.Context, compartmentID, vnicID stri
 	log.Printf("[GetVNICTtraffic] vnic=%s compartment=%s range=%v interval=%s step=%v", vnicID, compartmentID, totalDuration, intervalStr, step)
 
 	for _, name := range metricNames {
+		query := fmt.Sprintf("%s%s{resourceId=\"%s\"}.mean()", name, intervalStr, vnicID)
 		req := monitoring.SummarizeMetricsDataRequest{
 			CompartmentId: common.String(compartmentID),
 			CompartmentIdInSubtree: common.Bool(compartmentID == c.tenant.TenancyOCID),
@@ -645,6 +648,7 @@ func (c *Client) GetVNICTtraffic(ctx context.Context, compartmentID, vnicID stri
 				EndTime:   &common.SDKTime{Time: endTime},
 			},
 		}
+		log.Printf("[GetVNICTtraffic] query=%s compartment=%s", query, compartmentID)
 		resp, err := c.monitoring.SummarizeMetricsData(ctx, req)
 		if err != nil {
 			return nil, fmt.Errorf("%s query: %w", name, err)
@@ -660,6 +664,14 @@ func (c *Client) GetVNICTtraffic(ctx context.Context, compartmentID, vnicID stri
 			}
 		}
 		log.Printf("[GetVNICTtraffic] %s items=%d datapoints=%d", name, len(resp.Items), len(values))
+		if len(resp.Items) > 0 {
+			first := resp.Items[0]
+			log.Printf("[GetVNICTtraffic] %s first item: name=%s, dims=%v, aggLen=%d",
+				name,
+				pointerToString(first.Name),
+				first.Dimensions,
+				len(first.AggregatedDatapoints))
+		}
 		results[name] = values
 	}
 
@@ -691,6 +703,14 @@ func (c *Client) GetVNICTtraffic(ctx context.Context, compartmentID, vnicID stri
 	}
 	log.Printf("[GetVNICTtraffic] returned %d data points (step=%v)", len(data), step)
 	return data, nil
+}
+
+// helper for nil-safe pointer-to-string logging
+func pointerToString(p *string) string {
+	if p == nil {
+		return "<nil>"
+	}
+	return *p
 }
 
 // --- Security Rules ---

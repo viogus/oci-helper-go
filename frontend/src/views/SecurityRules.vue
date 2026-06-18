@@ -274,8 +274,8 @@ async function loadVCNs() {
   rules.value = []
   total.value = 0
   try {
-    const res = await get('/vcns', { tenant_id: tenantId.value })
-    vcns.value = Array.isArray(res) ? res : []
+	    const res = await get('/vcns', { tenant_id: tenantId.value })
+	    vcns.value = Array.isArray(res?.data) ? res.data : []
   } catch (e) {
     ElMessage.error('Failed to load VCNs')
     vcns.value = []

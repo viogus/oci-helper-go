@@ -1,10 +1,10 @@
 <template>
   <div class="in-memory-tasks-page">
-    <h3>In-Memory Tasks</h3>
+    <h3>{{ $t('task.title') }}</h3>
 
     <el-tabs v-model="activeTab" @tab-change="onTabChange">
       <!-- ── Change IP Tasks Tab ─────────────────────────────────── -->
-      <el-tab-pane label="Change IP Tasks" name="change-ip">
+      <el-tab-pane :label="$t('task.changeIPTab')" name="change-ip">
         <div class="toolbar">
           <el-button type="primary" :icon="Plus" @click="openAddDialog">
             Add Task
@@ -23,55 +23,55 @@
           row-key="id"
           element-loading-text="Loading tasks..."
         >
-          <el-table-column label="ID" width="100" align="center">
+          <el-table-column :label="$t('task.id')" width="100" align="center">
             <template #default="{ row }">
               {{ row.id ? row.id.slice(0, 8) : '-' }}
             </template>
           </el-table-column>
-          <el-table-column label="Username" min-width="140">
+          <el-table-column :label="$t('task.username')" min-width="140">
             <template #default="{ row }">
               {{ row.username || '-' }}
             </template>
           </el-table-column>
-          <el-table-column label="Region" width="150">
+          <el-table-column :label="$t('task.region')" width="150">
             <template #default="{ row }">
               {{ row.region || '-' }}
             </template>
           </el-table-column>
-          <el-table-column label="Instance ID" min-width="200">
+          <el-table-column :label="$t('task.instanceId')" min-width="200">
             <template #default="{ row }">
               <el-tooltip :content="row.instance_id || ''" placement="top" :show-after="300">
                 <span class="mono-text">{{ row.instance_id ? row.instance_id.slice(0, 24) + '...' : '-' }}</span>
               </el-tooltip>
             </template>
           </el-table-column>
-          <el-table-column label="CIDR List" min-width="160">
+          <el-table-column :label="$t('task.cidrList')" min-width="160">
             <template #default="{ row }">
               <span class="mono-text">{{ row.cidr_list || '-' }}</span>
             </template>
           </el-table-column>
-          <el-table-column label="Attempts" width="90" align="center">
+          <el-table-column :label="$t('task.attempts')" width="90" align="center">
             <template #default="{ row }">
               <el-tag size="small" effect="plain">{{ row.attempts ?? 0 }}</el-tag>
             </template>
           </el-table-column>
-          <el-table-column label="Status" width="110" align="center">
+          <el-table-column :label="$t('task.status')" width="110" align="center">
             <template #default="{ row }">
               <el-tag
                 :type="row.paused ? 'warning' : 'success'"
                 effect="dark"
                 size="small"
               >
-                {{ row.paused ? 'Paused' : 'Running' }}
+                {{ row.paused ? $t('task.paused') : $t('task.running') }}
               </el-tag>
             </template>
           </el-table-column>
-          <el-table-column label="Created At" width="170" align="center">
+          <el-table-column :label="$t('task.created')" width="170" align="center">
             <template #default="{ row }">
               {{ formatDate(row.created_at) }}
             </template>
           </el-table-column>
-          <el-table-column label="Actions" width="200" fixed="right" align="center">
+          <el-table-column :label="$t('task.actions')" width="200" fixed="right" align="center">
             <template #default="{ row }">
               <el-button
                 v-if="!row.paused"
@@ -100,11 +100,11 @@
           </el-table-column>
         </el-table>
 
-        <el-empty v-if="!loading && changeIPTasks.length === 0" description="No active tasks" />
+        <el-empty v-if="!loading && changeIPTasks.length === 0" :description="$t('task.noTasks')" />
       </el-tab-pane>
 
       <!-- ── Update Config Tasks Tab ─────────────────────────────── -->
-      <el-tab-pane label="Update Config Tasks" name="update-cfg">
+      <el-tab-pane :label="$t('task.updateCfgTab')" name="update-cfg">
         <div class="toolbar">
           <el-button type="primary" :icon="Plus" @click="openAddDialog">
             Add Task
@@ -123,29 +123,29 @@
           row-key="id"
           element-loading-text="Loading tasks..."
         >
-          <el-table-column label="ID" width="100" align="center">
+          <el-table-column :label="$t('task.id')" width="100" align="center">
             <template #default="{ row }">
               {{ row.id ? row.id.slice(0, 8) : '-' }}
             </template>
           </el-table-column>
-          <el-table-column label="Username" min-width="140">
+          <el-table-column :label="$t('task.username')" min-width="140">
             <template #default="{ row }">
               {{ row.username || '-' }}
             </template>
           </el-table-column>
-          <el-table-column label="Region" width="150">
+          <el-table-column :label="$t('task.region')" width="150">
             <template #default="{ row }">
               {{ row.region || '-' }}
             </template>
           </el-table-column>
-          <el-table-column label="Instance ID" min-width="200">
+          <el-table-column :label="$t('task.instanceId')" min-width="200">
             <template #default="{ row }">
               <el-tooltip :content="row.instance_id || ''" placement="top" :show-after="300">
                 <span class="mono-text">{{ row.instance_id ? row.instance_id.slice(0, 24) + '...' : '-' }}</span>
               </el-tooltip>
             </template>
           </el-table-column>
-          <el-table-column label="Config" min-width="170">
+          <el-table-column :label="$t('task.config')" min-width="170">
             <template #default="{ row }">
               <span v-if="row.ocpus || row.memory || row.shape" class="mono-text">
                 {{ row.ocpus ?? '-' }} OCPU / {{ row.memory ?? '-' }} GB{{ row.shape ? ' / ' + row.shape : '' }}
@@ -153,28 +153,28 @@
               <span v-else>-</span>
             </template>
           </el-table-column>
-          <el-table-column label="Attempts" width="90" align="center">
+          <el-table-column :label="$t('task.attempts')" width="90" align="center">
             <template #default="{ row }">
               <el-tag size="small" effect="plain">{{ row.attempts ?? 0 }}</el-tag>
             </template>
           </el-table-column>
-          <el-table-column label="Status" width="110" align="center">
+          <el-table-column :label="$t('task.status')" width="110" align="center">
             <template #default="{ row }">
               <el-tag
                 :type="row.paused ? 'warning' : 'success'"
                 effect="dark"
                 size="small"
               >
-                {{ row.paused ? 'Paused' : 'Running' }}
+                {{ row.paused ? $t('task.paused') : $t('task.running') }}
               </el-tag>
             </template>
           </el-table-column>
-          <el-table-column label="Created At" width="170" align="center">
+          <el-table-column :label="$t('task.created')" width="170" align="center">
             <template #default="{ row }">
               {{ formatDate(row.created_at) }}
             </template>
           </el-table-column>
-          <el-table-column label="Actions" width="200" fixed="right" align="center">
+          <el-table-column :label="$t('task.actions')" width="200" fixed="right" align="center">
             <template #default="{ row }">
               <el-button
                 v-if="!row.paused"
@@ -203,24 +203,24 @@
           </el-table-column>
         </el-table>
 
-        <el-empty v-if="!loading && updateCfgTasks.length === 0" description="No active tasks" />
+        <el-empty v-if="!loading && updateCfgTasks.length === 0" :description="$t('task.noTasks')" />
       </el-tab-pane>
     </el-tabs>
 
     <!-- ── Add Task Dialog ────────────────────────────────────────── -->
     <el-dialog
       v-model="dialogVisible"
-      :title="activeTab === 'change-ip' ? 'Add Change IP Task' : 'Add Update Config Task'"
+      :title="activeTab === 'change-ip' ? $t$t('task.addTitle') : $t$t('task.addCfgTitle')"
       width="550px"
       :close-on-click-modal="false"
       @closed="onDialogClosed"
     >
       <el-form label-position="top">
         <!-- Tenant selector -->
-        <el-form-item label="Tenant">
+        <el-form-item :label="$t('task.tenant')">
           <el-select
             v-model="form.tenant_id"
-            placeholder="Select tenant"
+            :placeholder="$t('task.selectTenant')"
             style="width: 100%"
             @change="onTenantChange"
           >
@@ -234,10 +234,10 @@
         </el-form-item>
 
         <!-- Instance selector -->
-        <el-form-item label="Instance">
+        <el-form-item :label="$t('task.instance')">
           <el-select
             v-model="form.instance_id"
-            placeholder="Select instance"
+            :placeholder="$t('task.selectInstance')"
             filterable
             :disabled="!form.tenant_id"
             :loading="loadingInstances"
@@ -254,10 +254,10 @@
 
         <!-- Change IP fields -->
         <template v-if="activeTab === 'change-ip'">
-          <el-form-item label="CIDR List (optional)">
+          <el-form-item :label="$t('task.cidrList')">
             <el-input
               v-model="form.cidr_list"
-              placeholder="e.g. 10.0.0.0/8, 192.168.0.0/16"
+              :placeholder="$t('task.cidrHint')"
               style="width: 100%"
             />
           </el-form-item>
@@ -265,7 +265,7 @@
 
         <!-- Update Config fields -->
         <template v-if="activeTab === 'update-cfg'">
-          <el-form-item label="OCPU">
+          <el-form-item :label="$t('task.ocpu')">
             <el-input-number
               v-model="form.ocpus"
               :min="0"
@@ -274,7 +274,7 @@
               style="width: 180px"
             />
           </el-form-item>
-          <el-form-item label="Memory (GB)">
+          <el-form-item :label="$t('task.memory')">
             <el-input-number
               v-model="form.memory"
               :min="0"
@@ -284,10 +284,10 @@
               style="width: 180px"
             />
           </el-form-item>
-          <el-form-item label="Shape (optional)">
+          <el-form-item :label="$t('task.shape')">
             <el-input
               v-model="form.shape"
-              placeholder="e.g. VM.Standard.E5.Flex"
+              :placeholder="$t('task.shapeHint')"
               style="width: 100%"
             />
           </el-form-item>
@@ -295,7 +295,7 @@
       </el-form>
 
       <template #footer>
-        <el-button @click="dialogVisible = false">Cancel</el-button>
+        <el-button @click="dialogVisible = false">{{ $t('task.cancel') }}</el-button>
         <el-button type="primary" :loading="addLoading" @click="handleAdd">
           Add
         </el-button>
@@ -493,8 +493,8 @@ async function handleAction(taskIds, action, taskType) {
   if (action === 'delete') {
     try {
       await ElMessageBox.confirm(
-        'Are you sure you want to delete this task?',
-        'Confirm Delete',
+        ('task.confirmDelete'),
+        ('task.confirmTitle'),
         {
           confirmButtonText: 'Delete',
           cancelButtonText: 'Cancel',

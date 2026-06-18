@@ -2,14 +2,14 @@
   <div class="boot-volumes-page">
     <!-- Page Header -->
     <div class="page-header">
-      <h3>引导卷</h3>
+      <h3>{{ $t('bootVolume.title') }}</h3>
     </div>
 
     <!-- Tenant Filter -->
     <div class="filter-bar">
       <el-select
         v-model="tenantId"
-        placeholder="选择租户"
+        :placeholder="$t('bootVolume.selectTenant')"
         clearable
         @change="handleTenantChange"
         style="width: 240px"
@@ -24,13 +24,13 @@
     </div>
 
     <!-- Empty State: no tenant selected -->
-    <el-empty v-if="!tenantId" description="选择租户查看引导卷" />
+    <el-empty v-if="!tenantId" :description="$t('bootVolume.viewVolumes')" />
 
     <!-- Loading State -->
     <el-skeleton v-else-if="loading" :rows="5" animated />
 
     <!-- Empty State: no volumes -->
-    <el-empty v-else-if="bootVolumes.length === 0" description="未找到引导卷" />
+    <el-empty v-else-if="bootVolumes.length === 0" :description="$t('bootVolume.notFound')" />
 
     <!-- Table -->
     <template v-else>
@@ -39,13 +39,13 @@
         stripe
         style="width: 100%"
       >
-        <el-table-column prop="displayName" label="Name" min-width="200" />
-        <el-table-column label="容量 (GB)" width="110" align="center">
+        <el-table-column prop="displayName" :label="$t('bootVolume.name')" min-width="200" />
+        <el-table-column :label="$t('bootVolume.sizeGB')" width="110" align="center">
           <template #default="{ row }">
             {{ row.sizeInGBs ?? row.sizeInMBs ? Math.round(row.sizeInMBs / 1024) : 'N/A' }}
           </template>
         </el-table-column>
-        <el-table-column label="状态" width="130" align="center">
+        <el-table-column :label="$t('bootVolume.state')" width="130" align="center">
           <template #default="{ row }">
             <el-tag
               :type="stateTagType(row.lifecycleState)"
@@ -56,19 +56,19 @@
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="实例" min-width="200">
+        <el-table-column :label="$t('bootVolume.instance')" min-width="200">
           <template #default="{ row }">
             <span v-if="row._instanceName" class="instance-name">{{ row._instanceName }}</span>
             <span v-else style="color: var(--el-text-color-placeholder); font-size: 13px;">&mdash;</span>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="220" fixed="right" align="center">
+        <el-table-column :label="$t('bootVolume.actions')" width="220" fixed="right" align="center">
           <template #default="{ row }">
             <el-button type="primary" size="small" @click="openResizeDialog(row)">
               Resize
             </el-button>
             <el-button type="warning" size="small" @click="handleShrink(row)">
-              缩容到 47GB
+              $t('bootVolume.shrink')
             </el-button>
           </template>
         </el-table-column>
@@ -90,7 +90,7 @@
     <!-- Resize Dialog -->
     <el-dialog
       v-model="resizeDialogVisible"
-      title="扩容引导卷"
+      :title="$t('bootVolume.resizeTitle')"
       width="420px"
       :close-on-click-modal="false"
     >
@@ -98,7 +98,7 @@
         Resize <strong>{{ selectedVolume.displayName }}</strong>
       </p>
       <el-form label-position="top">
-        <el-form-item label="新容量 (GB)" required>
+        <el-form-item :label="$t('bootVolume.newSize')" required>
           <el-input-number
             v-model="resizeForm.sizeGB"
             :min="47"
@@ -109,7 +109,7 @@
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="resizeDialogVisible = false">取消</el-button>
+        <el-button @click="resizeDialogVisible = false">{{ $t('bootVolume.cancel') }}</el-button>
         <el-button type="primary" :loading="resizing" @click="handleResize">
           Save
         </el-button>
@@ -120,6 +120,7 @@
 
 <script setup>
 import { ref, computed, onMounted } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { get, post } from '../api/index.js'
 
@@ -128,6 +129,7 @@ import { get, post } from '../api/index.js'
 // ---------------------------------------------------------------------------
 const tenants = ref([])
 const tenantId = ref(undefined)
+const { t } = useI18n()
 const bootVolumes = ref([])
 const allInstances = ref([])
 const loading = ref(false)
@@ -313,8 +315,8 @@ async function handleShrink(volume) {
   if (!instanceId) {
     try {
       await ElMessageBox.alert(
-        '未找到与此引导卷匹配的实例。请确保实例已同步后再试。',
-        '需要实例',
+        t('bootVolume.needInstance'),
+        t('bootVolume.needInstanceTitle'),
         { confirmButtonText: 'OK', type: 'info' }
       )
     } catch {
@@ -325,10 +327,10 @@ async function handleShrink(volume) {
 
   try {
     await ElMessageBox.confirm(
-      '缩容引导卷 <strong>' + volume._instanceName + '</strong> to 47 GB? 操作期间实例将被停止。',
-      '缩容到 47GB',
+      t('bootVolume.confirmShrink', { name: volume._instanceName }),
+      t('bootVolume.shrink'),
       {
-        confirmButtonText: 'Shrink',
+        confirmButtonText: t('bootVolume.shrinkBtn'),
         cancelButtonText: 'Cancel',
         type: 'warning',
         dangerouslyUseHTMLString: true

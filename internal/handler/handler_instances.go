@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/oracle/oci-go-sdk/v65/common"
@@ -619,6 +620,72 @@ func (s *Server) handleCheckAlive(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]interface{}{"results": results})
 }
 
+// ── G10: Batch Check Alive ──────────────────────────────────────────────
+
+func (s *Server) handleCheckAliveBatch(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		TenantID int64 `json:"tenant_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonErr(w, "invalid body: "+err.Error())
+		return
+	}
+	tenant, err := s.store.GetTenant(req.TenantID)
+	if err != nil || tenant == nil {
+		jsonErr(w, "tenant not found")
+		return
+	}
+
+	instances, err := s.store.ListInstances(req.TenantID)
+	if err != nil {
+		jsonErr(w, "list instances: "+err.Error())
+		return
+	}
+
+	// Filter to RUNNING instances only
+	var running []db.Instance
+	for _, inst := range instances {
+		if inst.State == "RUNNING" {
+			running = append(running, inst)
+		}
+	}
+
+	type checkResult struct {
+		InstanceID string `json:"instance_id"`
+		Alive      bool   `json:"alive"`
+		Error      string `json:"error,omitempty"`
+	}
+
+	var mu sync.Mutex
+	var results []checkResult
+	var wg sync.WaitGroup
+
+	for _, inst := range running {
+		wg.Add(1)
+		go func(inst db.Instance) {
+			defer wg.Done()
+			if inst.PublicIP == "" {
+				mu.Lock()
+				results = append(results, checkResult{InstanceID: inst.OCID, Alive: false, Error: "no public IP"})
+				mu.Unlock()
+				return
+			}
+			alive := checkTCPPort(inst.PublicIP, 22, 5*time.Second)
+			mu.Lock()
+			results = append(results, checkResult{InstanceID: inst.OCID, Alive: alive})
+			mu.Unlock()
+		}(inst)
+	}
+	wg.Wait()
+
+	s.audit(req.TenantID, "instance:check-alive-batch", strconv.Itoa(len(running)), r)
+	jsonOK(w, map[string]interface{}{"results": results})
+}
+
 func (s *Server) handleOneClick500M(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
@@ -779,6 +846,51 @@ func (s *Server) handleAutoRescue(w http.ResponseWriter, r *http.Request) {
 	s.audit(req.TenantID, "instance:auto-rescue", req.InstanceID, r)
 	jsonOK(w, map[string]interface{}{"steps": steps, "final_alive": finalAlive})
 }
+// ── G6: Direct Instance Config Update ───────────────────────────────────
+
+func (s *Server) handleInstanceConfigUpdate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		TenantID    int64   `json:"tenant_id"`
+		InstanceID  string  `json:"instance_id"`
+		DisplayName string  `json:"display_name"`
+		Shape       string  `json:"shape"`
+		Ocpus       float32 `json:"ocpus"`
+		MemoryGB    float32 `json:"memory_gb"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonErr(w, "invalid body: "+err.Error())
+		return
+	}
+	tenant, err := s.store.GetTenant(req.TenantID)
+	if err != nil || tenant == nil {
+		jsonErr(w, "tenant not found")
+		return
+	}
+	client, err := s.clientFor(tenant)
+	if err != nil {
+		jsonErr(w, "oci client: "+err.Error())
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
+	defer cancel()
+	if err := client.UpdateInstance(ctx, req.InstanceID, req.Shape, req.Ocpus, req.MemoryGB); err != nil {
+		jsonErr(w, "update instance: "+err.Error())
+		return
+	}
+	if req.DisplayName != "" {
+		if err := client.UpdateInstanceDisplayName(ctx, req.InstanceID, req.DisplayName); err != nil {
+			jsonErr(w, "update display name: "+err.Error())
+			return
+		}
+	}
+	s.audit(req.TenantID, "instance:config-update", req.InstanceID, r)
+	jsonOK(w, map[string]string{"status": "ok"})
+}
+
 func (s *Server) handleUpdateShape(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)

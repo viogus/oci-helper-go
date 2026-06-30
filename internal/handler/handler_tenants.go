@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -116,6 +118,16 @@ func (s *Server) handleTenantByID(w http.ResponseWriter, r *http.Request) {
 	// /api/tenants/{id}/password-policy
 	if strings.HasSuffix(idStr, "/password-policy") {
 		s.handleTenantPasswordPolicy(w, r)
+		return
+	}
+	// G8: /api/tenants/{id}/proxy
+	if strings.HasSuffix(idStr, "/proxy") {
+		s.handleTenantProxy(w, r)
+		return
+	}
+	// G15: /api/tenants/refresh-plan-type
+	if strings.HasSuffix(idStr, "/refresh-plan-type") {
+		s.handleRefreshPlanType(w, r)
 		return
 	}
 
@@ -648,6 +660,128 @@ func (s *Server) handleTenantPasswordPolicy(w http.ResponseWriter, r *http.Reque
 		"status":                 "ok",
 		"password_expires_after": body.PasswordExpiresAfter,
 	})
+}
+
+// ── G8: Proxy Configuration ─────────────────────────────────────────────
+
+func (s *Server) handleTenantProxy(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	idStr := strings.TrimPrefix(r.URL.Path, "/api/tenants/")
+	idStr = strings.TrimSuffix(strings.TrimSuffix(idStr, "/proxy"), "/")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil || id <= 0 {
+		jsonErr(w, "invalid tenant id")
+		return
+	}
+	t, _ := s.store.GetTenant(id)
+	if t == nil {
+		jsonErr(w, "tenant not found")
+		return
+	}
+	var req struct {
+		ProxyURL string `json:"proxy_url"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonErr(w, "invalid body: "+err.Error())
+		return
+	}
+	configKey := fmt.Sprintf("tenant_proxy_%d", id)
+	if err := s.store.SetConfig(configKey, req.ProxyURL); err != nil {
+		jsonErr(w, "save proxy config: "+err.Error())
+		return
+	}
+	s.audit(id, "tenant:proxy", req.ProxyURL, r)
+	jsonOK(w, map[string]string{"status": "ok"})
+}
+
+// ── G9: Bulk Upload Config ──────────────────────────────────────────────
+
+func (s *Server) handleTenantUpload(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if err := r.ParseMultipartForm(10 << 20); err != nil {
+		jsonErr(w, "parse multipart form: "+err.Error())
+		return
+	}
+	keyFile, handler, err := r.FormFile("key_file")
+	if err != nil {
+		jsonErr(w, "key_file required: "+err.Error())
+		return
+	}
+	defer keyFile.Close()
+
+	// Read the key file content
+	buf := make([]byte, handler.Size)
+	if _, err := keyFile.Read(buf); err != nil {
+		jsonErr(w, "read key file: "+err.Error())
+		return
+	}
+
+	// Generate unique filename if not provided
+	filename := handler.Filename
+	if filename == "" {
+		filename = fmt.Sprintf("upload_%d.pem", time.Now().UnixNano())
+	}
+	keyPath := filepath.Join(s.cfg.KeysDir, filename)
+	if err := os.WriteFile(keyPath, buf, 0600); err != nil {
+		jsonErr(w, "save key file: "+err.Error())
+		return
+	}
+
+	// Parse tenant fields from form
+	tenant := &db.Tenant{
+		Name:        r.FormValue("name"),
+		TenancyOCID: r.FormValue("tenancy_ocid"),
+		UserOCID:    r.FormValue("user_ocid"),
+		Fingerprint: r.FormValue("fingerprint"),
+		Region:      r.FormValue("region"),
+		KeyFile:     filename,
+	}
+	if tenant.Name == "" || tenant.TenancyOCID == "" || tenant.UserOCID == "" || tenant.Fingerprint == "" || tenant.Region == "" {
+		jsonErr(w, "all fields required: name, tenancy_ocid, user_ocid, fingerprint, region, key_file")
+		return
+	}
+
+	if err := s.store.CreateTenant(tenant); err != nil {
+		jsonErr(w, "create tenant: "+err.Error())
+		return
+	}
+	s.audit(tenant.ID, "tenant:upload", tenant.Name, r)
+	jsonOK(w, tenant)
+}
+
+// ── G15: Refresh Plan Type ──────────────────────────────────────────────
+
+func (s *Server) handleRefreshPlanType(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		TenantID int64 `json:"tenant_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonErr(w, "invalid body: "+err.Error())
+		return
+	}
+	t, _ := s.store.GetTenant(req.TenantID)
+	if t == nil {
+		jsonErr(w, "tenant not found")
+		return
+	}
+	// Store current timestamp as last refresh
+	configKey := fmt.Sprintf("tenant_plan_refresh_%d", req.TenantID)
+	if err := s.store.SetConfig(configKey, time.Now().Format(time.RFC3339)); err != nil {
+		jsonErr(w, "save refresh time: "+err.Error())
+		return
+	}
+	s.audit(req.TenantID, "tenant:refresh-plan-type", "", r)
+	jsonOK(w, map[string]string{"status": "ok", "message": "plan type refresh queued"})
 }
 
 // --- helpers ---

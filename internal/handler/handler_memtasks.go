@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -46,17 +47,42 @@ func (s *Server) handleMemTasks(w http.ResponseWriter, r *http.Request, taskType
 	switch r.Method {
 	case http.MethodGet:
 		memTasksMu.Lock()
-		var list []*memTask
+		var all []*memTask
 		for _, t := range memTasks {
 			if t.TaskType == taskType {
-				list = append(list, t)
+				all = append(all, t)
 			}
 		}
 		memTasksMu.Unlock()
+
+		page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+		if page < 1 {
+			page = 1
+		}
+		size, _ := strconv.Atoi(r.URL.Query().Get("size"))
+		if size < 1 {
+			size = 20
+		}
+		total := len(all)
+		start := (page - 1) * size
+		if start > total {
+			start = total
+		}
+		end := start + size
+		if end > total {
+			end = total
+		}
+		list := all[start:end]
 		if list == nil {
 			list = []*memTask{}
 		}
-		jsonOK(w, map[string]interface{}{"data": list})
+
+		jsonOK(w, map[string]interface{}{
+			"data":  list,
+			"total": total,
+			"page":  page,
+			"size":  size,
+		})
 
 	case http.MethodPost:
 		var req struct {

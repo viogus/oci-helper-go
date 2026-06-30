@@ -417,7 +417,12 @@
     "config": "配置",
     "publicIP": "公网 IP",
     "state": "状态",
-    "notFound": "租户未找到"
+    "notFound": "租户未找到",
+    "totalInstances": "总实例数",
+    "running": "运行中",
+    "stopped": "已停止",
+    "totalOCPU": "总 OCPU",
+    "totalMemory": "总内存"
   },
   "instanceDetail": {
     "title": "实例详情",

@@ -417,7 +417,12 @@
     "config": "Config",
     "publicIP": "Public IP",
     "state": "State",
-    "notFound": "Tenant not found"
+    "notFound": "Tenant not found",
+    "totalInstances": "Total Instances",
+    "running": "Running",
+    "stopped": "Stopped",
+    "totalOCPU": "Total OCPU",
+    "totalMemory": "Total Memory"
   },
   "instanceDetail": {
     "title": "Instance Detail",

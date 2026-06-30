@@ -54,6 +54,13 @@ func (s *Server) handleTenants(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleTenantByID(w http.ResponseWriter, r *http.Request) {
 	idStr := strings.TrimPrefix(r.URL.Path, "/api/tenants/")
 	idStr = strings.TrimSuffix(idStr, "/")
+
+	// /api/tenants/{id}/info — enriched detail
+	if strings.HasSuffix(idStr, "/info") {
+		s.handleTenantInfo(w, r)
+		return
+	}
+
 	id, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil || id <= 0 {
 		jsonErr(w, "invalid tenant id")
@@ -113,6 +120,62 @@ func (s *Server) handleTenantByID(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+// GET /api/tenants/{id}/info — enriched tenant detail with OCI data.
+func (s *Server) handleTenantInfo(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	idStr := strings.TrimPrefix(r.URL.Path, "/api/tenants/")
+	idStr = strings.TrimSuffix(strings.TrimSuffix(idStr, "/info"), "/")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil || id <= 0 {
+		jsonErr(w, "invalid tenant id")
+		return
+	}
+
+	t, _ := s.store.GetTenant(id)
+	if t == nil {
+		jsonErr(w, "not found")
+		return
+	}
+
+	client, err := s.clientFor(t)
+	if err != nil {
+		jsonOK(w, map[string]interface{}{
+			"tenant": t, "regions": []string{}, "instanceStats": map[string]int{},
+		})
+		return
+	}
+
+	regions, _ := client.ListRegionSubscriptions(r.Context())
+	var regionNames []string
+	for _, reg := range regions {
+		if reg.RegionName != nil {
+			regionNames = append(regionNames, *reg.RegionName)
+		}
+	}
+
+	instances, _ := s.store.ListInstances(id)
+	stats := map[string]int{"total": 0, "RUNNING": 0, "STOPPED": 0, "TERMINATED": 0}
+	totalOCPU := 0.0
+	totalMem := 0.0
+	for _, inst := range instances {
+		stats["total"]++
+		stats[inst.State]++
+		totalOCPU += inst.OCPU
+		totalMem += inst.MemoryGB
+	}
+
+	jsonOK(w, map[string]interface{}{
+		"tenant":        t,
+		"regions":       regionNames,
+		"instanceStats": stats,
+		"totalOCPU":     totalOCPU,
+		"totalMemoryGB": totalMem,
+	})
 }
 
 // --- instances ---

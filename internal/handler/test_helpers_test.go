@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/viogus/oci-helper-go/internal/config"
@@ -47,6 +48,12 @@ func setupTestServer(t *testing.T) (*Server, *db.Store, *httptest.Server, func()
 	return srv, store, ts, cleanup
 }
 
+
+// testAuthCookie caches the session cookie so every authedReq call
+// doesn't re-authenticate (avoiding bcrypt overhead per request).
+var testAuthCache = make(map[string]string)
+var testAuthMu sync.Mutex
+
 // mustLogin performs a Basic-Auth login against the test server and
 // returns the session cookie for subsequent authenticated requests.
 func mustLogin(t *testing.T, ts *httptest.Server) string {
@@ -79,6 +86,16 @@ func mustLogin(t *testing.T, ts *httptest.Server) string {
 func authedReq(t *testing.T, ts *httptest.Server, method, path, body string) *http.Response {
 	t.Helper()
 
+	testAuthMu.Lock()
+	cookie, ok := testAuthCache[ts.URL]
+	testAuthMu.Unlock()
+	if !ok {
+		cookie = mustLogin(t, ts)
+		testAuthMu.Lock()
+		testAuthCache[ts.URL] = cookie
+		testAuthMu.Unlock()
+	}
+
 	var r io.Reader
 	if body != "" {
 		r = strings.NewReader(body)
@@ -89,8 +106,6 @@ func authedReq(t *testing.T, ts *httptest.Server, method, path, body string) *ht
 		t.Fatalf("new request %s %s: %v", method, path, err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-
-	cookie := mustLogin(t, ts)
 	req.AddCookie(&http.Cookie{Name: "oci_helper_session", Value: cookie})
 
 	resp, err := ts.Client().Do(req)

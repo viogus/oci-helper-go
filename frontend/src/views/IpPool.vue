@@ -313,7 +313,7 @@ async function handleImportOci() {
       action: 'load_oci',
       tenant_id: selectedTenantId.value
     })
-    const count = res.count || 0
+    const count = res.added || 0
     ElMessage.success(t('ipPool.importSuccess', { count }))
     loadData()
   } catch (e) {

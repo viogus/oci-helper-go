@@ -605,6 +605,11 @@ func (s *Server) tgTrafficQuery(bot *telegram.Bot, chatID int64, messageID int, 
 		return
 	}
 	firstVnic := vnics[0]
+	if firstVnic.Id == nil {
+		kb := tgMainKeyboard()
+		tgSend(bot, chatID, messageID, "VNIC has no ID — cannot query traffic", &kb)
+		return
+	}
 	vnicID := *firstVnic.Id
 	vnicCompartment := tenant.TenancyOCID
 	if firstVnic.CompartmentId != nil {

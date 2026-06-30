@@ -91,10 +91,18 @@ func (s *Server) handleLogWS(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			if fi.Size() < lastSize {
-				// File was truncated/rotated
-				sendLogWS(conn, logWSMsg{Type: "reset"})
+				// File was truncated/rotated — reopen to get the new inode.
+				if err := sendLogWS(conn, logWSMsg{Type: "reset"}); err != nil {
+					return
+				}
+				f.Close()
+				var err error
+				f, err = os.Open(logFile)
+				if err != nil {
+					sendLogWS(conn, logWSMsg{Type: "error", Data: "Cannot reopen log: " + err.Error()})
+					return
+				}
 				lastSize = 0
-				f.Seek(0, io.SeekStart)
 			}
 			if fi.Size() > lastSize {
 				f.Seek(lastSize, io.SeekStart)
@@ -103,11 +111,13 @@ func (s *Server) handleLogWS(w http.ResponseWriter, r *http.Request) {
 				scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
 				for scanner.Scan() {
 					line := scanner.Text()
-					sendLogWS(conn, logWSMsg{
+					if err := sendLogWS(conn, logWSMsg{
 						Type: "line",
 						Data: line,
 						Time: time.Now().Format(time.RFC3339),
-					})
+					}); err != nil {
+						return
+					}
 				}
 				lastSize, _ = f.Seek(0, io.SeekCurrent)
 			}
@@ -115,12 +125,10 @@ func (s *Server) handleLogWS(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func sendLogWS(conn *websocket.Conn, msg logWSMsg) {
+func sendLogWS(conn *websocket.Conn, msg logWSMsg) error {
 	data, _ := json.Marshal(msg)
 	conn.SetWriteDeadline(time.Now().Add(3 * time.Second))
-	if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
-		log.Printf("[wslog] write error: %v", err)
-	}
+	return conn.WriteMessage(websocket.TextMessage, data)
 }
 
 // readLastNLines reads the last n lines from a file.

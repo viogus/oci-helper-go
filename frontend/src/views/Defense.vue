@@ -199,7 +199,7 @@ async function onVcnChange() {
 async function checkDefenseStatus() {
   try {
     const cfg = await get('/config')
-    if (cfg.defense_enabled && String(cfg.defense_vcn) === String(selectedVcnId.value)) {
+    if (cfg.defense_enabled === 'true' && String(cfg.defense_vcn) === String(selectedVcnId.value)) {
       defenseActive.value = true
     } else {
       defenseActive.value = false

@@ -256,7 +256,7 @@ func (s *Server) handleTenantUsers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	idStr := trimTenantSuffix(r.URL.Path, "/users")
-	id, t, client, ok := s.tenantAndClient(w, r, idStr)
+	_, t, client, ok := s.tenantAndClient(w, r, idStr)
 	if !ok {
 		return
 	}
@@ -288,7 +288,6 @@ func (s *Server) handleTenantUsers(w http.ResponseWriter, r *http.Request) {
 			LastLogin:      timeStr(u.LastSuccessfulLoginTime),
 		})
 	}
-	_ = id // used for audit context
 	jsonOK(w, map[string]interface{}{"users": result})
 }
 
@@ -329,7 +328,7 @@ func (s *Server) handleTenantUserResetPassword(w http.ResponseWriter, r *http.Re
 		return
 	}
 	idStr := trimTenantSuffix(r.URL.Path, "/users/reset-password")
-	_, _, client, ok := s.tenantAndClient(w, r, idStr)
+	id, _, client, ok := s.tenantAndClient(w, r, idStr)
 	if !ok {
 		return
 	}
@@ -353,6 +352,7 @@ func (s *Server) handleTenantUserResetPassword(w http.ResponseWriter, r *http.Re
 	if resp.Password != nil {
 		pw = *resp.Password
 	}
+	s.audit(id, "user:password:reset", body.UserID, r)
 	jsonOK(w, map[string]string{"status": "ok", "password": pw})
 }
 
@@ -378,6 +378,10 @@ func (s *Server) handleTenantUserUpdate(w http.ResponseWriter, r *http.Request) 
 	}
 	if body.UserID == "" {
 		jsonErr(w, "user_id required")
+		return
+	}
+	if body.Email == "" && body.Description == "" {
+		jsonErr(w, "at least one of email or description required")
 		return
 	}
 	var emailPtr, descPtr *string
@@ -487,13 +491,18 @@ func (s *Server) handleTenantPasswordPolicy(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	idStr := trimTenantSuffix(r.URL.Path, "/password-policy")
-	id, _, _, ok := s.tenantAndClient(w, r, idStr)
-	if !ok {
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil || id <= 0 {
+		jsonErr(w, "invalid tenant id")
+		return
+	}
+	t, _ := s.store.GetTenant(id)
+	if t == nil {
+		jsonErr(w, "tenant not found")
 		return
 	}
 	var body struct {
-		UserID              string `json:"user_id"`
-		PasswordExpiresAfter int   `json:"password_expires_after"`
+		PasswordExpiresAfter int `json:"password_expires_after"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		jsonErr(w, "invalid body: "+err.Error())

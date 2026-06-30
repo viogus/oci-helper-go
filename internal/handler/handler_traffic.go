@@ -125,7 +125,7 @@ func (s *Server) handleTrafficCondition(w http.ResponseWriter, r *http.Request) 
 
 		// Make a fresh client subscribed to this region.
 		regTenant := *tenant
-		regTenant.HomeRegion = rn
+		regTenant.Region = rn
 		regClient, err := s.clientFor(&regTenant)
 		if err != nil {
 			continue
@@ -239,7 +239,7 @@ func (s *Server) handleTrafficInstances(w http.ResponseWriter, r *http.Request) 
 
 	// Use tenant with specific region.
 	regTenant := *tenant
-	regTenant.HomeRegion = region
+	regTenant.Region = region
 	client, err := s.clientFor(&regTenant)
 	if err != nil {
 		jsonErr(w, "oci client: "+err.Error())

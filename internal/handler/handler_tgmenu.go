@@ -191,7 +191,11 @@ func (s *Server) handleTGCallback(bot *telegram.Bot, chatID int64, messageID int
 		id, _ := strconv.ParseInt(parts[2], 10, 64)
 		s.tgBlacklistRemoveID(bot, chatID, messageID, id)
 	case action == "blacklist" && len(parts) >= 2 && parts[1] == "clear":
-		s.tgBlacklistClear(bot, chatID, messageID)
+		if len(parts) >= 3 && parts[2] == "confirm" {
+			s.tgBlacklistClear(bot, chatID, messageID)
+		} else {
+			s.tgBlacklistClearConfirm(bot, chatID, messageID)
+		}
 
 	// ── SSH Keys ──
 	case action == "sshkeys" && len(parts) == 1:
@@ -478,6 +482,14 @@ func (s *Server) tgBlacklistRemoveID(bot *telegram.Bot, chatID int64, messageID 
 		return
 	}
 	s.tgBlacklistMenu(bot, chatID, messageID)
+}
+
+func (s *Server) tgBlacklistClearConfirm(bot *telegram.Bot, chatID int64, messageID int) {
+	kb := telegram.InlineKeyboardMarkup{InlineKeyboard: [][]telegram.InlineKeyboardButton{
+		{{Text: "Yes, Clear All", CallbackData: "blacklist:clear:confirm"}},
+		{{Text: "Cancel", CallbackData: "blacklist"}},
+	}}
+	tgSend(bot, chatID, messageID, "Are you sure you want to clear ALL blacklist entries? This cannot be undone.", &kb)
 }
 
 func (s *Server) tgBlacklistClear(bot *telegram.Bot, chatID int64, messageID int) {

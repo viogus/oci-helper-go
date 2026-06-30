@@ -159,6 +159,7 @@
     "cancel": "取消",
     "confirm": "确认",
     "delete": "删除",
+    "edit": "编辑",
     "sync": "同步",
     "enabled": "已启用",
     "disabled": "已禁用"
@@ -443,7 +444,13 @@
     "confirmDelete": "永久删除此用户？",
     "notFound": "未找到用户",
     "cannotDeleteSelf": "不能删除自己的账户",
-    "cannotDeleteLastAdmin": "不能删除最后一个管理员"
+    "cannotDeleteLastAdmin": "不能删除最后一个管理员",
+    "usernamePasswordRequired": "用户名和密码不能为空",
+    "userCreated": "用户创建成功",
+    "userDeleted": "用户已删除",
+    "passwordReset": "密码已重置",
+    "mfaCleared": "MFA 已清除",
+    "deleteFailed": "删除失败"
   },
   "ipPool": {
     "title": "IP 池",

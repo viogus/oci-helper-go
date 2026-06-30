@@ -198,7 +198,7 @@ function handleAdd() {
 
 async function handleSave() {
   if (!form.username.trim() || !form.password.trim()) {
-    ElMessage.warning('Username and password are required')
+    ElMessage.warning(t('users.usernamePasswordRequired'))
     return
   }
   saving.value = true
@@ -209,7 +209,7 @@ async function handleSave() {
       email: form.email || undefined,
       role: form.role
     })
-    ElMessage.success('User created')
+    ElMessage.success(t('users.userCreated'))
     dialogVisible.value = false
     loadUsers()
   } catch (e) {
@@ -239,11 +239,11 @@ async function handleDelete(row) {
       }
     )
     await del(`/users/${row.id}`)
-    ElMessage.success('User deleted')
+    ElMessage.success(t('users.userDeleted'))
     loadUsers()
   } catch (err) {
     if (err !== 'cancel') {
-      ElMessage.error(err.response?.data?.error || 'Delete failed')
+      ElMessage.error(err.response?.data?.error || t('users.deleteFailed'))
     }
   }
 }
@@ -262,7 +262,7 @@ async function handleResetPasswordConfirm() {
   resettingPwd.value = true
   try {
     await del(`/users/${resetPwdTarget.value.id}/reset-password`, { data: { password: resetPwdForm.password } })
-    ElMessage.success('Password reset')
+    ElMessage.success(t('users.passwordReset'))
     resetPwdVisible.value = false
   } catch (e) {
     ElMessage.error(e.response?.data?.error || 'Failed to reset password')
@@ -282,7 +282,7 @@ async function handleClearMFA(row) {
       }
     )
     await del(`/users/${row.id}/mfa`)
-    ElMessage.success('MFA cleared')
+    ElMessage.success(t('users.mfaCleared'))
   } catch (err) {
     if (err !== 'cancel') {
       ElMessage.error(err.response?.data?.error || 'Failed to clear MFA')

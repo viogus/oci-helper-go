@@ -6,7 +6,7 @@
         <el-button type="primary" @click="handleGenerate">
           <el-icon><Plus /></el-icon> {{ $t('sshKeys.generate') }}
         </el-button>
-        <el-button @click="$refs.pemInput.click()">
+        <el-button @click="triggerUpload">
           {{ $t('sshKeys.upload') }}
         </el-button>
         <input
@@ -138,6 +138,7 @@ import { get, post, upload, del } from '../api/index.js'
 
 const keys = ref([])
 const loading = ref(false)
+const pemInput = ref(null)
 
 // Generate dialog state
 const generateVisible = ref(false)
@@ -176,6 +177,10 @@ function resetGenerateForm() {
   genForm.name = ''
   genForm.keyType = 'ed25519'
   generatedKey.value = ''
+}
+
+function triggerUpload() {
+  pemInput.value?.click()
 }
 
 function handleGenerate() {

@@ -159,6 +159,7 @@
     "cancel": "Cancel",
     "confirm": "Confirm",
     "delete": "Delete",
+    "edit": "Edit",
     "sync": "Sync",
     "enabled": "Enabled",
     "disabled": "Disabled"
@@ -443,7 +444,13 @@
     "confirmDelete": "Permanently delete this user?",
     "notFound": "No users found",
     "cannotDeleteSelf": "Cannot delete your own account",
-    "cannotDeleteLastAdmin": "Cannot delete the last admin user"
+    "cannotDeleteLastAdmin": "Cannot delete the last admin user",
+    "usernamePasswordRequired": "Username and password are required",
+    "userCreated": "User created",
+    "userDeleted": "User deleted",
+    "passwordReset": "Password reset",
+    "mfaCleared": "MFA cleared",
+    "deleteFailed": "Delete failed"
   },
   "ipPool": {
     "title": "IP Pool",

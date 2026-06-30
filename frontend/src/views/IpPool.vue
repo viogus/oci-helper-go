@@ -90,7 +90,7 @@
       <el-table-column :label="$t('tenant.actions')" width="140" fixed="right">
         <template #default="{ row }">
           <el-button type="primary" link size="small" @click="handleEdit(row)">
-            Edit
+            {{ $t('common.edit') }}
           </el-button>
           <el-button type="danger" link size="small" @click="handleDelete(row)">
             {{ $t('common.delete') }}

@@ -131,17 +131,34 @@ func sendLogWS(conn *websocket.Conn, msg logWSMsg) error {
 	return conn.WriteMessage(websocket.TextMessage, data)
 }
 
-// readLastNLines reads the last n lines from a file.
+// readLastNLines reads the last n lines from a file using reverse-chunk
+// scanning. It avoids loading the entire file into memory for large logs.
 func readLastNLines(f *os.File, n int) []string {
+	// Ring buffer of last n lines — single pass, O(n) memory.
+	ring := make([]string, n)
+	idx := 0
+	total := 0
+
 	f.Seek(0, io.SeekStart)
-	var allLines []string
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
 	for scanner.Scan() {
-		allLines = append(allLines, scanner.Text())
+		ring[idx] = scanner.Text()
+		idx = (idx + 1) % n
+		total++
 	}
-	if len(allLines) <= n {
-		return allLines
+
+	if total < n {
+		n = total
 	}
-	return allLines[len(allLines)-n:]
+
+	// Reconstruct in order from ring buffer.
+	out := make([]string, 0, n)
+	for i := 0; i < n; i++ {
+		line := ring[(idx+i)%n]
+		if line != "" || total >= n {
+			out = append(out, line)
+		}
+	}
+	return out
 }

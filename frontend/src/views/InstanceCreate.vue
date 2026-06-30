@@ -221,30 +221,28 @@ async function loadPlansForSelect() {
   } catch {}
 }
 
-function onPlanSelect(planId) {
+async function onPlanSelect(planId) {
   if (!planId) return
   const plan = availablePlans.value.find(p => p.id === planId)
   if (!plan) return
   // Pre-fill form fields from plan
   if (plan.tenant_id) {
     form.tenantId = String(plan.tenant_id)
-    onTenantChange()
-    // Defer dependent field population after tenant loads
-    setTimeout(() => {
-      if (plan.availability_domain) {
-        form.availabilityDomain = plan.availability_domain
-      }
-      if (plan.image_id) {
-        form.imageId = plan.image_id
-      }
-      if (plan.shape) {
-        form.shape = plan.shape
-      }
-      if (plan.subnet_id) {
-        form.subnetId = plan.subnet_id
-      }
-      form.bootVolumeSizeGB = plan.boot_volume_size_gb || 50
-    }, 500)
+    await onTenantChange()
+    // Populate dependent fields after tenant-dependent data loads complete.
+    if (plan.availability_domain) {
+      form.availabilityDomain = plan.availability_domain
+    }
+    if (plan.image_id) {
+      form.imageId = plan.image_id
+    }
+    if (plan.shape) {
+      form.shape = plan.shape
+    }
+    if (plan.subnet_id) {
+      form.subnetId = plan.subnet_id
+    }
+    form.bootVolumeSizeGB = plan.boot_volume_size_gb || 50
   }
   if (plan.name) {
     form.displayName = plan.name
@@ -262,7 +260,7 @@ onMounted(async () => {
     try {
       const res = await get('/instance-plans')
       const plans = res.data || []
-      const plan = plans.find(p => p.id == planId)
+      const plan = plans.find(p => p.id === Number(planId))
       if (plan) {
         selectedPlanId.value = plan.id
         onPlanSelect(plan.id)
@@ -369,9 +367,7 @@ async function onTenantChange() {
   subnets.value = []
 
   if (!form.tenantId) return
-  loadADs()
-  loadImages()
-  loadVCNs()
+  await Promise.all([loadADs(), loadImages(), loadVCNs()])
 }
 
 function onImageChange() {

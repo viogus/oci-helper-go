@@ -113,6 +113,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/instances/vnc/wait", s.withAuth(s.handleConsoleWait))
 	s.mux.HandleFunc("/api/instances/config-info", s.withAuth(s.handleInstanceConfigInfo))
 	s.mux.HandleFunc("/api/instances/update-password", s.withAuth(s.handleUpdatePassword))
+	s.mux.HandleFunc("/api/shell/ws", s.withAuth(s.handleShellWS))
+	s.mux.HandleFunc("/api/cost", s.withAuth(s.handleCost))
 
 	// NEW exact-path routes
 	// instance mutations
@@ -134,6 +136,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/traffic", s.withAuth(s.handleTraffic))
 	s.mux.HandleFunc("/api/limits", s.withAuth(s.handleLimits))
 	s.mux.HandleFunc("/api/logs", s.withAuth(s.handleLogs))
+	s.mux.HandleFunc("/api/logs/ws", s.withAuth(s.handleLogWS))
 
 	// batch create tasks
 	s.mux.HandleFunc("/api/instances/batch-create", s.withAuth(s.handleBatchCreate))

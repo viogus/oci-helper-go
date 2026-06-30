@@ -30,6 +30,8 @@
           <el-menu-item index="/ips">{{ $t('menu.publicIPs') }}</el-menu-item>
           <el-menu-item index="/volumes">{{ $t('menu.bootVolumes') }}</el-menu-item>
           <el-menu-item index="/limits">{{ $t('menu.limits') }}</el-menu-item>
+          <el-menu-item index="/instance-plans">{{ $t('menu.instancePlans') }}</el-menu-item>
+          <el-menu-item index="/cost">{{ $t('menu.cost') }}</el-menu-item>
         </el-sub-menu>
 
         <el-sub-menu index="network">
@@ -41,6 +43,10 @@
           <el-menu-item index="/traffic">{{ $t('menu.traffic') }}</el-menu-item>
           <el-menu-item index="/cloudflare">{{ $t('menu.cloudflare') }}</el-menu-item>
           <el-menu-item index="/vnc">{{ $t('menu.vnc') }}</el-menu-item>
+          <el-menu-item index="/shell">{{ $t('menu.shell') }}</el-menu-item>
+          <el-menu-item index="/vcns">{{ $t('menu.vcns') }}</el-menu-item>
+          <el-menu-item index="/ip-pool">{{ $t('menu.ipPool') }}</el-menu-item>
+          <el-menu-item index="/defense">{{ $t('menu.defense') }}</el-menu-item>
         </el-sub-menu>
 
         <el-sub-menu index="tasks-sub">
@@ -61,6 +67,8 @@
           <el-menu-item index="/ai-chat">{{ $t('menu.aiChat') }}</el-menu-item>
           <el-menu-item index="/logs">{{ $t('menu.logs') }}</el-menu-item>
           <el-menu-item index="/audit">{{ $t('menu.audit') }}</el-menu-item>
+          <el-menu-item index="/users">{{ $t('menu.users') }}</el-menu-item>
+          <el-menu-item index="/ssh-keys">{{ $t('menu.sshKeys') }}</el-menu-item>
         </el-sub-menu>
 
         <el-menu-item index="/backup">

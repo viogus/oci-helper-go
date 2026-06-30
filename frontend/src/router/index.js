@@ -38,6 +38,16 @@ const routes = [
       { path: 'settings', name: 'Settings', component: () => import('../views/Settings.vue'), meta: { titleKey: 'route.settings', icon: 'Setting' } },
       { path: 'audit', name: 'Audit', component: () => import('../views/Audit.vue'), meta: { titleKey: 'route.audit', icon: 'List' } },
       { path: 'vnc', name: 'VncConsole', component: () => import('../views/VncConsole.vue'), meta: { titleKey: 'route.vnc', icon: 'Monitor' } },
+      { path: 'shell', name: 'ShellConsole', component: () => import('../views/ShellConsole.vue'), meta: { titleKey: 'route.shell', icon: 'Monitor' } },
+      { path: 'vcns', name: 'VcnManagement', component: () => import('../views/VcnManagement.vue'), meta: { titleKey: 'route.vcns', icon: 'Connection' } },
+      { path: 'cost', name: 'CostAnalysis', component: () => import('../views/CostAnalysis.vue'), meta: { titleKey: 'route.cost', icon: 'Money' } },
+      { path: 'tenants/:id', name: 'TenantDetail', component: () => import('../views/TenantDetail.vue'), meta: { titleKey: 'route.tenantDetail' } },
+      { path: 'instances/:id', name: 'InstanceDetail', component: () => import('../views/InstanceDetail.vue'), meta: { titleKey: 'route.instanceDetail' } },
+      { path: 'users', name: 'Users', component: () => import('../views/Users.vue'), meta: { titleKey: 'route.users', icon: 'User' } },
+      { path: 'ip-pool', name: 'IpPool', component: () => import('../views/IpPool.vue'), meta: { titleKey: 'route.ipPool', icon: 'Connection' } },
+      { path: 'instance-plans', name: 'InstancePlans', component: () => import('../views/InstancePlans.vue'), meta: { titleKey: 'route.instancePlans', icon: 'Tickets' } },
+      { path: 'defense', name: 'Defense', component: () => import('../views/Defense.vue'), meta: { titleKey: 'route.defense', icon: 'Lock' } },
+      { path: 'ssh-keys', name: 'SshKeys', component: () => import('../views/SshKeys.vue'), meta: { titleKey: 'route.sshKeys', icon: 'Key' } },
     ]
   },
   {

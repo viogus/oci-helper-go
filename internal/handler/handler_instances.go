@@ -126,19 +126,31 @@ func (s *Server) createInstance(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleInstanceAction(w http.ResponseWriter, r *http.Request) {
+	// /api/instances/{id} or /api/instances/{id}/action
+	path := strings.TrimPrefix(r.URL.Path, "/api/instances/")
+	path = strings.TrimSuffix(path, "/")
+	parts := strings.SplitN(path, "/", 2)
+	instanceID := parts[0]
+
+	// GET: return instance detail from DB
+	if r.Method == http.MethodGet {
+		inst, err := s.store.GetInstanceByID(instanceID)
+		if err != nil || inst == nil {
+			jsonErr(w, "instance not found")
+			return
+		}
+		jsonOK(w, inst)
+		return
+	}
+
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	// /api/instances/{ocid}/action
-	path := strings.TrimPrefix(r.URL.Path, "/api/instances/")
-	parts := strings.SplitN(path, "/", 2)
-	if len(parts) != 2 || parts[1] != "action" {
-		jsonErr(w, "invalid path, expected /api/instances/{id}/action")
-		return
-	}
-	instanceID := parts[0]
+	// Accept both /api/instances/{id} and /api/instances/{id}/action
+	// Frontend sends POST /api/instances/{id} with {action: "..."} body.
+	_ = parts // instanceID already extracted above
 
 	var req struct {
 		Action   string `json:"action"`

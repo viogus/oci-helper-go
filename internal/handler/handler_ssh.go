@@ -100,10 +100,15 @@ func (s *Server) handleSSHKeyGenerate(w http.ResponseWriter, r *http.Request, re
 	pubBytes := gossh.MarshalAuthorizedKey(pub)
 	fingerprint := gossh.FingerprintSHA256(pub)
 
+	encryptedKey, err := encryptSSHPrivateKey(privPEM)
+	if err != nil {
+		jsonErr(w, "encrypt private key: "+err.Error())
+		return
+	}
 	key := &db.SSHKey{
 		Name:        req.Name,
 		PublicKey:   strings.TrimSpace(string(pubBytes)),
-		PrivateKey:  encryptSSHPrivateKey(privPEM),
+		PrivateKey:  encryptedKey,
 		Fingerprint: fingerprint,
 		TenantID:    req.TenantID,
 	}
@@ -117,7 +122,6 @@ func (s *Server) handleSSHKeyGenerate(w http.ResponseWriter, r *http.Request, re
 		"name":        key.Name,
 		"fingerprint": fingerprint,
 		"public_key":  string(pubBytes),
-		"private_key": string(privPEM),
 	})
 }
 

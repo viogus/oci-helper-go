@@ -40,30 +40,31 @@ func getSSHEncryptionKey() []byte {
 }
 
 // encryptSSHPrivateKey encrypts plaintext with AES-256-GCM.
-// Returns base64-encoded salt(16) + nonce(12) + ciphertext||tag.
-func encryptSSHPrivateKey(plaintext []byte) string {
+// Returns base64-encoded salt(16) + nonce(12) + ciphertext||tag, or an error.
+// On any crypto failure, returns ("", error) — never falls back to plaintext.
+func encryptSSHPrivateKey(plaintext []byte) (string, error) {
 	key := getSSHEncryptionKey()
 	salt := make([]byte, 16)
 	if _, err := io.ReadFull(rand.Reader, salt); err != nil {
-		return string(plaintext)
+		return "", fmt.Errorf("encrypt SSH: read salt: %w", err)
 	}
 	block, err := aes.NewCipher(key)
 	if err != nil {
-		return string(plaintext)
+		return "", fmt.Errorf("encrypt SSH: new cipher: %w", err)
 	}
 	gcm, err := cipher.NewGCM(block)
 	if err != nil {
-		return string(plaintext)
+		return "", fmt.Errorf("encrypt SSH: new GCM: %w", err)
 	}
 	nonce := make([]byte, gcm.NonceSize())
 	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
-		return string(plaintext)
+		return "", fmt.Errorf("encrypt SSH: read nonce: %w", err)
 	}
 	out := make([]byte, 0, len(salt)+len(nonce)+len(plaintext)+16)
 	out = append(out, salt...)
 	out = append(out, nonce...)
 	out = gcm.Seal(out, nonce, plaintext, nil)
-	return base64.StdEncoding.EncodeToString(out)
+	return base64.StdEncoding.EncodeToString(out), nil
 }
 
 // decryptSSHPrivateKey decrypts data produced by encryptSSHPrivateKey.

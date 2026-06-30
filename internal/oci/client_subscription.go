@@ -29,7 +29,9 @@ func (c *Client) GetSubscriptionInfo(ctx context.Context) (*ospgateway.Subscript
 	}
 
 	// OSP Gateway must use the home region endpoint.
-	// Save and restore the base client to avoid mutating the shared region setting.
+	// Save and restore the base client. Note: SetRegion may mutate additional
+	// internal SDK state beyond BaseClient. Client MUST NOT be shared across
+	// goroutines (current design creates a fresh Client per request).
 	baseClient := c.subscription.BaseClient
 	c.subscription.SetRegion(homeRegion)
 

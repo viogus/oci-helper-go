@@ -347,18 +347,21 @@ func (s *Server) syncVNICs(ctx context.Context, tenantID int64) {
 		log.Printf("[syncVnics] list instances: %v", err)
 		return
 	}
+	// Fetch tenant and create OCI client once — not per instance.
+	tenant, err := s.store.GetTenant(tenantID)
+	if err != nil || tenant == nil {
+		log.Printf("[syncVnics] tenant %d not found", tenantID)
+		return
+	}
+	client, err := s.clientFor(tenant)
+	if err != nil {
+		log.Printf("[syncVnics] oci client: %v", err)
+		return
+	}
 	for _, inst := range instances {
 		parts := strings.SplitN(inst.OCID, ":", 2)
 		ocid := parts[len(parts)-1]
 		if ocid == "" {
-			continue
-		}
-		tenant, err := s.store.GetTenant(tenantID)
-		if err != nil || tenant == nil {
-			continue
-		}
-		client, err := s.clientFor(tenant)
-		if err != nil {
 			continue
 		}
 		vnics, err := client.GetInstanceVNICs(ctx, tenant.TenancyOCID, ocid)
@@ -663,11 +666,14 @@ func (s *Server) handleCheckAliveBatch(w http.ResponseWriter, r *http.Request) {
 	var mu sync.Mutex
 	var results []checkResult
 	var wg sync.WaitGroup
+	sem := make(chan struct{}, 50) // max 50 concurrent TCP checks
 
 	for _, inst := range running {
 		wg.Add(1)
+		sem <- struct{}{}
 		go func(inst db.Instance) {
 			defer wg.Done()
+			defer func() { <-sem }()
 			if inst.PublicIP == "" {
 				mu.Lock()
 				results = append(results, checkResult{InstanceID: inst.OCID, Alive: false, Error: "no public IP"})

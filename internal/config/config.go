@@ -6,7 +6,9 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"fmt"
+	"log"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -44,7 +46,14 @@ func Load() *Config {
 	if c.Password == "" {
 		pw := randStr(16)
 		c.Password = pw
-		fmt.Fprintf(os.Stderr, "[oci-helper] OCI_PASSWORD not set; generated: %s\n", pw)
+		// Write full password to a file with restricted permissions for admin retrieval.
+		// Only log the first 4 characters — never the full password.
+		pwFile := filepath.Join(filepath.Dir(c.DBPath), ".admin_password")
+		if err := os.WriteFile(pwFile, []byte(pw+"\n"), 0600); err != nil {
+			log.Printf("warn: cannot write admin password file: %v", err)
+		} else {
+			log.Printf("[oci-helper] OCI_PASSWORD not set; generated password written to %s (first 4 chars: %s...)", pwFile, pw[:4])
+		}
 	}
 
 	if v := os.Getenv("OCI_MFA"); strings.ToLower(v) == "true" {

@@ -22,7 +22,11 @@ import (
 func main() {
 	// healthcheck mode for docker healthcheck
 	if len(os.Args) > 1 && os.Args[1] == "health" {
-		resp, err := http.Get("http://localhost:8818/api/config")
+		port := os.Getenv("PORT")
+		if port == "" {
+			port = "8818"
+		}
+		resp, err := http.Get("http://localhost:" + port + "/api/config")
 		if err != nil {
 			os.Exit(1)
 		}

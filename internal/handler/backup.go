@@ -190,7 +190,7 @@ func encrypt(plaintext []byte, password string) ([]byte, error) {
 	if _, err := io.ReadFull(rand.Reader, salt); err != nil {
 		return nil, err
 	}
-	key := pbkdf2.Key([]byte(password), salt, 100000, 32, sha256.New)
+	key := pbkdf2.Key([]byte(password), salt, 600000, 32, sha256.New)
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return nil, err
@@ -216,7 +216,7 @@ func decrypt(data []byte, password string) ([]byte, error) {
 		return nil, fmt.Errorf("ciphertext too short")
 	}
 	salt := data[:saltLen]
-	key := pbkdf2.Key([]byte(password), salt, 100000, 32, sha256.New)
+	key := pbkdf2.Key([]byte(password), salt, 600000, 32, sha256.New)
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return nil, err

@@ -50,12 +50,17 @@ func New(username, password, mfaSecret string, mfaEnabled bool) *Service {
 		mfaEnabled: mfaEnabled,
 	}
 	if password != "" {
-		hash, _ := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+		hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+		if err != nil {
+			panic("auth: bcrypt.GenerateFromPassword failed: " + err.Error())
+		}
 		s.passwordHash = hash
 	}
 	// generate session signing key
 	sk := make([]byte, 32)
-	rand.Read(sk)
+	if _, err := rand.Read(sk); err != nil {
+		panic("auth: crypto/rand.Read failed for session key: " + err.Error())
+	}
 	s.sessionKey = sk
 	return s
 }
@@ -79,7 +84,11 @@ func (s *Service) Login(w http.ResponseWriter, r *http.Request) bool {
 		return false
 	}
 	sess := Session{User: user, CreatedAt: time.Now(), Version: s.sessionVersion}
-	data, _ := json.Marshal(sess)
+	data, err := json.Marshal(sess)
+	if err != nil {
+		http.Error(w, "Internal error", http.StatusInternalServerError)
+		return false
+	}
 	signed := sign(data, s.sessionKey)
 	encrypted, err := encryptSigned([]byte(signed), s.sessionKey)
 	if err != nil {
@@ -91,7 +100,7 @@ func (s *Service) Login(w http.ResponseWriter, r *http.Request) bool {
 		Value:    base64.RawURLEncoding.EncodeToString(encrypted),
 		Path:     "/",
 		HttpOnly: true,
-		Secure:   r.TLS != nil,
+		Secure:   r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https",
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   int(sessionTTL.Seconds()),
 	}
@@ -102,7 +111,10 @@ func (s *Service) Login(w http.ResponseWriter, r *http.Request) bool {
 // CreateSession generates a signed session cookie value for the given user.
 func (s *Service) CreateSession(user string) string {
 	sess := Session{User: user, CreatedAt: time.Now(), Version: s.sessionVersion}
-	data, _ := json.Marshal(sess)
+	data, err := json.Marshal(sess)
+	if err != nil {
+		return ""
+	}
 	signed := sign(data, s.sessionKey)
 	encrypted, err := encryptSigned([]byte(signed), s.sessionKey)
 	if err != nil {

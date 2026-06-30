@@ -28,10 +28,51 @@ type wsMessage struct {
 	Message string `json:"message,omitempty"`  // error/status text
 }
 
+// knownHostKeys stores SSH host keys for TOFU (Trust On First Use) verification.
+// Keys are scoped to the server process lifetime.
+var (
+	knownHostKeys   = make(map[string]gossh.PublicKey)
+	knownHostKeysMu sync.Mutex
+)
+
+// tofuHostKeyCallback returns a HostKeyCallback that implements TOFU:
+// accepts the key on first connection, rejects on mismatch thereafter.
+func tofuHostKeyCallback(host string) gossh.HostKeyCallback {
+	return func(hostname string, remote net.Addr, key gossh.PublicKey) error {
+		knownHostKeysMu.Lock()
+		defer knownHostKeysMu.Unlock()
+		stored, ok := knownHostKeys[host]
+		if !ok {
+			knownHostKeys[host] = key
+			log.Printf("[shell] TOFU: accepted new host key for %s (%s)", host, gossh.FingerprintSHA256(key))
+			return nil
+		}
+		if gossh.FingerprintSHA256(stored) != gossh.FingerprintSHA256(key) {
+			return fmt.Errorf("host key mismatch for %s: expected %s, got %s",
+				host, gossh.FingerprintSHA256(stored), gossh.FingerprintSHA256(key))
+		}
+		return nil
+	}
+}
+
 var shellUpgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 4096,
-	CheckOrigin:     func(r *http.Request) bool { return true },
+	CheckOrigin: func(r *http.Request) bool {
+		origin := r.Header.Get("Origin")
+		if origin == "" {
+			return true // same-origin requests, curl, wscat
+		}
+		// Allow same host (including port differences for dev)
+		host := r.Host
+		if h, _, err := net.SplitHostPort(origin); err == nil {
+			origin = h
+		}
+		if h, _, err := net.SplitHostPort(host); err == nil {
+			host = h
+		}
+		return origin == host
+	},
 }
 
 // handleShellWS handles WebSocket upgrade and bridges SSH → browser terminal.
@@ -246,7 +287,7 @@ func (s *Server) handleShellWS(w http.ResponseWriter, r *http.Request) {
 func (s *Server) connectSSH(tenant *db.Tenant, inst *db.Instance, signer gossh.Signer, pubKeyStr string) (*gossh.Client, bool, error) {
 	config := &gossh.ClientConfig{
 		Auth:            []gossh.AuthMethod{gossh.PublicKeys(signer)},
-		HostKeyCallback: gossh.InsecureIgnoreHostKey(),
+		HostKeyCallback: tofuHostKeyCallback(inst.PublicIP),
 		Timeout:         10 * time.Second,
 	}
 
@@ -327,7 +368,7 @@ func (s *Server) connectViaConsoleProxy(tenant *db.Tenant, inst *db.Instance, co
 	proxyConfig := &gossh.ClientConfig{
 		User:            proxyInfo.ProxyUser,
 		Auth:            config.Auth,
-		HostKeyCallback: gossh.InsecureIgnoreHostKey(),
+		HostKeyCallback: tofuHostKeyCallback(proxyInfo.ProxyHost),
 		Timeout:         15 * time.Second,
 	}
 

@@ -11,6 +11,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -203,7 +204,10 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/sync/", s.withAuth(s.handleSync))
 
 	// Static files (frontend)
-	staticFS, _ := fs.Sub(staticFiles, "dist")
+	staticFS, err := fs.Sub(staticFiles, "dist")
+	if err != nil {
+		log.Fatalf("embedded dist directory not found: %v", err)
+	}
 	s.mux.Handle("/", http.FileServer(http.FS(staticFS)))
 }
 
@@ -213,6 +217,15 @@ func (s *Server) Handler() http.Handler { return s.mux }
 
 func (s *Server) withAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		// Limit request body to 10 MB to prevent memory exhaustion.
+		r.Body = http.MaxBytesReader(w, r.Body, 10<<20)
+		// Set baseline security headers.
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
+		if r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https" {
+			w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+		}
 		if !s.auth.Authenticate(w, r) {
 			return
 		}
@@ -285,11 +298,11 @@ func (s *Server) handleGoogleLogin(w http.ResponseWriter, r *http.Request) {
 	})
 	// NOTE: redirect_uri must match the URI registered in Google Cloud Console
 	redirectURL := "https://accounts.google.com/o/oauth2/v2/auth" +
-		"?client_id=" + s.cfg.GoogleOAuth.ClientID +
-		"&redirect_uri=" + s.cfg.GoogleOAuth.RedirectURL +
+		"?client_id=" + url.QueryEscape(s.cfg.GoogleOAuth.ClientID) +
+		"&redirect_uri=" + url.QueryEscape(s.cfg.GoogleOAuth.RedirectURL) +
 		"&response_type=code" +
 		"&scope=openid+email+profile" +
-		"&state=" + state
+		"&state=" + url.QueryEscape(state)
 	http.Redirect(w, r, redirectURL, http.StatusFound)
 }
 
@@ -315,11 +328,15 @@ func (s *Server) handleGoogleCallback(w http.ResponseWriter, r *http.Request) {
 
 	// exchange code for token
 	tokenURL := "https://oauth2.googleapis.com/token"
-	body := fmt.Sprintf("code=%s&client_id=%s&client_secret=%s&redirect_uri=%s&grant_type=authorization_code",
-		code, s.cfg.GoogleOAuth.ClientID, s.cfg.GoogleOAuth.ClientSecret, s.cfg.GoogleOAuth.RedirectURL)
+	v := url.Values{}
+	v.Set("code", code)
+	v.Set("client_id", s.cfg.GoogleOAuth.ClientID)
+	v.Set("client_secret", s.cfg.GoogleOAuth.ClientSecret)
+	v.Set("redirect_uri", s.cfg.GoogleOAuth.RedirectURL)
+	v.Set("grant_type", "authorization_code")
 
 	httpClient := &http.Client{Timeout: 15 * time.Second}
-	resp, err := httpClient.Post(tokenURL, "application/x-www-form-urlencoded", strings.NewReader(body))
+	resp, err := httpClient.Post(tokenURL, "application/x-www-form-urlencoded", strings.NewReader(v.Encode()))
 	if err != nil {
 		jsonErr(w, "token exchange: "+err.Error())
 		return
@@ -363,7 +380,7 @@ func (s *Server) handleGoogleCallback(w http.ResponseWriter, r *http.Request) {
 		Value:    signedValue,
 		Path:     "/",
 		HttpOnly: true,
-		Secure:   r.TLS != nil,
+		Secure:   r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https",
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   86400,
 	})
@@ -377,15 +394,24 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		// Return all config keys the frontend Settings page expects.
+		// Sensitive keys are masked — only first 4 + last 4 chars shown.
 		keys := []string{
 			"mfa_enabled", "telegram_token", "dingtalk_webhook",
 			"google_client_id", "google_client_secret",
 			"cloudflare_token", "siliconflow_key",
 		}
+		secretKeys := map[string]bool{
+			"telegram_token": true, "cloudflare_token": true,
+			"siliconflow_key": true, "google_client_secret": true,
+		}
 		out := map[string]string{"username": s.cfg.Username}
 		for _, k := range keys {
 			v, _ := s.store.GetConfig(k)
-			out[k] = v
+			if secretKeys[k] && len(v) > 8 {
+				out[k] = v[:4] + "***" + v[len(v)-4:]
+			} else {
+				out[k] = v
+			}
 		}
 		jsonOK(w, out)
 	case http.MethodPost:

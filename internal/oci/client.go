@@ -200,12 +200,12 @@ func (c *Client) TerminateInstance(ctx context.Context, instanceID string) error
 // withSubtreeInterceptor sets an interceptor on the given embedded BaseClient
 // field pointer that adds compartmentIdInSubtree=true to all requests. This
 // enables recursive cross-compartment resource listing.
-// Returns a cleanup function to restore the previous interceptor (or nil).
-// withSubtreeInterceptor sets an interceptor on the given embedded BaseClient
-// field pointer that adds compartmentIdInSubtree=true to all requests. The SDK's
-// BaseClient.Interceptor runs before CallWithServiceAndOperationName signs the
-// request, so query params added here are included in the signed URL.
-// This enables recursive cross-compartment resource listing.
+//
+// IMPORTANT: This mutates the Client struct field directly. Client instances
+// MUST NOT be shared across goroutines — each request gets a fresh Client via
+// clientFor(). If client caching/pooling is ever added, this function must be
+// guarded with c.mu.Lock() or replaced with per-request options.
+//
 // Returns a cleanup function to restore the previous interceptor (or nil).
 func withSubtreeInterceptor(interceptor *common.RequestInterceptor) func() {
 	prev := *interceptor
@@ -892,7 +892,7 @@ func (c *Client) FetchInstancesTraffic(ctx context.Context, compartmentID, regio
 	var totalIn, totalOut float64
 	instanceCount := len(instances)
 	totalDuration := endTime.Sub(startTime)
-	intervalStr, _ := intervalForDuration(totalDuration)
+	intervalStr, step := intervalForDuration(totalDuration)
 	namespace := "oci_vcn"
 
 	for _, inst := range instances {
@@ -925,7 +925,7 @@ func (c *Client) FetchInstancesTraffic(ctx context.Context, compartmentID, regio
 				for _, item := range resp.Items {
 					for _, dp := range item.AggregatedDatapoints {
 						if dp.Value != nil {
-							*metric.accum += *dp.Value * totalDuration.Seconds()
+							*metric.accum += *dp.Value * step.Seconds()
 						}
 					}
 				}
@@ -1664,6 +1664,7 @@ func (c *Client) Disable500Mbps(ctx context.Context, instanceID string) error {
 
 // ChangeInstanceIP replaces the ephemeral public IP of an instance.
 func (c *Client) ChangeInstanceIP(ctx context.Context, instanceID string, cidrList []string) (string, error) {
+	defer withSubtreeInterceptor(&c.compute.Interceptor)()
 	// Get current VNIC
 	attReq := core.ListVnicAttachmentsRequest{
 		CompartmentId: common.String(c.tenant.TenancyOCID),
@@ -1717,23 +1718,33 @@ func (c *Client) ChangeInstanceIP(ctx context.Context, instanceID string, cidrLi
 	}
 
 	// Delete old public IP
-	// Find the public IP OCID by listing
-	pipReq := core.ListPublicIpsRequest{
-		Scope:         core.ListPublicIpsScopeRegion,
-		CompartmentId: common.String(c.tenant.TenancyOCID),
-		Limit:         common.Int(100),
-	}
-	pipResp, err := c.vcn.ListPublicIps(ctx, pipReq)
-	if err != nil {
-		return "", fmt.Errorf("list public IPs: %w", err)
-	}
-
+	// Find the public IP OCID by listing (paginated to handle large tenancies).
 	var oldIPID string
-	for _, ip := range pipResp.Items {
-		if ip.IpAddress != nil && *ip.IpAddress == oldIP {
-			oldIPID = *ip.Id
+	var page *string
+	for {
+		pipReq := core.ListPublicIpsRequest{
+			Scope:         core.ListPublicIpsScopeRegion,
+			CompartmentId: common.String(c.tenant.TenancyOCID),
+			Limit:         common.Int(100),
+			Page:          page,
+		}
+		pipResp, err := c.vcn.ListPublicIps(ctx, pipReq)
+		if err != nil {
+			return "", fmt.Errorf("list public IPs: %w", err)
+		}
+		for _, ip := range pipResp.Items {
+			if ip.IpAddress != nil && *ip.IpAddress == oldIP {
+				oldIPID = *ip.Id
+				break
+			}
+		}
+		if oldIPID != "" {
 			break
 		}
+		if pipResp.OpcNextPage == nil || *pipResp.OpcNextPage == "" {
+			break
+		}
+		page = pipResp.OpcNextPage
 	}
 	if oldIPID == "" {
 		return "", fmt.Errorf("public IP not found in tenancy")

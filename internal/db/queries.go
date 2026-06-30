@@ -155,7 +155,9 @@ func (s *Store) ListAudit(limit int) ([]AuditLog, error) {
 func (s *Store) ListAuditPaginated(keyword string, page, size int) ([]AuditLog, int64, error) {
 	kw := "%" + keyword + "%"
 	var total int64
-	s.db.QueryRow(`SELECT COUNT(*) FROM audit_logs WHERE action LIKE ? OR detail LIKE ?`, kw, kw).Scan(&total)
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM audit_logs WHERE action LIKE ? OR detail LIKE ?`, kw, kw).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count audit_logs: %w", err)
+	}
 
 	offset := (page - 1) * size
 	rows, err := s.db.Query(`SELECT id, tenant_id, action, detail, ip, created_at FROM audit_logs
@@ -268,8 +270,10 @@ func (s *Store) SetConfig(key, value string) error {
 func (s *Store) ListInstancesPaginated(tenantID int64, keyword string, page, size int) ([]Instance, int64, error) {
 	kw := "%" + keyword + "%"
 	var total int64
-	s.db.QueryRow(`SELECT COUNT(*) FROM instances WHERE (tenant_id=? OR ?=0) AND (name LIKE ? OR ocid LIKE ? OR public_ip LIKE ?)`,
-		tenantID, tenantID, kw, kw, kw).Scan(&total)
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM instances WHERE (tenant_id=? OR ?=0) AND (name LIKE ? OR ocid LIKE ? OR public_ip LIKE ?)`,
+		tenantID, tenantID, kw, kw, kw).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count instances: %w", err)
+	}
 
 	offset := (page - 1) * size
 	rows, err := s.db.Query(`SELECT id, tenant_id, name, ocid, shape, ocpu, memory_gb, boot_volume_gb,
@@ -298,7 +302,9 @@ func (s *Store) ListInstancesPaginated(tenantID int64, keyword string, page, siz
 func (s *Store) ListTenantsPaginated(keyword string, page, size int) ([]Tenant, int64, error) {
 	kw := "%" + keyword + "%"
 	var total int64
-	s.db.QueryRow(`SELECT COUNT(*) FROM tenants WHERE name LIKE ? OR region LIKE ?`, kw, kw).Scan(&total)
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM tenants WHERE name LIKE ? OR region LIKE ?`, kw, kw).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count tenants: %w", err)
+	}
 
 	offset := (page - 1) * size
 	rows, err := s.db.Query(`SELECT id, name, user_ocid, tenancy_ocid, region, fingerprint, key_file,
@@ -325,7 +331,9 @@ func (s *Store) ListTenantsPaginated(keyword string, page, size int) ([]Tenant, 
 func (s *Store) ListTasksPaginated(keyword string, page, size int) ([]Task, int64, error) {
 	kw := "%" + keyword + "%"
 	var total int64
-	s.db.QueryRow(`SELECT COUNT(*) FROM tasks WHERE type LIKE ? OR message LIKE ?`, kw, kw).Scan(&total)
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM tasks WHERE type LIKE ? OR message LIKE ?`, kw, kw).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count tasks: %w", err)
+	}
 
 	offset := (page - 1) * size
 	rows, err := s.db.Query(`SELECT id, tenant_id, type, status, progress, message, payload,

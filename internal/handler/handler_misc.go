@@ -3,6 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"time"
 	"os"
@@ -112,6 +113,16 @@ func (s *Server) handleTelegramWebhook(w http.ResponseWriter, r *http.Request) {
 	if token == "" {
 		jsonErr(w, "telegram_token not configured")
 		return
+	}
+	// Verify secret token header to prevent unauthorized webhook calls.
+	// Set via: https://api.telegram.org/bot<TOKEN>/setWebhook?url=...&secret_token=<value>
+	webhookSecret, _ := s.store.GetConfig("telegram_webhook_secret")
+	if webhookSecret != "" {
+		if r.Header.Get("X-Telegram-Bot-Api-Secret-Token") != webhookSecret {
+			log.Printf("[telegram] webhook: invalid secret token from %s", maskIP(extractIP(r)))
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
 	}
 	var update telegram.Update
 	if err := json.NewDecoder(r.Body).Decode(&update); err != nil {

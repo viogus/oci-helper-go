@@ -138,6 +138,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/traffic/fetchVnics", s.withAuth(s.handleTrafficVnics))
 	s.mux.HandleFunc("/api/traffic/fetchInstances", s.withAuth(s.handleTrafficInstances))
 	s.mux.HandleFunc("/api/traffic", s.withAuth(s.handleTraffic))
+	s.mux.HandleFunc("/api/limits/services", s.withAuth(s.handleLimitsServices))
 	s.mux.HandleFunc("/api/limits", s.withAuth(s.handleLimits))
 	s.mux.HandleFunc("/api/logs", s.withAuth(s.handleLogs))
 	s.mux.HandleFunc("/api/logs/ws", s.withAuth(s.handleLogWS))

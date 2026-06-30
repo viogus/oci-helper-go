@@ -1208,53 +1208,149 @@ func (c *Client) ReleaseAllPorts(ctx context.Context, vcnID string) error {
 
 // --- Limits ---
 
+// LimitInfo represents a single OCI service limit/quota item.
 type LimitInfo struct {
-	ServiceName string `json:"serviceName"`
-	Name        string `json:"name"`
-	Used        int64  `json:"used"`
-	Available   int64  `json:"available"`
-	Max         int64  `json:"max"`
+	ServiceName        string `json:"serviceName"`
+	LimitName          string `json:"limitName"`
+	Description        string `json:"description"`
+	ScopeType          string `json:"scopeType"`
+	AvailabilityDomain string `json:"availabilityDomain"`
+	ServiceLimit       int64  `json:"serviceLimit"`
+	Used               int64  `json:"used"`
+	Available          int64  `json:"available"`
 }
 
-func (c *Client) GetLimits(ctx context.Context, tenantID int64, serviceName string) ([]LimitInfo, error) {
+// ListServices returns all available service names for limit queries.
+func (c *Client) ListServices(ctx context.Context) ([]string, error) {
 	defer withSubtreeInterceptor(&c.limits.Interceptor)()
-	compartmentID := c.tenant.TenancyOCID
-	req := limits.ListLimitDefinitionsRequest{
-		CompartmentId: common.String(compartmentID),
-		ServiceName:   common.String(serviceName),
+	req := limits.ListServicesRequest{
+		CompartmentId: common.String(c.tenant.TenancyOCID),
 		Limit:         common.Int(100),
 	}
-	resp, err := c.limits.ListLimitDefinitions(ctx, req)
+	resp, err := c.limits.ListServices(ctx, req)
 	if err != nil {
 		return nil, err
 	}
-	var result []LimitInfo
-	for _, def := range resp.Items {
-		valReq := limits.GetResourceAvailabilityRequest{
-			ServiceName:        common.String(serviceName),
-			LimitName:          def.Name,
-			CompartmentId:      common.String(compartmentID),
-			AvailabilityDomain: common.String(c.tenant.Region),
+	var names []string
+	for _, s := range resp.Items {
+		if s.Name != nil && *s.Name != "" {
+			names = append(names, *s.Name)
 		}
-		valResp, err := c.limits.GetResourceAvailability(ctx, valReq)
+	}
+	return names, nil
+}
+
+// GetLimits queries limits for a tenant and optional service in a specific region.
+// If serviceName is empty, queries ALL services.
+func (c *Client) GetLimits(ctx context.Context, region, serviceName string) ([]LimitInfo, error) {
+	defer withSubtreeInterceptor(&c.limits.Interceptor)()
+	compartmentID := c.tenant.TenancyOCID
+
+	// Determine which services to query.
+	var services []string
+	if serviceName != "" {
+		services = []string{serviceName}
+	} else {
+		var err error
+		services, err = c.ListServices(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("list services: %w", err)
+		}
+	}
+
+	var result []LimitInfo
+	for _, svc := range services {
+		// 1. List limit definitions for this service.
+		defReq := limits.ListLimitDefinitionsRequest{
+			CompartmentId: common.String(compartmentID),
+			ServiceName:   common.String(svc),
+			Limit:         common.Int(100),
+		}
+		defResp, err := c.limits.ListLimitDefinitions(ctx, defReq)
 		if err != nil {
 			continue
 		}
-		info := LimitInfo{
-			ServiceName: *def.ServiceName,
-			Name:        *def.Name,
+
+		for _, def := range defResp.Items {
+			scopeType := "REGION"
+			if def.ScopeType != "" {
+				scopeType = string(def.ScopeType)
+			}
+
+			desc := ""
+			if def.Description != nil {
+				desc = *def.Description
+			}
+			svcName := ""
+			if def.ServiceName != nil {
+				svcName = *def.ServiceName
+			}
+			limitName := ""
+			if def.Name != nil {
+				limitName = *def.Name
+			}
+
+			// 2. List limit values (may be AD-scoped).
+			valReq := limits.ListLimitValuesRequest{
+				CompartmentId: common.String(compartmentID),
+				ServiceName:   common.String(svc),
+				Limit:         common.Int(100),
+			}
+			valResp, err := c.limits.ListLimitValues(ctx, valReq)
+			if err != nil {
+				// No values — add placeholder row.
+				result = append(result, LimitInfo{
+					ServiceName: svcName,
+					LimitName:   limitName,
+					Description: desc,
+					ScopeType:   scopeType,
+				})
+				continue
+			}
+
+			for _, val := range valResp.Items {
+				ad := ""
+				if val.AvailabilityDomain != nil {
+					ad = *val.AvailabilityDomain
+				}
+				limit := int64(0)
+				if val.Value != nil {
+					limit = *val.Value
+				}
+
+				// 3. Get resource availability.
+				availReq := limits.GetResourceAvailabilityRequest{
+					ServiceName:        common.String(svc),
+					LimitName:          common.String(limitName),
+					CompartmentId:      common.String(compartmentID),
+					AvailabilityDomain: common.String(ad),
+				}
+				availResp, err := c.limits.GetResourceAvailability(ctx, availReq)
+				var used, available int64
+				if err == nil {
+					if availResp.Used != nil {
+						used = *availResp.Used
+					}
+					if availResp.Available != nil {
+						available = *availResp.Available
+					}
+				}
+
+				info := LimitInfo{
+					ServiceName:        svcName,
+					LimitName:          limitName,
+					Description:        desc,
+					ScopeType:          scopeType,
+					AvailabilityDomain: ad,
+					ServiceLimit:       limit,
+					Used:               used,
+					Available:          available,
+				}
+				result = append(result, info)
+			}
 		}
-		if valResp.Available != nil {
-			info.Available = *valResp.Available
-		}
-		if valResp.Used != nil {
-			info.Used = *valResp.Used
-		}
-		if valResp.EffectiveQuotaValue != nil {
-			info.Max = int64(*valResp.EffectiveQuotaValue)
-		}
-		result = append(result, info)
 	}
+
 	return result, nil
 }
 

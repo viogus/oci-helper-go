@@ -1,155 +1,119 @@
 <template>
-  <div class="limits-page">
-    <div class="page-header">
-      <h3>配额与限制</h3>
-    </div>
+  <div>
+    <h3>{{ $t('limits.title') }}</h3>
 
-    <!-- Filter Bar -->
-    <div class="filter-bar">
-      <el-select
-        v-model="tenantId"
-        placeholder="选择租户"
-        @change="loadLimits"
-        style="width: 220px"
-      >
-        <el-option
-          v-for="t in tenants"
-          :key="t.id"
-          :label="t.name"
-          :value="t.id"
-        />
-      </el-select>
-      <el-input
-        v-model="serviceName"
-        placeholder="按服务名筛选..."
-        clearable
-        @input="onServiceInput"
-        style="width: 240px"
-      />
-    </div>
+    <!-- Filter bar: tenant → region → service cascade -->
+    <el-card>
+      <el-form :inline="true">
+        <el-form-item :label="$t('limits.selectTenant')">
+          <el-select v-model="tenantId" :placeholder="$t('limits.selectTenant')" @change="onTenantChange" style="width:200px">
+            <el-option v-for="t in tenants" :key="t.id" :label="t.name" :value="t.id" />
+          </el-select>
+        </el-form-item>
+        <el-form-item :label="$t('limits.region')">
+          <el-select v-model="region" :placeholder="$t('limits.selectRegion')" @change="onRegionChange" :disabled="!tenantId" style="width:200px">
+            <el-option v-for="r in regionOptions" :key="r.value" :label="r.label" :value="r.value" />
+          </el-select>
+        </el-form-item>
+        <el-form-item :label="$t('limits.service')">
+          <el-select v-model="serviceName" :placeholder="$t('limits.allServices')" clearable :disabled="!region" style="width:220px">
+            <el-option v-for="s in serviceOptions" :key="s" :label="s" :value="s" />
+          </el-select>
+        </el-form-item>
+        <el-form-item>
+          <el-button type="primary" @click="loadLimits" :loading="loading" :disabled="!region">{{ $t('limits.query') }}</el-button>
+        </el-form-item>
+      </el-form>
 
-    <!-- Summary Cards -->
-    <div v-if="limits.length > 0" class="summary-row">
-      <el-card class="summary-card" shadow="never">
-        <div class="summary-value">{{ summary.total }}</div>
-        <div class="summary-label">总计</div>
-      </el-card>
-      <el-card class="summary-card critical" shadow="never">
-        <div class="summary-value">{{ summary.critical }}</div>
-        <div class="summary-label">严重 (&gt;Critical (&gt;80%)&lt;80%)</div>
-      </el-card>
-      <el-card class="summary-card warning" shadow="never">
-        <div class="summary-value">{{ summary.warning }}</div>
-        <div class="summary-label">警告 (60-80%)</div>
-      </el-card>
-    </div>
+      <!-- Summary cards -->
+      <div v-if="items.length > 0" class="summary-row">
+        <div class="cost-card total">
+          <div class="cost-value">{{ total }}</div>
+          <div class="cost-label">{{ $t('limits.total') }}</div>
+        </div>
+        <div class="cost-card critical">
+          <div class="cost-value">{{ critical }}</div>
+          <div class="cost-label">{{ $t('limits.critical') }} (&gt;80%)</div>
+        </div>
+        <div class="cost-card warning">
+          <div class="cost-value">{{ warning }}</div>
+          <div class="cost-label">{{ $t('limits.warning') }} (60-80%)</div>
+        </div>
+      </div>
 
-    <!-- Limits Table -->
-    <el-table
-      :data="limits"
-      v-loading="loading"
-      stripe
-      border
-      style="width: 100%"
-      empty-text="未找到配额"
-    >
-      <el-table-column label="服务名" width="160">
-        <template #default="{ row }">
-          <el-tag type="primary" effect="plain" size="small">
-            {{ row.serviceName }}
-          </el-tag>
-        </template>
-      </el-table-column>
-      <el-table-column prop="name" label="配额名称" min-width="220" />
-      <el-table-column label="已用" width="140" align="right">
-        <template #default="{ row }">
-          {{ used(row.used) }}
-        </template>
-      </el-table-column>
-      <el-table-column label="可用" width="140" align="right">
-        <template #default="{ row }">
-          {{ available(row) }}
-        </template>
-      </el-table-column>
-      <el-table-column label="最大 / 配额" width="140" align="right">
-        <template #default="{ row }">
-          {{ max(row.max) }}
-        </template>
-      </el-table-column>
-      <el-table-column label="使用率 %" width="200" align="center">
-        <template #default="{ row }">
-          <el-progress
-            :percentage="usagePct(row)"
-            :status="usageStatus(usagePct(row))"
-            :stroke-width="16"
-            :text-inside="true"
-          />
-        </template>
-      </el-table-column>
-    </el-table>
+      <!-- Table -->
+      <el-table v-if="items.length > 0" :data="items" stripe border size="small" style="margin-top:12px" :default-sort="{prop: 'serviceName', order: 'ascending'}">
+        <el-table-column prop="serviceName" :label="$t('limits.service')" width="150" sortable>
+          <template #default="{ row }">
+            <el-tag type="primary" effect="plain" size="small">{{ row.serviceName }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="limitName" :label="$t('limits.limitName')" min-width="200" sortable />
+        <el-table-column prop="description" :label="$t('limits.description')" min-width="180" show-overflow-tooltip />
+        <el-table-column prop="scopeType" :label="$t('limits.scopeType')" width="100" sortable>
+          <template #default="{ row }">
+            <el-tag :type="row.scopeType === 'AD' ? 'warning' : 'info'" size="small">{{ row.scopeType }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="availabilityDomain" :label="$t('limits.ad')" width="100">
+          <template #default="{ row }">{{ row.availabilityDomain || '—' }}</template>
+        </el-table-column>
+        <el-table-column :label="$t('limits.serviceLimit')" width="120" align="right" sortable prop="serviceLimit">
+          <template #default="{ row }">{{ fmt(row.serviceLimit) }}</template>
+        </el-table-column>
+        <el-table-column :label="$t('limits.used')" width="120" align="right" sortable prop="used">
+          <template #default="{ row }">{{ fmt(row.used) }}</template>
+        </el-table-column>
+        <el-table-column :label="$t('limits.available')" width="120" align="right" sortable prop="available">
+          <template #default="{ row }">{{ fmt(row.available) }}</template>
+        </el-table-column>
+        <el-table-column :label="$t('limits.usagePct')" width="180" align="center">
+          <template #default="{ row }">
+            <el-progress
+              :percentage="usagePct(row)"
+              :status="usageStatus(usagePct(row))"
+              :stroke-width="16"
+              :text-inside="true"
+            />
+          </template>
+        </el-table-column>
+      </el-table>
 
-    <!-- Empty State -->
-    <el-empty
-      v-if="!tenantId && !loading"
-      description="选择租户查看配额"
-    />
+      <el-empty v-if="!loading && !tenantId" :description="$t('limits.selectTenantHint')" />
+      <el-empty v-if="!loading && tenantId && !region" :description="$t('limits.selectRegionHint')" />
+      <el-empty v-if="!loading && region && queried && items.length === 0" :description="$t('limits.noData')" />
+    </el-card>
   </div>
 </template>
 
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { get } from '../api/index.js'
-import { getLimits } from '../api/traffic.js'
+import { get, post } from '../api/index.js'
+import { listTenants } from '../api/tenants.js'
 
-// ---------------------------------------------------------------------------
-// State
-// ---------------------------------------------------------------------------
 const tenants = ref([])
-const limits = ref([])
-const tenantId = ref(0)
+const tenantId = ref(null)
+const regionOptions = ref([])
+const region = ref('')
+const serviceOptions = ref([])
 const serviceName = ref('')
+const items = ref([])
 const loading = ref(false)
-let inputTimer = null
+const queried = ref(false)
 
-// ---------------------------------------------------------------------------
-// Computed
-// ---------------------------------------------------------------------------
-const summary = computed(() => {
-  const total = limits.value.length
-  const critical = limits.value.filter(
-    (l) => l.max > 0 && l.used / l.max > 0.8
-  ).length
-  const warning = limits.value.filter(
-    (l) => l.max > 0 && l.used / l.max > 0.6 && l.used / l.max <= 0.8
-  ).length
-  return { total, critical, warning }
-})
+const total = computed(() => items.value.length)
+const critical = computed(() => items.value.filter(l => l.serviceLimit > 0 && l.used / l.serviceLimit > 0.8).length)
+const warning = computed(() => items.value.filter(l => l.serviceLimit > 0 && l.used / l.serviceLimit > 0.6 && l.used / l.serviceLimit <= 0.8).length)
 
-// ---------------------------------------------------------------------------
-// Formatting helpers
-// ---------------------------------------------------------------------------
-function used(val) {
-  if (val == null) return '-'
-  return Number(val).toLocaleString()
-}
-
-function max(val) {
-  if (val == null) return '-'
-  if (val === 0) return '0'
-  return Number(val).toLocaleString()
-}
-
-function available(row) {
-  if (row.max == null) return '-'
-  if (row.max === 0) return '0'
-  const avail = Math.max(0, row.max - row.used)
-  return Number(avail).toLocaleString()
+function fmt(v) {
+  if (v == null) return '—'
+  return Number(v).toLocaleString()
 }
 
 function usagePct(row) {
-  if (!row.max || row.max === 0) return 0
-  return Math.round((row.used / row.max) * 100)
+  if (!row.serviceLimit || row.serviceLimit === 0) return 0
+  return Math.round((row.used / row.serviceLimit) * 100)
 }
 
 function usageStatus(pct) {
@@ -158,104 +122,67 @@ function usageStatus(pct) {
   return ''
 }
 
-// ---------------------------------------------------------------------------
-// Data loading
-// ---------------------------------------------------------------------------
-async function loadTenants() {
+onMounted(async () => {
   try {
-    const res = await get('/tenants')
-    tenants.value = res.data || []
+    const res = await listTenants()
+    tenants.value = res?.data || []
+  } catch {}
+})
+
+async function onTenantChange() {
+  region.value = ''
+  serviceOptions.value = []
+  serviceName.value = ''
+  items.value = []
+  if (!tenantId.value) return
+  try {
+    const res = await get('/traffic/getCondition', { tenant_id: tenantId.value })
+    regionOptions.value = res?.regionOptions || []
   } catch (e) {
-    ElMessage.error(e.response?.data?.error || 'Failed to load tenants')
+    ElMessage.error('Failed to load regions')
+  }
+}
+
+async function onRegionChange() {
+  serviceName.value = ''
+  items.value = []
+  if (!region.value || !tenantId.value) return
+  try {
+    const res = await get('/limits/services', { tenant_id: tenantId.value, region: region.value })
+    serviceOptions.value = Array.isArray(res) ? res : []
+  } catch (e) {
+    ElMessage.error('Failed to load services')
   }
 }
 
 async function loadLimits() {
-  if (!tenantId.value) {
-    limits.value = []
-    return
-  }
+  if (!tenantId.value || !region.value) return
   loading.value = true
+  queried.value = true
   try {
-    const payload = { tenant_id: tenantId.value }
-    if (serviceName.value) {
-      payload.service_name = serviceName.value
-    }
-    const res = await getLimits(payload)
-    limits.value = Array.isArray(res) ? res : res.data || []
+    const res = await post('/limits', {
+      tenant_id: tenantId.value,
+      region: region.value,
+      service_name: serviceName.value || '',
+    })
+    items.value = res?.items || []
   } catch (e) {
-    ElMessage.error(e.response?.data?.error || '无法加载配额')
-    limits.value = []
-  } finally {
-    loading.value = false
+    ElMessage.error(e.response?.data?.error || 'Failed to load limits')
+    items.value = []
   }
+  loading.value = false
 }
-
-function onServiceInput() {
-  clearTimeout(inputTimer)
-  inputTimer = setTimeout(() => {
-    loadLimits()
-  }, 300)
-}
-
-// ---------------------------------------------------------------------------
-// Lifecycle
-// ---------------------------------------------------------------------------
-onMounted(() => {
-  loadTenants()
-})
 </script>
 
 <style scoped>
-.limits-page {
-  padding: 20px;
+.summary-row { display:flex; gap:16px; margin-top:12px; flex-wrap:wrap }
+.cost-card {
+  flex:1; background:var(--card-bg); border-radius:8px; padding:16px 20px;
+  box-shadow:var(--shadow-sm); max-width:200px; min-width:140px; text-align:center
 }
-
-.page-header {
-  margin-bottom: 16px;
-}
-
-.page-header h3 {
-  margin: 0;
-  font-size: 20px;
-  font-weight: 600;
-}
-
-.filter-bar {
-  display: flex;
-  gap: 12px;
-  margin-bottom: 16px;
-  align-items: center;
-}
-
-.summary-row {
-  display: flex;
-  gap: 16px;
-  margin-bottom: 20px;
-}
-
-.summary-card {
-  flex: 1;
-  text-align: center;
-}
-
-.summary-card .summary-value {
-  font-size: 28px;
-  font-weight: 700;
-  line-height: 1.2;
-}
-
-.summary-card .summary-label {
-  font-size: 13px;
-  color: var(--el-text-color-secondary);
-  margin-top: 4px;
-}
-
-.summary-card.critical .summary-value {
-  color: var(--el-color-danger);
-}
-
-.summary-card.warning .summary-value {
-  color: var(--el-color-warning);
-}
+.cost-card.total { border-left:3px solid #2563eb }
+.cost-card.critical { border-left:3px solid #F56C6C }
+.cost-card.warning { border-left:3px solid #E6A23C }
+.cost-value { font-size:22px; font-weight:700; color:var(--text-primary) }
+.cost-label { font-size:12px; color:var(--text-muted); margin-top:4px }
 </style>

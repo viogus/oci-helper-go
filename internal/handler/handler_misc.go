@@ -111,14 +111,15 @@ func (s *Server) handleLimits(w http.ResponseWriter, r *http.Request) {
 	}
 	var req struct {
 		TenantID    int64  `json:"tenant_id"`
+		Region      string `json:"region"`
 		ServiceName string `json:"service_name"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonErr(w, "invalid body: "+err.Error())
 		return
 	}
-	if req.ServiceName == "" {
-		jsonErr(w, "service_name is required")
+	if req.TenantID == 0 {
+		jsonErr(w, "tenant_id required")
 		return
 	}
 	tenant, err := s.store.GetTenant(req.TenantID)
@@ -126,17 +127,55 @@ func (s *Server) handleLimits(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, "tenant not found")
 		return
 	}
+	// Use specified region or tenant default.
+	if req.Region != "" {
+		tenant.Region = req.Region
+	}
 	client, err := s.clientFor(tenant)
 	if err != nil {
 		jsonErr(w, "oci client: "+err.Error())
 		return
 	}
-	limits, err := client.GetLimits(r.Context(), req.TenantID, req.ServiceName)
+	limits, err := client.GetLimits(r.Context(), tenant.Region, req.ServiceName)
 	if err != nil {
 		jsonErr(w, "get limits: "+err.Error())
 		return
 	}
-	jsonOK(w, limits)
+	jsonOK(w, map[string]interface{}{
+		"total": len(limits),
+		"items": limits,
+	})
+}
+
+// GET /api/limits/services?tenant_id=X&region=Y
+func (s *Server) handleLimitsServices(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	tenantID, _ := strconv.ParseInt(r.URL.Query().Get("tenant_id"), 10, 64)
+	region := r.URL.Query().Get("region")
+	if tenantID == 0 || region == "" {
+		jsonErr(w, "tenant_id and region required")
+		return
+	}
+	tenant, err := s.store.GetTenant(tenantID)
+	if err != nil || tenant == nil {
+		jsonErr(w, "tenant not found")
+		return
+	}
+	tenant.Region = region
+	client, err := s.clientFor(tenant)
+	if err != nil {
+		jsonErr(w, "oci client: "+err.Error())
+		return
+	}
+	services, err := client.ListServices(r.Context())
+	if err != nil {
+		jsonErr(w, "list services: "+err.Error())
+		return
+	}
+	jsonOK(w, services)
 }
 
 func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {

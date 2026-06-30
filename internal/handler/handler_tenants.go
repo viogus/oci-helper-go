@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -236,7 +237,8 @@ func (s *Server) handleTenantInfo(w http.ResponseWriter, r *http.Request) {
 	var mu sync.Mutex
 	var regionNames = make([]string, 0)
 	var userList = make([]tenantUserInfo, 0)
-	var userErr, tenancyErr error
+	var userErr, subscriptionErr error
+	var subscriptionResult map[string]interface{}
 
 	wg.Add(3)
 	// Goroutine 1: list region subscriptions.
@@ -278,13 +280,27 @@ func (s *Server) handleTenantInfo(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 	}()
-	// Goroutine 3: get tenancy metadata (kept for future OSP Gateway integration).
+	// Goroutine 3: subscription info via OSP Gateway.
 	go func() {
 		defer wg.Done()
-		_, err := client.GetTenancy(r.Context())
+		sub, err := client.GetSubscriptionInfo(r.Context())
 		mu.Lock()
 		defer mu.Unlock()
-		tenancyErr = err
+		if err != nil {
+			subscriptionErr = err
+			return
+		}
+		if sub != nil {
+			subscriptionResult = map[string]interface{}{
+				"planType":                     string(sub.PlanType),
+				"accountType":                  string(sub.AccountType),
+				"currencyCode":                 safeStr(sub.CurrencyCode),
+				"upgradeState":                 string(sub.UpgradeState),
+				"timeStart":                    timeStr(sub.TimeStart),
+				"isIntentToPay":                boolVal(sub.IsIntentToPay),
+				"isCorporateConversionAllowed": boolVal(sub.IsCorporateConversionAllowed),
+			}
+		}
 	}()
 	wg.Wait()
 
@@ -292,8 +308,8 @@ func (s *Server) handleTenantInfo(w http.ResponseWriter, r *http.Request) {
 	if userErr != nil {
 		log.Printf("[tenant-info] list users for tenant %d: %v", id, userErr)
 	}
-	if tenancyErr != nil {
-		log.Printf("[tenant-info] get tenancy for tenant %d: %v", id, tenancyErr)
+	if subscriptionErr != nil {
+		log.Printf("[tenant-info] subscription for tenant %d: %v", id, subscriptionErr)
 	}
 
 	// Instance stats (from local DB — already fast, no need to parallelise).
@@ -329,9 +345,8 @@ func (s *Server) handleTenantInfo(w http.ResponseWriter, r *http.Request) {
 	// Account creation time: prefer OCI tenancy time, fall back to DB created_at.
 	accountCreationTime := t.CreatedAt.Format(time.RFC3339)
 
-	// Subscription info — placeholder until OSP Gateway integration.
-	// TODO: Integrate OSP Gateway for subscription details.
-	var subscription interface{} = nil
+	// Subscription info from OSP Gateway (nil if unavailable or unauthorized).
+	subscription := interface{}(subscriptionResult)
 
 	resp := map[string]interface{}{
 		"tenant":                     t,
@@ -486,17 +501,40 @@ func (s *Server) handleTenantUserResetPassword(w http.ResponseWriter, r *http.Re
 		jsonErr(w, "user_id required")
 		return
 	}
+	// Attempt 1: classic IAM API (works for non-Identity-Domain users).
 	resp, err := client.CreateOrResetUIPassword(r.Context(), body.UserID)
-	if err != nil {
-		jsonErr(w, "reset password: "+err.Error())
+	if err == nil {
+		pw := ""
+		if resp.Password != nil {
+			pw = *resp.Password
+		}
+		s.audit(id, "user:password:reset", body.UserID, r)
+		jsonOK(w, map[string]string{"status": "ok", "password": pw})
 		return
 	}
-	pw := ""
-	if resp.Password != nil {
-		pw = *resp.Password
+
+	// Check if error is a 404/400 — user may be in Identity Domains only.
+	var svcErr common.ServiceError
+	if errors.As(err, &svcErr) {
+		code := svcErr.GetHTTPStatusCode()
+		if code == 404 || code == 400 {
+			log.Printf("[password-reset] classic API returned %d, trying Identity Domains fallback for user %s", code, body.UserID)
+			domainURL, domainErr := client.GetDomainURL(r.Context())
+			if domainErr != nil {
+				jsonErr(w, "reset password: classic API failed and no Identity Domain available: "+domainErr.Error())
+				return
+			}
+			newPW, domainErr := client.ResetPasswordViaDomain(r.Context(), body.UserID, domainURL)
+			if domainErr != nil {
+				jsonErr(w, "reset password via Identity Domain: "+domainErr.Error())
+				return
+			}
+			s.audit(id, "user:password:reset:domain", body.UserID, r)
+			jsonOK(w, map[string]string{"status": "ok", "password": newPW})
+			return
+		}
 	}
-	s.audit(id, "user:password:reset", body.UserID, r)
-	jsonOK(w, map[string]string{"status": "ok", "password": pw})
+	jsonErr(w, "reset password: "+err.Error())
 }
 
 // POST /api/tenants/{id}/users/update — update user email and/or description.

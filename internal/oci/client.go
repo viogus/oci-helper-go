@@ -20,23 +20,25 @@ import (
 	"github.com/oracle/oci-go-sdk/v65/limits"
 	"github.com/oracle/oci-go-sdk/v65/monitoring"
 	"github.com/oracle/oci-go-sdk/v65/networkloadbalancer"
+	"github.com/oracle/oci-go-sdk/v65/ospgateway"
 	"github.com/oracle/oci-go-sdk/v65/usageapi"
 
 	"github.com/viogus/oci-helper-go/internal/db"
 )
 
 type Client struct {
-	tenant     *db.Tenant
-	rawCfg     common.ConfigurationProvider
-	compute    core.ComputeClient
-	vcn        core.VirtualNetworkClient
-	identity   identity.IdentityClient
-	bootVolume core.BlockstorageClient
-	monitoring monitoring.MonitoringClient
-	limits     limits.LimitsClient
-	nlb        networkloadbalancer.NetworkLoadBalancerClient
-	usageapi   usageapi.UsageapiClient
-	mu         sync.Mutex
+	tenant       *db.Tenant
+	rawCfg       common.ConfigurationProvider
+	compute      core.ComputeClient
+	vcn          core.VirtualNetworkClient
+	identity     identity.IdentityClient
+	bootVolume   core.BlockstorageClient
+	monitoring   monitoring.MonitoringClient
+	limits       limits.LimitsClient
+	nlb          networkloadbalancer.NetworkLoadBalancerClient
+	usageapi     usageapi.UsageapiClient
+	subscription ospgateway.SubscriptionServiceClient
+	mu           sync.Mutex
 }
 
 func NewClient(t *db.Tenant) (*Client, error) {
@@ -89,18 +91,24 @@ func NewClient(t *db.Tenant) (*Client, error) {
 		return nil, fmt.Errorf("usageapi client: %w", err)
 	}
 
+	sub, err := ospgateway.NewSubscriptionServiceClientWithConfigurationProvider(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("ospgateway client: %w", err)
+	}
+
 	return &Client{
-		tenant:     t,
-		rawCfg:     cfg,
-		compute:    compute,
-		vcn:        vcn,
-		identity:   id,
-		bootVolume: bv,
-		monitoring: mon,
-		limits:     lim,
-		nlb:        nlb,
-	usageapi:   usage,
-}, nil
+		tenant:       t,
+		rawCfg:       cfg,
+		compute:      compute,
+		vcn:          vcn,
+		identity:     id,
+		bootVolume:   bv,
+		monitoring:   mon,
+		limits:       lim,
+		nlb:          nlb,
+		usageapi:     usage,
+		subscription: sub,
+	}, nil
 }
 
 func (c *Client) ListInstances(ctx context.Context, compartmentID string) ([]core.Instance, error) {

@@ -1634,69 +1634,192 @@ func (c *Client) ComputeClient() core.ComputeClient { return c.compute }
 
 // ── Cost / Usage ────────────────────────────────────────────────────────
 
-// CostItem represents a single cost entry grouped by service.
-type CostItem struct {
-	Service    string  `json:"service"`
-	Amount     float64 `json:"amount"`
-	Currency   string  `json:"currency"`
-	Date       string  `json:"date"`
+// CostAnalysisParams configures a cost/usage query.
+type CostAnalysisParams struct {
+	StartDate   string // yyyy-MM-dd
+	EndDate     string // yyyy-MM-dd
+	Granularity string // DAILY or MONTHLY
+	QueryType   string // COST or USAGE
+	ReportType  string // COST_BY_SERVICE, COST_BY_SERVICE_AND_DESCRIPTION, COST_BY_SERVICE_AND_SKU, COST_BY_SERVICE_AND_TAG, COST_BY_COMPARTMENT, MONTHLY_COST
 }
 
-// CostSummary returns monthly cost data for the given date range.
-func (c *Client) CostSummary(ctx context.Context, startDate, endDate string) ([]CostItem, error) {
+// CostAnalysisResult wraps the full cost analysis response.
+type CostAnalysisResult struct {
+	Total     int         `json:"total"`
+	TotalCost float64     `json:"totalCost"`
+	Currency  string      `json:"currency"`
+	Items     []CostItem  `json:"items"`
+}
+
+// CostItem represents a single cost/usage entry.
+type CostItem struct {
+	Service          string  `json:"service"`
+	Description      string  `json:"description"`
+	SkuName          string  `json:"skuName"`
+	CompartmentName  string  `json:"compartmentName"`
+	Region           string  `json:"region"`
+	Date             string  `json:"date"`
+	Cost             float64 `json:"cost"`
+	ComputedQuantity float64 `json:"computedQuantity"`
+	Currency         string  `json:"currency"`
+	Unit             string  `json:"unit"`
+}
+
+// buildGroupBy maps report type to OCI group-by dimensions.
+func buildGroupBy(reportType string) []string {
+	switch reportType {
+	case "COST_BY_SERVICE_AND_DESCRIPTION":
+		return []string{"service", "skuPartNumber"}
+	case "COST_BY_SERVICE_AND_SKU":
+		return []string{"service", "skuName"}
+	case "COST_BY_SERVICE_AND_TAG":
+		return []string{"service", "tagNamespace", "tagKey"}
+	case "COST_BY_COMPARTMENT":
+		return []string{"compartmentName"}
+	case "MONTHLY_COST":
+		return []string{"service"}
+	default:
+		return []string{"service"}
+	}
+}
+
+// CostAnalysis queries the OCI Usage API with full parameter support.
+// It paginates through all results and returns a summary with items.
+func (c *Client) CostAnalysis(ctx context.Context, params CostAnalysisParams) (*CostAnalysisResult, error) {
+	// Parse dates; end date gets +1 day to cover the full day (matching Java behavior).
 	sdkStart := common.SDKTime{Time: time.Now().AddDate(0, -1, 0)}
 	sdkEnd := common.SDKTime{Time: time.Now()}
-	if t, err := time.Parse("2006-01-02", startDate); err == nil {
+	if t, err := time.Parse("2006-01-02", params.StartDate); err == nil {
 		sdkStart = common.SDKTime{Time: t}
 	}
-	if t, err := time.Parse("2006-01-02", endDate); err == nil {
-		sdkEnd = common.SDKTime{Time: t}
+	if t, err := time.Parse("2006-01-02", params.EndDate); err == nil {
+		sdkEnd = common.SDKTime{Time: t.AddDate(0, 0, 1)}
 	}
 
-	req := usageapi.RequestSummarizedUsagesRequest{
-		RequestSummarizedUsagesDetails: usageapi.RequestSummarizedUsagesDetails{
-			TenantId:         &c.tenant.TenancyOCID,
-			Granularity:      usageapi.RequestSummarizedUsagesDetailsGranularityMonthly,
-			GroupBy:          []string{"service"},
-			TimeUsageStarted: &sdkStart,
-			TimeUsageEnded:   &sdkEnd,
-			QueryType:        usageapi.RequestSummarizedUsagesDetailsQueryTypeCost,
-		},
+	// Granularity.
+	var granularity usageapi.RequestSummarizedUsagesDetailsGranularityEnum
+	if strings.EqualFold(params.Granularity, "MONTHLY") {
+		granularity = usageapi.RequestSummarizedUsagesDetailsGranularityMonthly
+	} else {
+		granularity = usageapi.RequestSummarizedUsagesDetailsGranularityDaily
 	}
 
-	resp, err := c.usageapi.RequestSummarizedUsages(ctx, req)
-	if err != nil {
-		return nil, fmt.Errorf("usage query: %w", err)
+	// Query type.
+	var queryType usageapi.RequestSummarizedUsagesDetailsQueryTypeEnum
+	if strings.EqualFold(params.QueryType, "USAGE") {
+		queryType = usageapi.RequestSummarizedUsagesDetailsQueryTypeUsage
+	} else {
+		queryType = usageapi.RequestSummarizedUsagesDetailsQueryTypeCost
 	}
 
-	var items []CostItem
-	for _, u := range resp.UsageAggregation.Items {
-		service := "Unknown"
+	groupBy := buildGroupBy(params.ReportType)
+	isAggregateByTime := false
+
+	details := usageapi.RequestSummarizedUsagesDetails{
+		TenantId:         &c.tenant.TenancyOCID,
+		Granularity:      granularity,
+		GroupBy:          groupBy,
+		TimeUsageStarted: &sdkStart,
+		TimeUsageEnded:   &sdkEnd,
+		QueryType:        queryType,
+		IsAggregateByTime: &isAggregateByTime,
+	}
+
+	// Compartment dimension requires compartmentDepth.
+	for _, g := range groupBy {
+		if g == "compartmentName" || g == "compartmentId" || g == "compartmentPath" {
+			depth := float32(1)
+			details.CompartmentDepth = &depth
+			break
+		}
+	}
+
+	// Paginated fetch.
+	var allItems []usageapi.UsageSummary
+	var page *string
+	for {
+		req := usageapi.RequestSummarizedUsagesRequest{
+			RequestSummarizedUsagesDetails: details,
+			Page:                           page,
+		}
+		resp, err := c.usageapi.RequestSummarizedUsages(ctx, req)
+		if err != nil {
+			return nil, fmt.Errorf("usage query: %w", err)
+		}
+		allItems = append(allItems, resp.UsageAggregation.Items...)
+		page = resp.OpcNextPage
+		if page == nil || *page == "" {
+			break
+		}
+	}
+
+	// Transform.
+	result := &CostAnalysisResult{Currency: "USD"}
+	dateFmt := "2006-01-02"
+	if strings.EqualFold(params.Granularity, "MONTHLY") {
+		dateFmt = "2006-01"
+	}
+	for _, u := range allItems {
+		item := CostItem{}
 		if u.Service != nil {
-			service = *u.Service
+			item.Service = *u.Service
 		}
-		amount := 0.0
+		if u.SkuPartNumber != nil {
+			item.Description = *u.SkuPartNumber
+		}
+		if u.SkuName != nil {
+			item.SkuName = *u.SkuName
+		}
+		if u.CompartmentName != nil {
+			item.CompartmentName = *u.CompartmentName
+		}
+		if u.Region != nil {
+			item.Region = *u.Region
+		}
+		if u.Unit != nil {
+			item.Unit = *u.Unit
+		}
+		if u.ComputedQuantity != nil {
+			item.ComputedQuantity = float64(*u.ComputedQuantity)
+		}
 		if u.ComputedAmount != nil {
-			amount = float64(*u.ComputedAmount)
+			item.Cost = float64(*u.ComputedAmount)
 		}
-		currency := "USD"
 		if u.Currency != nil {
-			currency = *u.Currency
+			item.Currency = strings.TrimSpace(*u.Currency)
 		}
-		date := ""
 		if u.TimeUsageStarted != nil {
-			date = u.TimeUsageStarted.String()
+			item.Date = u.TimeUsageStarted.Format(dateFmt)
 		}
-
-		items = append(items, CostItem{
-			Service:  service,
-			Amount:   amount,
-			Currency: currency,
-			Date:     date,
-		})
+		// Capture first non-empty currency for summary.
+		if result.Currency == "USD" && item.Currency != "" {
+			result.Currency = item.Currency
+		}
+		result.TotalCost += item.Cost
+		result.Items = append(result.Items, item)
 	}
+	result.Total = len(result.Items)
 
-	return items, nil
+	return result, nil
+}
+
+// CostSummary is DEPRECATED; use CostAnalysis instead.
+// Kept for backward compatibility — calls CostAnalysis with MONTHLY_COST defaults.
+func (c *Client) CostSummary(ctx context.Context, startDate, endDate string) ([]CostItem, error) {
+	r, err := c.CostAnalysis(ctx, CostAnalysisParams{
+		StartDate:   startDate,
+		EndDate:     endDate,
+		Granularity: "MONTHLY",
+		QueryType:   "COST",
+		ReportType:  "MONTHLY_COST",
+	})
+	if err != nil {
+		return nil, err
+	}
+	if r == nil {
+		return nil, nil
+	}
+	return r.Items, nil
 }
 
 // Tenant returns the tenant config.

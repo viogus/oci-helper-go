@@ -114,6 +114,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/instances/config-info", s.withAuth(s.handleInstanceConfigInfo))
 	s.mux.HandleFunc("/api/instances/update-password", s.withAuth(s.handleUpdatePassword))
 	s.mux.HandleFunc("/api/shell/ws", s.withAuth(s.handleShellWS))
+	s.mux.HandleFunc("/api/cost/analysis", s.withAuth(s.handleCostAnalysis))
 	s.mux.HandleFunc("/api/cost", s.withAuth(s.handleCost))
 
 	// NEW exact-path routes

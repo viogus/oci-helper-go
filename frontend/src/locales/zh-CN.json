@@ -152,7 +152,15 @@
     "serverKey": "使用服务器密钥: ",
     "uploaded": "已上传: ",
     "cancel": "取消",
-    "save": "保存"
+    "save": "保存",
+    "users": "身份用户",
+    "mfa": "MFA 设备",
+    "apiKeys": "API 密钥",
+    "passwordPolicy": "密码策略",
+    "userDeleted": "用户已删除",
+    "passwordReset": "密码已重置",
+    "mfaCleared": "MFA 设备已清除 ({count})",
+    "apiKeysCleared": "API 密钥已清除 ({count})"
   },
   "common": {
     "save": "保存",

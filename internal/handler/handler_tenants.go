@@ -6,9 +6,11 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
+	"github.com/oracle/oci-go-sdk/v65/common"
 	"github.com/viogus/oci-helper-go/internal/db"
-
+	ociclient "github.com/viogus/oci-helper-go/internal/oci"
 )
 
 // --- tenants ---
@@ -58,6 +60,41 @@ func (s *Server) handleTenantByID(w http.ResponseWriter, r *http.Request) {
 	// /api/tenants/{id}/info — enriched detail
 	if strings.HasSuffix(idStr, "/info") {
 		s.handleTenantInfo(w, r)
+		return
+	}
+
+	// --- identity management sub-routes ---
+	// /api/tenants/{id}/users/delete (must be before /users)
+	if strings.HasSuffix(idStr, "/users/delete") {
+		s.handleTenantUserDelete(w, r)
+		return
+	}
+	if strings.HasSuffix(idStr, "/users/reset-password") {
+		s.handleTenantUserResetPassword(w, r)
+		return
+	}
+	if strings.HasSuffix(idStr, "/users/update") {
+		s.handleTenantUserUpdate(w, r)
+		return
+	}
+	// /api/tenants/{id}/users — list identity users
+	if strings.HasSuffix(idStr, "/users") {
+		s.handleTenantUsers(w, r)
+		return
+	}
+	// /api/tenants/{id}/mfa/clear
+	if strings.HasSuffix(idStr, "/mfa/clear") {
+		s.handleTenantMFAClear(w, r)
+		return
+	}
+	// /api/tenants/{id}/api-keys/clear
+	if strings.HasSuffix(idStr, "/api-keys/clear") {
+		s.handleTenantAPIKeysClear(w, r)
+		return
+	}
+	// /api/tenants/{id}/password-policy
+	if strings.HasSuffix(idStr, "/password-policy") {
+		s.handleTenantPasswordPolicy(w, r)
 		return
 	}
 
@@ -179,3 +216,320 @@ func (s *Server) handleTenantInfo(w http.ResponseWriter, r *http.Request) {
 }
 
 // --- instances ---
+
+// tenantAndClient extracts the tenant ID from the URL, fetches the tenant from
+// the store, and creates an OCI client. It writes an error response and returns
+// false on failure.
+func (s *Server) tenantAndClient(w http.ResponseWriter, r *http.Request, idStr string) (int64, *db.Tenant, *ociclient.Client, bool) {
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil || id <= 0 {
+		jsonErr(w, "invalid tenant id")
+		return 0, nil, nil, false
+	}
+	t, _ := s.store.GetTenant(id)
+	if t == nil {
+		jsonErr(w, "tenant not found")
+		return 0, nil, nil, false
+	}
+	client, err := s.clientFor(t)
+	if err != nil {
+		jsonErr(w, "create OCI client: "+err.Error())
+		return 0, nil, nil, false
+	}
+	return id, t, client, true
+}
+
+// trimTenantSuffix trims /api/tenants/ prefix and the given suffix from the URL
+// path, returning the bare tenant ID string.
+func trimTenantSuffix(path, suffix string) string {
+	idStr := strings.TrimPrefix(path, "/api/tenants/")
+	idStr = strings.TrimSuffix(idStr, suffix)
+	return strings.TrimSuffix(idStr, "/")
+}
+
+// --- identity user management ---
+
+// GET /api/tenants/{id}/users — list identity users for a tenancy.
+func (s *Server) handleTenantUsers(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	idStr := trimTenantSuffix(r.URL.Path, "/users")
+	id, t, client, ok := s.tenantAndClient(w, r, idStr)
+	if !ok {
+		return
+	}
+	users, err := client.ListUsers(r.Context(), t.TenancyOCID)
+	if err != nil {
+		jsonErr(w, "list users: "+err.Error())
+		return
+	}
+	type userInfo struct {
+		ID             string `json:"id"`
+		Name           string `json:"name"`
+		Email          string `json:"email"`
+		LifecycleState string `json:"lifecycleState"`
+		IsMFA          bool   `json:"isMfaActivated"`
+		EmailVerified  bool   `json:"emailVerified"`
+		TimeCreated    string `json:"timeCreated"`
+		LastLogin      string `json:"lastSuccessfulLoginTime"`
+	}
+	var result []userInfo
+	for _, u := range users {
+		result = append(result, userInfo{
+			ID:             safeStr(u.Id),
+			Name:           safeStr(u.Name),
+			Email:          safeStr(u.Email),
+			LifecycleState: string(u.LifecycleState),
+			IsMFA:          boolVal(u.IsMfaActivated),
+			EmailVerified:  boolVal(u.EmailVerified),
+			TimeCreated:    timeStr(u.TimeCreated),
+			LastLogin:      timeStr(u.LastSuccessfulLoginTime),
+		})
+	}
+	_ = id // used for audit context
+	jsonOK(w, map[string]interface{}{"users": result})
+}
+
+// POST /api/tenants/{id}/users/delete — delete an identity user.
+func (s *Server) handleTenantUserDelete(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	idStr := trimTenantSuffix(r.URL.Path, "/users/delete")
+	id, _, client, ok := s.tenantAndClient(w, r, idStr)
+	if !ok {
+		return
+	}
+	var body struct {
+		UserID string `json:"user_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		jsonErr(w, "invalid body: "+err.Error())
+		return
+	}
+	if body.UserID == "" {
+		jsonErr(w, "user_id required")
+		return
+	}
+	if err := client.DeleteUser(r.Context(), body.UserID); err != nil {
+		jsonErr(w, "delete user: "+err.Error())
+		return
+	}
+	s.audit(id, "user:delete", body.UserID, r)
+	jsonOK(w, map[string]string{"status": "ok", "message": "User deleted"})
+}
+
+// POST /api/tenants/{id}/users/reset-password — reset/create UI password for a user.
+func (s *Server) handleTenantUserResetPassword(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	idStr := trimTenantSuffix(r.URL.Path, "/users/reset-password")
+	_, _, client, ok := s.tenantAndClient(w, r, idStr)
+	if !ok {
+		return
+	}
+	var body struct {
+		UserID string `json:"user_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		jsonErr(w, "invalid body: "+err.Error())
+		return
+	}
+	if body.UserID == "" {
+		jsonErr(w, "user_id required")
+		return
+	}
+	resp, err := client.CreateOrResetUIPassword(r.Context(), body.UserID)
+	if err != nil {
+		jsonErr(w, "reset password: "+err.Error())
+		return
+	}
+	pw := ""
+	if resp.Password != nil {
+		pw = *resp.Password
+	}
+	jsonOK(w, map[string]string{"status": "ok", "password": pw})
+}
+
+// POST /api/tenants/{id}/users/update — update user email and/or description.
+func (s *Server) handleTenantUserUpdate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	idStr := trimTenantSuffix(r.URL.Path, "/users/update")
+	id, _, client, ok := s.tenantAndClient(w, r, idStr)
+	if !ok {
+		return
+	}
+	var body struct {
+		UserID      string `json:"user_id"`
+		Email       string `json:"email"`
+		Description string `json:"description"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		jsonErr(w, "invalid body: "+err.Error())
+		return
+	}
+	if body.UserID == "" {
+		jsonErr(w, "user_id required")
+		return
+	}
+	var emailPtr, descPtr *string
+	if body.Email != "" {
+		emailPtr = &body.Email
+	}
+	if body.Description != "" {
+		descPtr = &body.Description
+	}
+	user, err := client.UpdateUser(r.Context(), body.UserID, emailPtr, descPtr)
+	if err != nil {
+		jsonErr(w, "update user: "+err.Error())
+		return
+	}
+	s.audit(id, "user:update", body.UserID, r)
+	jsonOK(w, user)
+}
+
+// POST /api/tenants/{id}/mfa/clear — clear all MFA TOTP devices for a user.
+func (s *Server) handleTenantMFAClear(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	idStr := trimTenantSuffix(r.URL.Path, "/mfa/clear")
+	id, _, client, ok := s.tenantAndClient(w, r, idStr)
+	if !ok {
+		return
+	}
+	var body struct {
+		UserID string `json:"user_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		jsonErr(w, "invalid body: "+err.Error())
+		return
+	}
+	if body.UserID == "" {
+		jsonErr(w, "user_id required")
+		return
+	}
+	devices, err := client.ListMfaTotpDevices(r.Context(), body.UserID)
+	if err != nil {
+		jsonErr(w, "list mfa devices: "+err.Error())
+		return
+	}
+	var deleted int
+	for _, d := range devices {
+		if d.Id == nil {
+			continue
+		}
+		if err := client.DeleteMfaTotpDevice(r.Context(), body.UserID, *d.Id); err != nil {
+			jsonErr(w, fmt.Sprintf("delete mfa device %s: %v", *d.Id, err))
+			return
+		}
+		deleted++
+	}
+	s.audit(id, "user:mfa:clear", body.UserID, r)
+	jsonOK(w, map[string]interface{}{"status": "ok", "deleted": deleted})
+}
+
+// POST /api/tenants/{id}/api-keys/clear — clear all API keys for a user.
+func (s *Server) handleTenantAPIKeysClear(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	idStr := trimTenantSuffix(r.URL.Path, "/api-keys/clear")
+	id, _, client, ok := s.tenantAndClient(w, r, idStr)
+	if !ok {
+		return
+	}
+	var body struct {
+		UserID string `json:"user_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		jsonErr(w, "invalid body: "+err.Error())
+		return
+	}
+	if body.UserID == "" {
+		jsonErr(w, "user_id required")
+		return
+	}
+	keys, err := client.ListApiKeys(r.Context(), body.UserID)
+	if err != nil {
+		jsonErr(w, "list api keys: "+err.Error())
+		return
+	}
+	var deleted int
+	for _, k := range keys {
+		if k.Fingerprint == nil {
+			continue
+		}
+		if err := client.DeleteApiKey(r.Context(), body.UserID, *k.Fingerprint); err != nil {
+			jsonErr(w, fmt.Sprintf("delete api key %s: %v", *k.Fingerprint, err))
+			return
+		}
+		deleted++
+	}
+	s.audit(id, "user:apikeys:clear", body.UserID, r)
+	jsonOK(w, map[string]interface{}{"status": "ok", "deleted": deleted})
+}
+
+// POST /api/tenants/{id}/password-policy — store password expiration setting.
+func (s *Server) handleTenantPasswordPolicy(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	idStr := trimTenantSuffix(r.URL.Path, "/password-policy")
+	id, _, _, ok := s.tenantAndClient(w, r, idStr)
+	if !ok {
+		return
+	}
+	var body struct {
+		UserID              string `json:"user_id"`
+		PasswordExpiresAfter int   `json:"password_expires_after"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		jsonErr(w, "invalid body: "+err.Error())
+		return
+	}
+	configKey := fmt.Sprintf("tenant_pwdexp_%d", id)
+	if err := s.store.SetConfig(configKey, strconv.Itoa(body.PasswordExpiresAfter)); err != nil {
+		jsonErr(w, "save password policy: "+err.Error())
+		return
+	}
+	jsonOK(w, map[string]interface{}{
+		"status":                 "ok",
+		"password_expires_after": body.PasswordExpiresAfter,
+	})
+}
+
+// --- helpers ---
+
+func safeStr(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
+}
+
+func boolVal(b *bool) bool {
+	if b == nil {
+		return false
+	}
+	return *b
+}
+
+func timeStr(t *common.SDKTime) string {
+	if t == nil {
+		return ""
+	}
+	return t.Format(time.RFC3339)
+}
+

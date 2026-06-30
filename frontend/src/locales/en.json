@@ -152,7 +152,15 @@
     "serverKey": "Server key: ",
     "uploaded": "Uploaded: ",
     "cancel": "Cancel",
-    "save": "Save"
+    "save": "Save",
+    "users": "Identity Users",
+    "mfa": "MFA Devices",
+    "apiKeys": "API Keys",
+    "passwordPolicy": "Password Policy",
+    "userDeleted": "User deleted",
+    "passwordReset": "Password reset",
+    "mfaCleared": "MFA devices cleared ({count})",
+    "apiKeysCleared": "API keys cleared ({count})"
   },
   "common": {
     "save": "Save",

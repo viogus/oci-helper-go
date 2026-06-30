@@ -269,15 +269,25 @@ func (c *Client) ListRegionSubscriptions(ctx context.Context) ([]identity.Region
 
 func (c *Client) ListUsers(ctx context.Context, compartmentID string) ([]identity.User, error) {
 	defer withSubtreeInterceptor(&c.identity.Interceptor)()
-	req := identity.ListUsersRequest{
-		CompartmentId: common.String(compartmentID),
-		Limit:         common.Int(100),
+	var all []identity.User
+	page := common.String("")
+	for {
+		req := identity.ListUsersRequest{
+			CompartmentId: common.String(compartmentID),
+			Limit:         common.Int(100),
+			Page:          page,
+		}
+		resp, err := c.identity.ListUsers(ctx, req)
+		if err != nil {
+			return nil, fmt.Errorf("list users: %w", err)
+		}
+		all = append(all, resp.Items...)
+		if resp.OpcNextPage == nil || *resp.OpcNextPage == "" {
+			break
+		}
+		page = resp.OpcNextPage
 	}
-	resp, err := c.identity.ListUsers(ctx, req)
-	if err != nil {
-		return nil, fmt.Errorf("list users: %w", err)
-	}
-	return resp.Items, nil
+	return all, nil
 }
 
 func (c *Client) GetUser(ctx context.Context, userID string) (*identity.User, error) {
@@ -316,13 +326,13 @@ func (c *Client) CreateOrResetUIPassword(ctx context.Context, userID string) (*i
 	return &resp.UiPassword, nil
 }
 
-func (c *Client) UpdateUser(ctx context.Context, userID, email, description string) (*identity.User, error) {
+func (c *Client) UpdateUser(ctx context.Context, userID string, email, description *string) (*identity.User, error) {
 	defer withSubtreeInterceptor(&c.identity.Interceptor)()
 	req := identity.UpdateUserRequest{
 		UserId: common.String(userID),
 		UpdateUserDetails: identity.UpdateUserDetails{
-			Email:       common.String(email),
-			Description: common.String(description),
+			Email:       email,
+			Description: description,
 		},
 	}
 	resp, err := c.identity.UpdateUser(ctx, req)
@@ -336,6 +346,7 @@ func (c *Client) ListMfaTotpDevices(ctx context.Context, userID string) ([]ident
 	defer withSubtreeInterceptor(&c.identity.Interceptor)()
 	req := identity.ListMfaTotpDevicesRequest{
 		UserId: common.String(userID),
+		Limit:  common.Int(100),
 	}
 	resp, err := c.identity.ListMfaTotpDevices(ctx, req)
 	if err != nil {
@@ -369,11 +380,11 @@ func (c *Client) ListApiKeys(ctx context.Context, userID string) ([]identity.Api
 	return resp.Items, nil
 }
 
-func (c *Client) DeleteApiKey(ctx context.Context, userID, keyID string) error {
+func (c *Client) DeleteApiKey(ctx context.Context, userID, fingerprint string) error {
 	defer withSubtreeInterceptor(&c.identity.Interceptor)()
 	req := identity.DeleteApiKeyRequest{
 		UserId:      common.String(userID),
-		Fingerprint: common.String(keyID),
+		Fingerprint: common.String(fingerprint),
 	}
 	_, err := c.identity.DeleteApiKey(ctx, req)
 	if err != nil {

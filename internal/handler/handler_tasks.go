@@ -74,6 +74,62 @@ func (s *Server) handleBatchCreate(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleCreateTasks(w http.ResponseWriter, r *http.Request) {
+	// G13: Parse sub-paths for /api/create-tasks/{id}/{action}
+	subPath := strings.TrimPrefix(r.URL.Path, "/api/create-tasks/")
+	subPath = strings.TrimSuffix(subPath, "/")
+	if subPath != "" {
+		parts := strings.SplitN(subPath, "/", 2)
+		taskID, err := strconv.ParseInt(parts[0], 10, 64)
+		if err != nil || taskID <= 0 {
+			jsonErr(w, "invalid task id")
+			return
+		}
+		// POST /api/create-tasks/{id}/{action}
+		if r.Method == http.MethodPost && len(parts) == 2 {
+			action := parts[1]
+			switch action {
+			case "stop":
+				s.store.UpdateTaskStatus(taskID, "cancelled", 0, "stopped by user")
+				s.audit(0, "create-tasks:stop", strconv.FormatInt(taskID, 10), r)
+				jsonOK(w, map[string]string{"status": "ok"})
+			case "pause":
+				s.store.UpdateTaskStatus(taskID, "paused", 0, "paused by user")
+				s.audit(0, "create-tasks:pause", strconv.FormatInt(taskID, 10), r)
+				jsonOK(w, map[string]string{"status": "ok"})
+			case "resume":
+				s.store.UpdateTaskStatus(taskID, "pending", 0, "resumed by user")
+				s.audit(0, "create-tasks:resume", strconv.FormatInt(taskID, 10), r)
+				jsonOK(w, map[string]string{"status": "ok"})
+			default:
+				jsonErr(w, "unknown action: "+action+". Use stop|pause|resume")
+			}
+			return
+		}
+		// PUT /api/create-tasks/{id} — update task payload
+		if r.Method == http.MethodPut && len(parts) == 1 {
+			var body struct {
+				Payload string `json:"payload"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				jsonErr(w, "invalid body: "+err.Error())
+				return
+			}
+			if body.Payload == "" {
+				jsonErr(w, "payload required for update")
+				return
+			}
+			if err := s.store.UpdateTaskPayload(taskID, body.Payload); err != nil {
+				jsonErr(w, "update task: "+err.Error())
+				return
+			}
+			s.audit(0, "create-tasks:update", strconv.FormatInt(taskID, 10), r)
+			jsonOK(w, map[string]string{"status": "ok"})
+			return
+		}
+		jsonErr(w, "method not allowed for sub-path")
+		return
+	}
+
 	switch r.Method {
 	case http.MethodGet:
 		keyword := r.URL.Query().Get("keyword")

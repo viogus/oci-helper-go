@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 )
@@ -103,4 +104,46 @@ func (s *Server) handleSecurityRules(w http.ResponseWriter, r *http.Request) {
 	default:
 		jsonErr(w, "unknown action: "+req.Action)
 	}
+}
+
+// ── G7: Security Rule Batch Release ─────────────────────────────────────
+
+func (s *Server) handleSecurityRuleRelease(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		TenantID int64    `json:"tenant_id"`
+		VcnID    string   `json:"vcn_id"`
+		Ports    []string `json:"ports"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonErr(w, "invalid body: "+err.Error())
+		return
+	}
+	if req.VcnID == "" || len(req.Ports) == 0 {
+		jsonErr(w, "vcn_id and ports required")
+		return
+	}
+	tenant, err := s.store.GetTenant(req.TenantID)
+	if err != nil || tenant == nil {
+		jsonErr(w, "tenant not found")
+		return
+	}
+	client, err := s.clientFor(tenant)
+	if err != nil {
+		jsonErr(w, "oci client: "+err.Error())
+		return
+	}
+	added := 0
+	for _, port := range req.Ports {
+		if err := client.AddIngressRule(r.Context(), req.VcnID, "TCP", port, "0.0.0.0/0"); err != nil {
+			jsonErr(w, fmt.Sprintf("add ingress rule port %s: %v", port, err))
+			return
+		}
+		added++
+	}
+	s.audit(req.TenantID, "security-rule:batch-release", req.VcnID, r)
+	jsonOK(w, map[string]interface{}{"status": "ok", "rules_added": added})
 }

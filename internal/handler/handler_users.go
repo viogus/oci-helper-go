@@ -120,6 +120,23 @@ func (s *Server) handleUserByID(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if action == "" {
+			// Prevent deleting the last admin user
+			users, _ := s.store.ListUsers()
+			adminCount := 0
+			for _, u := range users {
+				if u.Role == "admin" {
+					adminCount++
+				}
+			}
+			if adminCount <= 1 {
+				// Check if target user is an admin via stored list
+				for _, u := range users {
+					if u.ID == id && u.Role == "admin" {
+						jsonErr(w, "cannot delete the last admin user")
+						return
+					}
+				}
+			}
 			if err := s.store.DeleteUser(id); err != nil {
 				jsonErr(w, "delete user: "+err.Error())
 				return

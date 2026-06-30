@@ -8,11 +8,58 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/viogus/oci-helper-go/internal/db"
 	"github.com/viogus/oci-helper-go/internal/dingtalk"
 	"github.com/viogus/oci-helper-go/internal/telegram"
 )
+
+func (s *Server) handleGlance(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	db := s.store.DB()
+
+	var usersCount int64
+	db.QueryRow("SELECT COUNT(*) FROM users").Scan(&usersCount)
+
+	var tasksCount int64
+	db.QueryRow("SELECT COUNT(*) FROM tasks").Scan(&tasksCount)
+
+	var regionsCount int64
+	db.QueryRow("SELECT COUNT(DISTINCT region) FROM tenants").Scan(&regionsCount)
+
+	var tenantsCount int64
+	db.QueryRow("SELECT COUNT(*) FROM tenants").Scan(&tenantsCount)
+
+	var instancesCount int64
+	db.QueryRow("SELECT COUNT(*) FROM instances").Scan(&instancesCount)
+
+	var runningCount int64
+	db.QueryRow("SELECT COUNT(*) FROM instances WHERE state = 'RUNNING'").Scan(&runningCount)
+
+	// Add in-memory task count
+	memTasksMu.Lock()
+	memTasksCount := len(memTasks)
+	memTasksMu.Unlock()
+
+	totalTasks := tasksCount + int64(memTasksCount)
+	days := int(time.Since(s.startTime).Hours() / 24)
+
+	jsonOK(w, map[string]interface{}{
+		"users":           usersCount,
+		"tasks":           totalTasks,
+		"regions":         regionsCount,
+		"days":            days,
+		"currentVersion":  version,
+		"tenants":         tenantsCount,
+		"instances":       instancesCount,
+		"runningInstances": runningCount,
+	})
+}
 
 func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -383,4 +430,85 @@ func (s *Server) handleNotifyTest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	jsonOK(w, map[string]interface{}{"results": results})
+}
+
+// ── G11: Send Captcha ───────────────────────────────────────────────────
+
+var (
+	captchaStore   = make(map[string]captchaEntry)
+	captchaStoreMu sync.Mutex
+)
+
+type captchaEntry struct {
+	Code      string
+	ExpiresAt time.Time
+}
+
+func (s *Server) handleCaptchaSend(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		Recipient string `json:"recipient"` // "telegram" or "dingtalk"
+		Target    string `json:"target"`    // chat_id or webhook override
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonErr(w, "invalid body: "+err.Error())
+		return
+	}
+	if req.Recipient == "" || req.Target == "" {
+		jsonErr(w, "recipient and target required")
+		return
+	}
+
+	// Generate 6-digit code
+	code := fmt.Sprintf("%06d", time.Now().UnixNano()%1000000)
+
+	// Store in memory with 5-minute TTL
+	captchaStoreMu.Lock()
+	captchaStore[req.Target] = captchaEntry{
+		Code:      code,
+		ExpiresAt: time.Now().Add(5 * time.Minute),
+	}
+	captchaStoreMu.Unlock()
+
+	message := fmt.Sprintf("Your verification code is: %s (valid for 5 minutes)", code)
+
+	switch req.Recipient {
+	case "telegram":
+		token, _ := s.store.GetConfig("telegram_token")
+		if token == "" {
+			jsonErr(w, "no notification channel configured")
+			return
+		}
+		bot := telegram.New(token)
+		// Parse target as chat ID (int64)
+		chatID, err := strconv.ParseInt(req.Target, 10, 64)
+		if err != nil {
+			jsonErr(w, "invalid telegram chat_id: "+err.Error())
+			return
+		}
+		if err := bot.SendMessage(chatID, message); err != nil {
+			jsonErr(w, "telegram send: "+err.Error())
+			return
+		}
+	case "dingtalk":
+		webhookURL, _ := s.store.GetConfig("dingtalk_webhook")
+		if webhookURL == "" {
+			jsonErr(w, "no notification channel configured")
+			return
+		}
+		bot := dingtalk.New(webhookURL)
+		if err := bot.SendText(message); err != nil {
+			jsonErr(w, "dingtalk send: "+err.Error())
+			return
+		}
+	default:
+		jsonErr(w, "unknown recipient type: "+req.Recipient+". Use telegram or dingtalk")
+		return
+	}
+
+	s.audit(0, "captcha:send", req.Recipient, r)
+	jsonOK(w, map[string]string{"status": "ok", "message": "captcha sent"})
 }

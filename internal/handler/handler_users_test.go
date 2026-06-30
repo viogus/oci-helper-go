@@ -140,3 +140,42 @@ func TestHandleUserByID_InvalidID(t *testing.T) {
 		t.Fatalf("DELETE invalid user: %d, want 200", resp.StatusCode)
 	}
 }
+
+func TestHandleUsers_DeleteLastAdmin(t *testing.T) {
+	_, store, ts, cleanup := setupTestServer(t)
+	defer cleanup()
+
+	// Create only one admin user
+	admin := seedUser(t, store, "onlyadmin", "pass", "admin")
+
+	// Try to delete the only admin — should be rejected
+	resp := authedReq(t, ts, http.MethodDelete, "/api/users/"+itoa(admin.ID), "")
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("DELETE last admin: %d, want 400", resp.StatusCode)
+	}
+
+	m := jsonMap(t, resp)
+	if m["error"] == nil {
+		t.Fatal("expected error for deleting last admin")
+	}
+
+	// Verify admin still exists
+	list, _ := store.ListUsers()
+	found := false
+	for _, u := range list {
+		if u.ID == admin.ID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("last admin was deleted but should not have been")
+	}
+
+	// Now add a second admin and verify the first can be deleted
+	seedUser(t, store, "admin2", "pass", "admin")
+	resp2 := authedReq(t, ts, http.MethodDelete, "/api/users/"+itoa(admin.ID), "")
+	if resp2.StatusCode != http.StatusOK {
+		t.Fatalf("DELETE admin when another exists: %d, want 200", resp2.StatusCode)
+	}
+}

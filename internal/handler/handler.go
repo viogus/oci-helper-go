@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/viogus/oci-helper-go/internal/auth"
@@ -27,23 +28,29 @@ import (
 //go:embed all:dist/*
 var staticFiles embed.FS
 
+// version is the current application version, settable via -ldflags at build time.
+// Defaults to "dev" for local development.
+var version = "dev"
+
 type Server struct {
-	cfg    *config.Config
-	store  *db.Store
-	auth   *auth.Service
-	mux    *http.ServeMux
-	worker *Worker
+	cfg      *config.Config
+	store    *db.Store
+	auth     *auth.Service
+	mux      *http.ServeMux
+	worker   *Worker
 	ratelimit *loginRateLimiter
+	startTime time.Time
 }
 
 func New(cfg *config.Config, store *db.Store) *Server {
 	s := &Server{
-		cfg:    cfg,
-		store:  store,
-		auth:   auth.New(cfg.Username, cfg.Password, cfg.MFASecret, cfg.MFA),
-		mux:    http.NewServeMux(),
-		worker: NewWorker(store, cfg.KeysDir),
+		cfg:       cfg,
+		store:     store,
+		auth:      auth.New(cfg.Username, cfg.Password, cfg.MFASecret, cfg.MFA),
+		mux:       http.NewServeMux(),
+		worker:    NewWorker(store, cfg.KeysDir),
 		ratelimit: newLoginRateLimiter(),
+		startTime: time.Now(),
 	}
 	s.routes()
 	go s.worker.Run()
@@ -129,9 +136,17 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/instances/one-click-close-500m", s.withAuth(s.handleOneClickClose500M))
 	s.mux.HandleFunc("/api/instances/auto-rescue", s.withAuth(s.handleAutoRescue))
 	s.mux.HandleFunc("/api/instances/update-shape", s.withAuth(s.handleUpdateShape))
+	// G6: config-update
+	s.mux.HandleFunc("/api/instances/config-update", s.withAuth(s.handleInstanceConfigUpdate))
+	// G10: batch check alive
+	s.mux.HandleFunc("/api/instances/check-alive-batch", s.withAuth(s.handleCheckAliveBatch))
 
-	// security rules
+	// dashboard glance
+	s.mux.HandleFunc("/api/glance", s.withAuth(s.handleGlance))
+
 	s.mux.HandleFunc("/api/security-rules", s.withAuth(s.handleSecurityRules))
+	// G7: security rule batch release
+	s.mux.HandleFunc("/api/security-rules/release", s.withAuth(s.handleSecurityRuleRelease))
 
 	// traffic & monitoring
 	s.mux.HandleFunc("/api/traffic/getCondition", s.withAuth(s.handleTrafficCondition))
@@ -151,6 +166,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/defense/disable", s.withAuth(s.handleDefenseDisable))
 	s.mux.HandleFunc("/api/ip-blacklist", s.withAuth(s.handleIPBlacklist))
 	s.mux.HandleFunc("/api/create-tasks", s.withAuth(s.handleCreateTasks))
+	s.mux.HandleFunc("/api/create-tasks/", s.withAuth(s.handleCreateTasks))
 
 	// in-memory tasks
 	s.mux.HandleFunc("/api/mem-tasks/change-ip", s.withAuth(s.handleMemTasksChangeIP))
@@ -158,6 +174,15 @@ func (s *Server) routes() {
 
 	// ip-info (no auth)
 	s.mux.HandleFunc("/api/ip-info", s.handleIPInfo)
+
+	// G9: tenant upload (BEFORE wildcard /api/tenants/)
+	s.mux.HandleFunc("/api/tenants/upload", s.withAuth(s.handleTenantUpload))
+
+	// G11: captcha send
+	s.mux.HandleFunc("/api/captcha/send", s.withAuth(s.handleCaptchaSend))
+
+	// G14: AI chat cache clear (BEFORE wildcards)
+	s.mux.HandleFunc("/api/ai/chat/cache", s.withAuth(s.handleAIChatCacheClear))
 
 	// Wildcard routes (must come after exact paths)
 	s.mux.HandleFunc("/api/tenants/", s.withAuth(s.handleTenantByID))
@@ -791,4 +816,25 @@ func jsonErrStatus(w http.ResponseWriter, msg string, status int) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(map[string]string{"error": msg})
+}
+
+// ── G14: AI Chat Cache Clear ────────────────────────────────────────────
+
+// conversationCache holds in-memory AI conversation history, keyed by session.
+var (
+	conversationCache   = make(map[string][]ai.ChatMessage)
+	conversationCacheMu sync.Mutex
+)
+
+func (s *Server) handleAIChatCacheClear(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	conversationCacheMu.Lock()
+	cleared := len(conversationCache)
+	conversationCache = make(map[string][]ai.ChatMessage)
+	conversationCacheMu.Unlock()
+	s.audit(0, "ai:cache-clear", fmt.Sprintf("cleared %d conversations", cleared), r)
+	jsonOK(w, map[string]interface{}{"status": "ok", "cleared": cleared})
 }

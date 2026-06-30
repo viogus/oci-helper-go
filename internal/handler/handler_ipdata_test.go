@@ -111,3 +111,23 @@ func TestHandleIpDataByID_Delete(t *testing.T) {
 		t.Fatalf("status = %v, want ok", m["status"])
 	}
 }
+
+func TestHandleIpData_LoadOCI_NoInstances(t *testing.T) {
+	_, store, ts, cleanup := setupTestServer(t)
+	defer cleanup()
+
+	tid := seedTenant(t, store)
+	// Tenant exists but has no instances — load_oci should return added=0
+
+	body := `{"action":"load_oci","tenant_id":` + itoa(tid) + `}`
+	resp := authedReq(t, ts, http.MethodPost, "/api/ip-data", body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("POST /api/ip-data load_oci: %d, want 200", resp.StatusCode)
+	}
+
+	m := jsonMap(t, resp)
+	added, _ := m["added"].(float64)
+	if int(added) != 0 {
+		t.Fatalf("added = %v, want 0 (no instances)", added)
+	}
+}

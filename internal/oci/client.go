@@ -20,6 +20,7 @@ import (
 	"github.com/oracle/oci-go-sdk/v65/limits"
 	"github.com/oracle/oci-go-sdk/v65/monitoring"
 	"github.com/oracle/oci-go-sdk/v65/networkloadbalancer"
+	"github.com/oracle/oci-go-sdk/v65/usageapi"
 
 	"github.com/viogus/oci-helper-go/internal/db"
 )
@@ -34,6 +35,7 @@ type Client struct {
 	monitoring monitoring.MonitoringClient
 	limits     limits.LimitsClient
 	nlb        networkloadbalancer.NetworkLoadBalancerClient
+	usageapi   usageapi.UsageapiClient
 	mu         sync.Mutex
 }
 
@@ -82,6 +84,11 @@ func NewClient(t *db.Tenant) (*Client, error) {
 		return nil, fmt.Errorf("nlb client: %w", err)
 	}
 
+	usage, err := usageapi.NewUsageapiClientWithConfigurationProvider(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("usageapi client: %w", err)
+	}
+
 	return &Client{
 		tenant:     t,
 		rawCfg:     cfg,
@@ -92,7 +99,8 @@ func NewClient(t *db.Tenant) (*Client, error) {
 		monitoring: mon,
 		limits:     lim,
 		nlb:        nlb,
-	}, nil
+	usageapi:   usage,
+}, nil
 }
 
 func (c *Client) ListInstances(ctx context.Context, compartmentID string) ([]core.Instance, error) {
@@ -1623,5 +1631,72 @@ func (c *Client) VcnClient() core.VirtualNetworkClient { return c.vcn }
 
 // ComputeClient returns the raw Compute client for direct SDK access.
 func (c *Client) ComputeClient() core.ComputeClient { return c.compute }
+
+// ── Cost / Usage ────────────────────────────────────────────────────────
+
+// CostItem represents a single cost entry grouped by service.
+type CostItem struct {
+	Service    string  `json:"service"`
+	Amount     float64 `json:"amount"`
+	Currency   string  `json:"currency"`
+	Date       string  `json:"date"`
+}
+
+// CostSummary returns monthly cost data for the given date range.
+func (c *Client) CostSummary(ctx context.Context, startDate, endDate string) ([]CostItem, error) {
+	sdkStart := common.SDKTime{Time: time.Now().AddDate(0, -1, 0)}
+	sdkEnd := common.SDKTime{Time: time.Now()}
+	if t, err := time.Parse("2006-01-02", startDate); err == nil {
+		sdkStart = common.SDKTime{Time: t}
+	}
+	if t, err := time.Parse("2006-01-02", endDate); err == nil {
+		sdkEnd = common.SDKTime{Time: t}
+	}
+
+	req := usageapi.RequestSummarizedUsagesRequest{
+		RequestSummarizedUsagesDetails: usageapi.RequestSummarizedUsagesDetails{
+			TenantId:         &c.tenant.TenancyOCID,
+			Granularity:      usageapi.RequestSummarizedUsagesDetailsGranularityMonthly,
+			GroupBy:          []string{"service"},
+			TimeUsageStarted: &sdkStart,
+			TimeUsageEnded:   &sdkEnd,
+			QueryType:        usageapi.RequestSummarizedUsagesDetailsQueryTypeCost,
+		},
+	}
+
+	resp, err := c.usageapi.RequestSummarizedUsages(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("usage query: %w", err)
+	}
+
+	var items []CostItem
+	for _, u := range resp.UsageAggregation.Items {
+		service := "Unknown"
+		if u.Service != nil {
+			service = *u.Service
+		}
+		amount := 0.0
+		if u.ComputedAmount != nil {
+			amount = float64(*u.ComputedAmount)
+		}
+		currency := "USD"
+		if u.Currency != nil {
+			currency = *u.Currency
+		}
+		date := ""
+		if u.TimeUsageStarted != nil {
+			date = u.TimeUsageStarted.String()
+		}
+
+		items = append(items, CostItem{
+			Service:  service,
+			Amount:   amount,
+			Currency: currency,
+			Date:     date,
+		})
+	}
+
+	return items, nil
+}
 
 // Tenant returns the tenant config.

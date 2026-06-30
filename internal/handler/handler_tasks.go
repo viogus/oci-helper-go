@@ -85,22 +85,38 @@ func (s *Server) handleCreateTasks(w http.ResponseWriter, r *http.Request) {
 		if size < 1 {
 			size = 20
 		}
-		list, _, err := s.store.ListTasksPaginated(keyword, page, size)
+		// List all tasks (no DB-level pagination) then filter in memory
+		// so pagination total reflects actual batch_create count.
+		all, err := s.store.ListTasks()
 		if err != nil {
 			jsonErr(w, "list tasks: "+err.Error())
 			return
 		}
-		// Filter for batch_create type
 		var filtered []db.Task
-		for _, t := range list {
+		for _, t := range all {
 			if t.Type == "batch_create" {
+				if keyword != "" && !strings.Contains(strings.ToLower(t.Payload), strings.ToLower(keyword)) &&
+					!strings.Contains(strings.ToLower(t.Status), strings.ToLower(keyword)) {
+					continue
+				}
 				filtered = append(filtered, t)
 			}
 		}
 		if filtered == nil {
 			filtered = []db.Task{}
 		}
-		jsonOK(w, map[string]interface{}{"data": filtered, "total": int64(len(filtered)), "page": page, "size": size})
+		total := int64(len(filtered))
+		// Apply pagination in memory
+		start := (page - 1) * size
+		if start > len(filtered) {
+			start = len(filtered)
+		}
+		end := start + size
+		if end > len(filtered) {
+			end = len(filtered)
+		}
+		pageItems := filtered[start:end]
+		jsonOK(w, map[string]interface{}{"data": pageItems, "total": total, "page": page, "size": size})
 
 	case http.MethodPost:
 		var req struct {

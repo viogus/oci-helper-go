@@ -19,11 +19,6 @@
           <div class="stat-value">{{ stat.value }}</div>
           <div class="stat-label">{{ $t(stat.labelKey) }}</div>
         </div>
-        <div class="stat-trend" v-if="stat.trend !== undefined">
-          <span :class="stat.trend >= 0 ? 'up' : 'down'">
-            {{ stat.trend >= 0 ? '+' : '' }}{{ stat.trend }}%
-          </span>
-        </div>
       </div>
     </div>
 
@@ -47,7 +42,7 @@
         </div>
       </div>
 
-      <!-- Recent Activity -->
+      <!-- Resources -->
       <div class="dash-section">
         <h4>{{ $t('home.resources') }}</h4>
         <div class="info-grid">
@@ -70,22 +65,40 @@
         </div>
       </div>
     </div>
+
+    <!-- World Map -->
+    <div class="dash-section map-section">
+      <h4>{{ $t('home.serverMap') }}</h4>
+      <div ref="mapContainer" class="map-container"></div>
+      <div class="map-legend">
+        <span class="legend-item"><span class="legend-dot running"></span> {{ $t('home.running') }}</span>
+        <span class="legend-item"><span class="legend-dot stopped"></span> {{ $t('home.stopped') }}</span>
+        <span class="legend-item"><span class="legend-dot other"></span> {{ $t('home.otherState') }}</span>
+      </div>
+    </div>
   </div>
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { get } from '../api/index.js'
 import {
   Monitor, User, Timer, Plus, Lock, Connection,
   Cloudy, ChatDotRound, Setting
 } from '@element-plus/icons-vue'
+import L from 'leaflet'
+import 'leaflet/dist/leaflet.css'
+import ociRegions from '../data/ociRegions.js'
 
 const loading = ref(true)
 const regionCount = ref(0)
 const runningCount = ref(0)
 const activeTasks = ref(0)
 const syncedTenants = ref(0)
+const mapContainer = ref(null)
+
+let map = null
+let markerLayer = null
 
 const stats = reactive([
   { labelKey: 'home.tenant', value: '—', icon: 'User', color: '#2563eb' },
@@ -105,15 +118,105 @@ const links = [
   { labelKey: 'home.settings', path: '/settings', icon: 'Setting', bg: 'linear-gradient(135deg,#78716c,#57534e)' },
 ]
 
+// Custom Leaflet marker icons
+const markerColors = {
+  RUNNING: '#10b981',
+  STOPPED: '#ef4444',
+  STOPPING: '#f59e0b',
+  STARTING: '#3b82f6',
+  TERMINATED: '#6b7280',
+  default: '#8b5cf6',
+}
+const iconCache = {}
+
+function getIcon(state) {
+  const color = markerColors[state] || markerColors.default
+  if (!iconCache[color]) {
+    iconCache[color] = L.divIcon({
+      className: 'custom-marker',
+      html: `<div style="width:12px;height:12px;border-radius:50%;background:${color};border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,0.3)"></div>`,
+      iconSize: [12, 12],
+      iconAnchor: [6, 6],
+    })
+  }
+  return iconCache[color]
+}
+
+function initMap() {
+  if (map) return
+  map = L.map(mapContainer.value, {
+    center: [20, 0],
+    zoom: 2,
+    minZoom: 2,
+    maxZoom: 8,
+    zoomControl: true,
+    attributionControl: false,
+  })
+
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+    maxZoom: 19,
+  }).addTo(map)
+
+  markerLayer = L.layerGroup().addTo(map)
+
+  // Invalidate size after container becomes visible
+  setTimeout(() => map.invalidateSize(), 100)
+}
+
+function updateMarkers(tenants, instances) {
+  if (!markerLayer) return
+  markerLayer.clearLayers()
+
+  // Build tenant id → region map
+  const tenantMap = {}
+  for (const t of tenants) {
+    if (t.region) tenantMap[t.id] = t.region.toLowerCase()
+  }
+
+  // Group instances by region
+  const regionGroups = {}
+  for (const inst of instances) {
+    const region = tenantMap[inst.tenantId]
+    if (!region) continue
+    const coords = ociRegions[region]
+    if (!coords) continue
+
+    const key = region
+    if (!regionGroups[key]) {
+      regionGroups[key] = { coords, region, count: 0, running: 0, instances: [] }
+    }
+    regionGroups[key].count++
+    if (inst.state === 'RUNNING') regionGroups[key].running++
+    regionGroups[key].instances.push(inst)
+  }
+
+  for (const [region, group] of Object.entries(regionGroups)) {
+    // Offset markers slightly so overlapping regions are visible
+    const jitter = (Object.keys(regionGroups).indexOf(region) % 5) * 0.0003
+    const lat = group.coords[0] + jitter
+    const lng = group.coords[1] + jitter
+
+    const dominantState = group.running > 0 ? 'RUNNING' : (group.instances[0]?.state || 'default')
+    const icon = getIcon(dominantState)
+
+    const displayRegion = region.replace('us-', '').replace('eu-', '').replace('ap-', '').replace('me-', '').replace('sa-', '')
+    const label = `${displayRegion}: ${group.count} (${group.running} running)`
+
+    const marker = L.marker([lat, lng], { icon }).addTo(markerLayer)
+    marker.bindTooltip(label, { direction: 'top', offset: [0, -8] })
+  }
+}
+
 onMounted(async () => {
+  let tList = [], iList = []
   try {
     const [tenants, instances, tasks] = await Promise.all([
       get('/tenants', { size: 100 }),
-      get('/instances', { size: 100 }),
+      get('/instances', { size: 500 }),
       get('/tasks', { size: 100 }),
     ])
-    const tList = tenants?.data || []
-    const iList = instances?.data || []
+    tList = tenants?.data || []
+    iList = instances?.data || []
     const taList = tasks?.data || []
 
     stats[0].value = tList.length
@@ -125,12 +228,25 @@ onMounted(async () => {
     activeTasks.value = stats[3].value
     syncedTenants.value = tList.filter(t => t.status === 'active').length
 
-    // Count unique regions
-    const regions = new Set(iList.map(i => '—'))
+    // Count unique regions from tenants
+    const regions = new Set()
     tList.forEach(t => { if (t.region) regions.add(t.region) })
     regionCount.value = regions.size
-  } catch {}
+  } catch { /* ignore load errors */ }
   loading.value = false
+
+  // Init map after data loaded
+  await nextTick()
+  initMap()
+  updateMarkers(tList, iList)
+})
+
+onBeforeUnmount(() => {
+  if (map) {
+    map.remove()
+    map = null
+    markerLayer = null
+  }
 })
 </script>
 
@@ -289,4 +405,44 @@ onMounted(async () => {
   font-weight: 600;
   color: var(--text-primary);
 }
+
+/* ── Map ──────────────────────────────────────────────────── */
+.map-section {
+  margin-top: 24px;
+}
+
+.map-container {
+  width: 100%;
+  height: 380px;
+  border-radius: var(--border-radius);
+  overflow: hidden;
+  box-shadow: var(--shadow-sm);
+  background: #e8e8e8;
+}
+
+.map-legend {
+  display: flex;
+  gap: 18px;
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.legend-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  display: inline-block;
+  border: 1.5px solid rgba(255,255,255,0.8);
+}
+
+.legend-dot.running { background: #10b981; }
+.legend-dot.stopped { background: #ef4444; }
+.legend-dot.other   { background: #8b5cf6; }
 </style>

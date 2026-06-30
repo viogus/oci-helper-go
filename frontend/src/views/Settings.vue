@@ -35,6 +35,9 @@
       <template #header>
         <div class="card-header">
           <span>Notifications</span>
+          <el-button size="small" :loading="testingAll" @click="handleTestAll">
+            Test All
+          </el-button>
         </div>
       </template>
       <el-form label-position="top" @submit.prevent>
@@ -59,16 +62,22 @@
         <el-form-item label="DingTalk Webhook URL">
           <div class="setting-row">
             <el-input
-              v-model="config.dingtalk_url"
+              v-model="config.dingtalk_webhook"
               placeholder="https://oapi.dingtalk.com/robot/send?access_token=..."
               :disabled="saving"
             />
             <el-button
               type="primary"
               :loading="saving"
-              @click="saveSetting('dingtalk_url', config.dingtalk_url)"
+              @click="saveSetting('dingtalk_webhook', config.dingtalk_webhook)"
             >
               Save
+            </el-button>
+            <el-button
+              :loading="testingDingtalk"
+              @click="handleTestDingtalk"
+            >
+              Test
             </el-button>
           </div>
         </el-form-item>
@@ -178,7 +187,7 @@
       </el-form>
     </el-card>
 
-    <!-- About -->
+    <!-- About & Update -->
     <el-card shadow="never" class="settings-card">
       <template #header>
         <div class="card-header">
@@ -199,6 +208,23 @@
           SQLite (WAL mode)
         </el-descriptions-item>
       </el-descriptions>
+      <div style="margin-top: 16px; display: flex; gap: 12px; align-items: center;">
+        <el-button :loading="checkingUpdate" @click="handleCheckUpdate">
+          Check for Updates
+        </el-button>
+        <el-button v-if="updateInfo" type="primary" :loading="updating" @click="handleUpdateNow">
+          Update Now
+        </el-button>
+      </div>
+      <el-alert
+        v-if="updateInfo"
+        :title="'Latest: ' + updateInfo.tag_name"
+        :description="updateInfo.body || 'Release available'"
+        type="success"
+        :closable="false"
+        show-icon
+        style="margin-top: 12px;"
+      />
     </el-card>
 
     <el-alert
@@ -224,6 +250,15 @@ const config = reactive({})
 const saving = ref(false)
 const loadError = ref('')
 const loadingConfig = ref(false)
+
+// Test buttons
+const testingAll = ref(false)
+const testingDingtalk = ref(false)
+
+// Update check
+const checkingUpdate = ref(false)
+const updating = ref(false)
+const updateInfo = ref(null)
 
 async function loadConfig() {
   loadingConfig.value = true
@@ -257,6 +292,56 @@ async function toggleMFA() {
   const newVal = config.mfa_enabled === 'true' ? 'false' : 'true'
   await saveSetting('mfa_enabled', newVal)
   config.mfa_enabled = newVal
+}
+
+async function handleTestAll() {
+  testingAll.value = true
+  try {
+    const res = await post('/notify/test')
+    ElMessage.success(res.message || 'Test notification sent')
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || 'Test failed')
+  } finally {
+    testingAll.value = false
+  }
+}
+
+async function handleTestDingtalk() {
+  testingDingtalk.value = true
+  try {
+    await post('/dingtalk/test')
+    ElMessage.success('DingTalk test message sent')
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || 'DingTalk test failed')
+  } finally {
+    testingDingtalk.value = false
+  }
+}
+
+async function handleCheckUpdate() {
+  checkingUpdate.value = true
+  updateInfo.value = null
+  try {
+    const res = await get('/update/check')
+    updateInfo.value = res
+    ElMessage.success('Update check complete')
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || 'Update check failed')
+  } finally {
+    checkingUpdate.value = false
+  }
+}
+
+async function handleUpdateNow() {
+  updating.value = true
+  try {
+    const res = await post('/update/now')
+    ElMessage.success(res.message || res.instructions || 'Update instructions sent')
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || 'Update failed')
+  } finally {
+    updating.value = false
+  }
 }
 
 onMounted(() => {

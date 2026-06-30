@@ -354,6 +354,17 @@ func (s *Store) UpdateTaskPayload(id int64, payload string) error {
 	return err
 }
 
+// ResetRunningTasks sets all "running" tasks back to "pending" so they are retried on restart.
+// This implements checkpoint-resume: tasks that were interrupted by a server restart
+// will be picked up again by the worker.
+func (s *Store) ResetRunningTasks() (int64, error) {
+	res, err := s.db.Exec(`UPDATE tasks SET status='pending', progress=0, message='restarting after server reboot' WHERE status='running'`)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
 // ── CfCfg ──────────────────────────────────────────────────────────────
 
 func (s *Store) ListCfCfgs() ([]CfCfg, error) {
@@ -461,6 +472,18 @@ func (s *Store) ListSSHKeys(tenantID int64) ([]SSHKey, error) {
 		list = append(list, k)
 	}
 	return list, rows.Err()
+}
+
+func (s *Store) GetSSHKeyByID(id int64) (*SSHKey, error) {
+	k := &SSHKey{}
+	err := s.db.QueryRow(
+		`SELECT id, name, public_key, COALESCE(private_key,''), fingerprint, COALESCE(tenant_id,0), created_at FROM ssh_keys WHERE id=?`,
+		id,
+	).Scan(&k.ID, &k.Name, &k.PublicKey, &k.PrivateKey, &k.Fingerprint, &k.TenantID, &k.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return k, nil
 }
 
 func (s *Store) CreateSSHKey(k *SSHKey) error {

@@ -43,10 +43,11 @@
     <el-table
       :data="instances"
       v-loading="loading"
+      @row-click="(row) => $router.push('/instances/' + encodeURIComponent(row.id))"
       @selection-change="onSelectionChange"
       border
       stripe
-      style="width: 100%"
+      style="width: 100%; cursor: pointer"
       row-key="id"
       :element-loading-text="$t('instance.loading')"
     >
@@ -124,6 +125,28 @@
                 </el-dropdown-item>
                 <el-dropdown-item command="attachIPv6">
                   Attach IPv6
+                </el-dropdown-item>
+
+                <el-dropdown-item command="updateName" divided>
+                  Update Name
+                </el-dropdown-item>
+                <el-dropdown-item command="updateShapeOnly">
+                  Update Shape Only
+                </el-dropdown-item>
+                <el-dropdown-item command="configInfo">
+                  Config Info
+                </el-dropdown-item>
+                <el-dropdown-item command="updatePassword">
+                  Update Password
+                </el-dropdown-item>
+                <el-dropdown-item command="autoRescue">
+                  Auto Rescue
+                </el-dropdown-item>
+                <el-dropdown-item command="enable500M">
+                  One-Click 500M
+                </el-dropdown-item>
+                <el-dropdown-item command="disable500M">
+                  Close 500M
                 </el-dropdown-item>
               </el-dropdown-menu>
             </template>
@@ -243,6 +266,77 @@
         <el-button @click="checkAliveVisible = false">{{ $t('instance.close') }}</el-button>
       </template>
     </el-dialog>
+
+    <!-- Update Name Dialog -->
+    <el-dialog v-model="nameDialogVisible" title="Update Name" width="420px" :close-on-click-modal="false">
+      <el-form :model="nameForm" label-width="80px">
+        <el-form-item label="Name" required>
+          <el-input v-model="nameForm.name" placeholder="Enter new instance name" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="nameDialogVisible = false">{{ $t('common.cancel') }}</el-button>
+        <el-button type="primary" :loading="saving" @click="handleUpdateName">
+          {{ $t('common.save') }}
+        </el-button>
+      </template>
+    </el-dialog>
+
+    <!-- Update Shape Only Dialog -->
+    <el-dialog v-model="updateShapeDialogVisible" title="Update Shape Only" width="420px" :close-on-click-modal="false">
+      <el-form :model="updateShapeForm" label-width="80px">
+        <el-form-item label="Shape" required>
+          <el-input v-model="updateShapeForm.shape" placeholder="e.g. VM.Standard.E3.Flex" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="updateShapeDialogVisible = false">{{ $t('common.cancel') }}</el-button>
+        <el-button type="primary" :loading="saving" @click="handleUpdateShapeOnly">
+          {{ $t('common.save') }}
+        </el-button>
+      </template>
+    </el-dialog>
+
+    <!-- Config Info Dialog -->
+    <el-dialog v-model="configInfoVisible" title="Instance Config Info" width="560px">
+      <el-descriptions v-if="configInfoData" :column="1" border size="small">
+        <el-descriptions-item label="OCID">{{ configInfoData.id || '-' }}</el-descriptions-item>
+        <el-descriptions-item label="Display Name">{{ configInfoData.display_name || '-' }}</el-descriptions-item>
+        <el-descriptions-item label="Shape">{{ configInfoData.shape || '-' }}</el-descriptions-item>
+        <el-descriptions-item label="State">{{ configInfoData.state || '-' }}</el-descriptions-item>
+        <el-descriptions-item label="Region">{{ configInfoData.region || '-' }}</el-descriptions-item>
+        <el-descriptions-item label="AD">{{ configInfoData.availability_domain || '-' }}</el-descriptions-item>
+        <el-descriptions-item label="Fault Domain">{{ configInfoData.fault_domain || '-' }}</el-descriptions-item>
+        <el-descriptions-item label="OCPU">{{ configInfoData.shape_config?.ocpus || '-' }}</el-descriptions-item>
+        <el-descriptions-item label="Memory (GB)">{{ configInfoData.shape_config?.memory_gb || '-' }}</el-descriptions-item>
+        <el-descriptions-item label="Created">{{ configInfoData.time_created || '-' }}</el-descriptions-item>
+        <el-descriptions-item v-if="configInfoData.vnic" label="VNIC ID">{{ configInfoData.vnic.id || '-' }}</el-descriptions-item>
+        <el-descriptions-item v-if="configInfoData.vnic" label="Public IP">{{ configInfoData.vnic.public_ip || '-' }}</el-descriptions-item>
+        <el-descriptions-item v-if="configInfoData.vnic" label="Private IP">{{ configInfoData.vnic.private_ip || '-' }}</el-descriptions-item>
+        <el-descriptions-item v-if="configInfoData.vnic" label="MAC">{{ configInfoData.vnic.mac || '-' }}</el-descriptions-item>
+        <el-descriptions-item v-if="configInfoData.boot_volume" label="Boot Volume ID">{{ configInfoData.boot_volume.id || '-' }}</el-descriptions-item>
+        <el-descriptions-item v-if="configInfoData.boot_volume" label="Boot Vol Size (GB)">{{ configInfoData.boot_volume.size_gb || '-' }}</el-descriptions-item>
+      </el-descriptions>
+      <el-empty v-else description="No config info loaded" />
+      <template #footer>
+        <el-button @click="configInfoVisible = false">{{ $t('instance.close') }}</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- Update Password Dialog -->
+    <el-dialog v-model="passwordDialogVisible" title="Update Instance Password" width="420px" :close-on-click-modal="false">
+      <el-form :model="passwordForm" label-width="120px">
+        <el-form-item label="New Password" required>
+          <el-input v-model="passwordForm.new_password" type="password" show-password placeholder="Min 8 characters" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="passwordDialogVisible = false">{{ $t('common.cancel') }}</el-button>
+        <el-button type="primary" :loading="saving" @click="handleUpdatePassword">
+          {{ $t('common.save') }}
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -258,9 +352,10 @@ import {
   changeShape,
   changeBootVolume,
   attachIPv6,
+  updateInstanceName,
   checkAlive
 } from '../api/instances.js'
-import { get } from '../api/index.js'
+import { get, post } from '../api/index.js'
 
 // ---------------------------------------------------------------------------
 // State
@@ -295,6 +390,17 @@ const shapeForm = reactive({
 const volumeForm = reactive({
   sizeGB: 50
 })
+
+// ── New action dialogs ────────────────────────────────────────────────
+const nameDialogVisible = ref(false)
+const updateShapeDialogVisible = ref(false)
+const configInfoVisible = ref(false)
+const configInfoData = ref(null)
+const passwordDialogVisible = ref(false)
+
+const nameForm = reactive({ name: '' })
+const updateShapeForm = reactive({ shape: '' })
+const passwordForm = reactive({ new_password: '' })
 
 // ---------------------------------------------------------------------------
 // Debounced search
@@ -408,6 +514,30 @@ function handleDropdownAction(row, command) {
       break
     case 'attachIPv6':
       attachIPv6Visible.value = true
+      break
+    case 'updateName':
+      nameForm.name = row.name || ''
+      nameDialogVisible.value = true
+      break
+    case 'updateShapeOnly':
+      updateShapeForm.shape = row.shape || ''
+      updateShapeDialogVisible.value = true
+      break
+    case 'configInfo':
+      handleConfigInfo(row)
+      break
+    case 'updatePassword':
+      passwordForm.new_password = ''
+      passwordDialogVisible.value = true
+      break
+    case 'autoRescue':
+      handleAutoRescue(row)
+      break
+    case 'enable500M':
+      handle500M(row, true)
+      break
+    case 'disable500M':
+      handle500M(row, false)
       break
   }
 }
@@ -565,6 +695,108 @@ async function handleCheckAlive() {
     ElMessage.error(e.response?.data?.error || e.message)
   } finally {
     checkAliveLoading.value = false
+  }
+}
+
+// ── New action handlers ───────────────────────────────────────────────
+async function handleUpdateName() {
+  saving.value = true
+  try {
+    await updateInstanceName({
+      tenant_id: currentInstance.value.tenantId,
+      instance_id: currentInstance.value.id,
+      name: nameForm.name
+    })
+    ElMessage.success('Instance name updated')
+    nameDialogVisible.value = false
+    await loadInstances()
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || 'Update name failed')
+  } finally {
+    saving.value = false
+  }
+}
+
+async function handleUpdateShapeOnly() {
+  saving.value = true
+  try {
+    await post('/instances/update-shape', {
+      tenant_id: currentInstance.value.tenantId,
+      instance_id: currentInstance.value.id,
+      shape: updateShapeForm.shape
+    })
+    ElMessage.success('Shape update submitted')
+    updateShapeDialogVisible.value = false
+    await loadInstances()
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || 'Update shape failed')
+  } finally {
+    saving.value = false
+  }
+}
+
+async function handleConfigInfo(row) {
+  try {
+    const res = await post('/instances/config-info', {
+      tenant_id: row.tenantId,
+      instance_id: row.id
+    })
+    configInfoData.value = res
+    configInfoVisible.value = true
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || 'Config info failed')
+  }
+}
+
+async function handleUpdatePassword() {
+  saving.value = true
+  try {
+    const res = await post('/instances/update-password', {
+      tenant_id: currentInstance.value.tenantId,
+      instance_id: currentInstance.value.id,
+      new_password: passwordForm.new_password
+    })
+    passwordDialogVisible.value = false
+    ElMessage.success(res.message || 'Password update initiated')
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || 'Update password failed')
+  } finally {
+    saving.value = false
+  }
+}
+
+async function handleAutoRescue(row) {
+  try {
+    await ElMessageBox.confirm(
+      `Auto Rescue will try TCP check → softreset → reset → stop+start for "${row.name}". Continue?`,
+      'Auto Rescue',
+      { confirmButtonText: 'Rescue', cancelButtonText: 'Cancel', type: 'warning' }
+    )
+    const res = await post('/instances/auto-rescue', {
+      tenant_id: row.tenantId,
+      instance_id: row.id
+    })
+    ElMessage.success(res.message || 'Auto rescue completed')
+    await loadInstances()
+  } catch (e) {
+    if (e !== 'cancel') {
+      ElMessage.error(e.response?.data?.error || 'Auto rescue failed')
+    }
+  }
+}
+
+async function handle500M(row, enable) {
+  try {
+    const endpoint = enable ? '/instances/one-click-500m' : '/instances/one-click-close-500m'
+    const label = enable ? 'Enable 500M' : 'Close 500M'
+    await post(endpoint, {
+      tenant_id: row.tenantId,
+      instance_id: row.id
+    })
+    ElMessage.success(`${label} submitted for "${row.name}"`)
+    await loadInstances()
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || '500M operation failed')
   }
 }
 

@@ -346,11 +346,18 @@ func (s *Server) handleGoogleCallback(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		mfaEnabled, _ := s.store.GetConfig("mfa_enabled")
-		jsonOK(w, map[string]string{
-			"username": s.cfg.Username,
-			"mfa":      mfaEnabled,
-		})
+		// Return all config keys the frontend Settings page expects.
+		keys := []string{
+			"mfa_enabled", "telegram_token", "dingtalk_webhook",
+			"google_client_id", "google_client_secret",
+			"cloudflare_token", "siliconflow_key",
+		}
+		out := map[string]string{"username": s.cfg.Username}
+		for _, k := range keys {
+			v, _ := s.store.GetConfig(k)
+			out[k] = v
+		}
+		jsonOK(w, out)
 	case http.MethodPost:
 		var req struct {
 			Key   string `json:"key"`

@@ -252,6 +252,19 @@ func (c *Client) ListAvailabilityDomains(ctx context.Context, compartmentID stri
 	return resp.Items, nil
 }
 
+// ListRegionSubscriptions returns subscribed regions for the tenancy.
+func (c *Client) ListRegionSubscriptions(ctx context.Context) ([]identity.RegionSubscription, error) {
+	defer withSubtreeInterceptor(&c.identity.Interceptor)()
+	req := identity.ListRegionSubscriptionsRequest{
+		TenancyId: common.String(c.tenant.TenancyOCID),
+	}
+	resp, err := c.identity.ListRegionSubscriptions(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	return resp.Items, nil
+}
+
 func (c *Client) ListImages(ctx context.Context, compartmentID, os string) ([]core.Image, error) {
 	defer withSubtreeInterceptor(&c.compute.Interceptor)()
 	req := core.ListImagesRequest{
@@ -711,6 +724,87 @@ func (c *Client) GetVNICTtraffic(ctx context.Context, compartmentID, vnicID stri
 	}
 	log.Printf("[GetVNICTtraffic] returned %d data points (step=%v)", len(data), step)
 	return data, nil
+}
+
+// FetchInstancesTrafficResult holds monthly traffic totals for one instance.
+type FetchInstancesTrafficResult struct {
+	InstanceCount    int    `json:"instanceCount"`
+	InboundTraffic   string `json:"inboundTraffic"`
+	OutboundTraffic  string `json:"outboundTraffic"`
+}
+
+// FetchInstancesTraffic sums traffic across all VNICs for all instances in a region
+// over the given time range, returning human-readable totals.
+func (c *Client) FetchInstancesTraffic(ctx context.Context, compartmentID, region string, startTime, endTime time.Time) (*FetchInstancesTrafficResult, error) {
+	instances, err := c.ListInstances(ctx, compartmentID)
+	if err != nil {
+		return nil, fmt.Errorf("list instances: %w", err)
+	}
+
+	var totalIn, totalOut float64
+	instanceCount := len(instances)
+	totalDuration := endTime.Sub(startTime)
+	intervalStr, _ := intervalForDuration(totalDuration)
+	namespace := "oci_vcn"
+
+	for _, inst := range instances {
+		vnics, err := c.GetInstanceVNICs(ctx, compartmentID, *inst.Id)
+		if err != nil {
+			continue
+		}
+		for _, vnic := range vnics {
+			for _, metric := range []struct {
+				name  string
+				accum *float64
+			}{
+				{"VnicBytesIn", &totalIn},
+				{"VnicBytesOut", &totalOut},
+			} {
+				req := monitoring.SummarizeMetricsDataRequest{
+					CompartmentId:          common.String(compartmentID),
+					CompartmentIdInSubtree: common.Bool(true),
+					SummarizeMetricsDataDetails: monitoring.SummarizeMetricsDataDetails{
+						Namespace: common.String(namespace),
+						Query:     common.String(fmt.Sprintf("%s%s{resourceId=\"%s\"}.mean()", metric.name, intervalStr, *vnic.Id)),
+						StartTime: &common.SDKTime{Time: startTime},
+						EndTime:   &common.SDKTime{Time: endTime},
+					},
+				}
+				resp, err := c.monitoring.SummarizeMetricsData(ctx, req)
+				if err != nil {
+					continue
+				}
+				for _, item := range resp.Items {
+					for _, dp := range item.AggregatedDatapoints {
+						if dp.Value != nil {
+							*metric.accum += *dp.Value * totalDuration.Seconds()
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return &FetchInstancesTrafficResult{
+		InstanceCount:   instanceCount,
+		InboundTraffic:  FormatBytes(totalIn),
+		OutboundTraffic: FormatBytes(totalOut),
+	}, nil
+}
+
+// FormatBytes converts bytes to a human-readable string (B/KB/MB/GB/TB).
+func FormatBytes(bytes float64) string {
+	units := []string{"B", "KB", "MB", "GB", "TB"}
+	v := bytes
+	idx := 0
+	for idx < len(units)-1 && v >= 1024 {
+		v /= 1024
+		idx++
+	}
+	if idx == 0 {
+		return fmt.Sprintf("%.0f %s", v, units[idx])
+	}
+	return fmt.Sprintf("%.2f %s", v, units[idx])
 }
 
 // helper for nil-safe pointer-to-string logging

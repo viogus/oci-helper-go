@@ -3,9 +3,14 @@ package handler
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
+
+	"github.com/viogus/oci-helper-go/internal/oci"
 )
+
+// ── POST /api/traffic — query traffic data for a VNIC ──────────────────
 
 func (s *Server) handleTraffic(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -35,7 +40,6 @@ func (s *Server) handleTraffic(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// parse time range
 	startTime, err := time.Parse(time.RFC3339, req.StartTime)
 	if err != nil {
 		jsonErr(w, "invalid start_time: "+err.Error())
@@ -47,8 +51,6 @@ func (s *Server) handleTraffic(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Determine VNIC compartment and ID.
-	// VNIC ID may be composite "tenantID:ocid"; strip prefix if present.
 	vnicID := req.VnicID
 	vnicCompartment := tenant.TenancyOCID
 	if vnicID == "" {
@@ -76,3 +78,188 @@ func (s *Server) handleTraffic(w http.ResponseWriter, r *http.Request) {
 	}
 	jsonOK(w, map[string]interface{}{"data": data, "vnic_id": vnicID})
 }
+
+// ── GET /api/traffic/getCondition — region + instance cascade ──────────
+
+func (s *Server) handleTrafficCondition(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	tenantID, _ := strconv.ParseInt(r.URL.Query().Get("tenant_id"), 10, 64)
+	if tenantID == 0 {
+		jsonErr(w, "tenant_id required")
+		return
+	}
+
+	tenant, err := s.store.GetTenant(tenantID)
+	if err != nil || tenant == nil {
+		jsonErr(w, "tenant not found")
+		return
+	}
+	client, err := s.clientFor(tenant)
+	if err != nil {
+		jsonErr(w, "oci client: "+err.Error())
+		return
+	}
+
+	// List region subscriptions.
+	regions, err := client.ListRegionSubscriptions(r.Context())
+	if err != nil {
+		jsonErr(w, "list regions: "+err.Error())
+		return
+	}
+
+	type ValueLabel struct {
+		Label string `json:"label"`
+		Value string `json:"value"`
+	}
+
+	regionOptions := make([]ValueLabel, 0, len(regions))
+	instanceOptions := make(map[string][]ValueLabel)
+
+	for _, reg := range regions {
+		rn := *reg.RegionName
+		regionOptions = append(regionOptions, ValueLabel{Label: rn, Value: rn})
+
+		// Make a fresh client subscribed to this region.
+		regTenant := *tenant
+		regTenant.HomeRegion = rn
+		regClient, err := s.clientFor(&regTenant)
+		if err != nil {
+			continue
+		}
+		instances, err := regClient.ListInstances(r.Context(), tenant.TenancyOCID)
+		if err != nil {
+			continue
+		}
+		var instOpts []ValueLabel
+		for _, inst := range instances {
+			name := ""
+			if inst.DisplayName != nil {
+				name = *inst.DisplayName
+			}
+			id := ""
+			if inst.Id != nil {
+				id = *inst.Id
+			}
+			instOpts = append(instOpts, ValueLabel{Label: name, Value: id})
+		}
+		instanceOptions[rn] = instOpts
+	}
+
+	jsonOK(w, map[string]interface{}{
+		"regionOptions":   regionOptions,
+		"instanceOptions": instanceOptions,
+	})
+}
+
+// ── GET /api/traffic/fetchVnics — list VNICs for an instance ───────────
+
+func (s *Server) handleTrafficVnics(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	tenantID, _ := strconv.ParseInt(r.URL.Query().Get("tenant_id"), 10, 64)
+	instanceID := r.URL.Query().Get("instance_id")
+	if tenantID == 0 || instanceID == "" {
+		jsonErr(w, "tenant_id and instance_id required")
+		return
+	}
+
+	tenant, err := s.store.GetTenant(tenantID)
+	if err != nil || tenant == nil {
+		jsonErr(w, "tenant not found")
+		return
+	}
+	client, err := s.clientFor(tenant)
+	if err != nil {
+		jsonErr(w, "oci client: "+err.Error())
+		return
+	}
+
+	if i := strings.IndexByte(instanceID, ':'); i >= 0 {
+		instanceID = instanceID[i+1:]
+	}
+
+	vnics, err := client.GetInstanceVNICs(r.Context(), tenant.TenancyOCID, instanceID)
+	if err != nil {
+		jsonErr(w, "get vnics: "+err.Error())
+		return
+	}
+
+	type ValueLabel struct {
+		Label string `json:"label"`
+		Value string `json:"value"`
+	}
+	var result []ValueLabel
+	for _, v := range vnics {
+		label := ""
+		if v.DisplayName != nil {
+			label = *v.DisplayName
+		}
+		val := ""
+		if v.Id != nil {
+			val = *v.Id
+		}
+		if v.PublicIp != nil && *v.PublicIp != "" {
+			label += " (" + *v.PublicIp + ")"
+		} else if v.PrivateIp != nil && *v.PrivateIp != "" {
+			label += " (" + *v.PrivateIp + ")"
+		}
+		result = append(result, ValueLabel{Label: label, Value: val})
+	}
+
+	jsonOK(w, result)
+}
+
+// ── GET /api/traffic/fetchInstances — monthly traffic summary per region ──
+
+func (s *Server) handleTrafficInstances(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	tenantID, _ := strconv.ParseInt(r.URL.Query().Get("tenant_id"), 10, 64)
+	region := r.URL.Query().Get("region")
+	if tenantID == 0 || region == "" {
+		jsonErr(w, "tenant_id and region required")
+		return
+	}
+
+	tenant, err := s.store.GetTenant(tenantID)
+	if err != nil || tenant == nil {
+		jsonErr(w, "tenant not found")
+		return
+	}
+
+	// Use tenant with specific region.
+	regTenant := *tenant
+	regTenant.HomeRegion = region
+	client, err := s.clientFor(&regTenant)
+	if err != nil {
+		jsonErr(w, "oci client: "+err.Error())
+		return
+	}
+
+	// Default: current month.
+	now := time.Now()
+	startTime := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
+	endTime := now
+
+	result, err := client.FetchInstancesTraffic(r.Context(), tenant.TenancyOCID, region, startTime, endTime)
+	if err != nil {
+		jsonErr(w, "fetch instances: "+err.Error())
+		return
+	}
+
+	jsonOK(w, result)
+}
+
+// ── formatBytes helper exposed for handler reuse ────────────────────────
+
+func formatBytes(bytes float64) string { return oci.FormatBytes(bytes) }

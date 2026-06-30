@@ -1,254 +1,246 @@
 <template>
-  <div class="traffic-page">
-    <!-- Filter Bar -->
-    <div class="filter-bar">
-      <el-select
-        v-model="tenantId"
-        placeholder="选择租户"
-        @change="onTenantChange"
-        style="width: 200px"
-      >
-        <el-option
-          v-for="t in tenants"
-          :key="t.id"
-          :label="t.name"
-          :value="t.id"
-        />
-      </el-select>
+  <div>
+    <h3>{{ $t('traffic.title') }}</h3>
 
-      <el-select
-        v-model="instanceId"
-        placeholder="选择实例"
-        :disabled="!tenantId"
-        style="width: 320px"
-        filterable
-      >
-        <el-option
-          v-for="inst in instances"
-          :key="inst.id"
-          :label="inst.name"
-          :value="inst.id"
-        />
-      </el-select>
+    <!-- Tenant selector -->
+    <el-select v-model="tenantId" @change="loadCondition" :placeholder="$t('traffic.selectTenant')" style="width:200px;margin-bottom:8px">
+      <el-option v-for="t in tenants" :key="t.id" :label="t.name" :value="t.id" />
+    </el-select>
 
-      <el-date-picker
-        v-model="startTime"
-        type="datetime"
-        placeholder="开始时间"
-        value-format="x"
-        style="width: 200px"
-      />
+    <!-- Tab: query mode vs monthly summary -->
+    <el-tabs v-model="activeTab" style="margin-top:8px">
+      <el-tab-pane :label="$t('traffic.liveQuery')" name="live">
+        <el-card>
+          <!-- Region → Instance → VNIC cascade -->
+          <el-form :inline="true">
+            <el-form-item :label="$t('traffic.region')">
+              <el-select v-model="selectedRegion" :placeholder="$t('traffic.selectRegion')" @change="onRegionChange" style="width:200px">
+                <el-option v-for="r in regionOptions" :key="r.value" :label="r.label" :value="r.value" />
+              </el-select>
+            </el-form-item>
+            <el-form-item :label="$t('traffic.instance')">
+              <el-select v-model="selectedInstance" :placeholder="$t('traffic.selectInstance')" @change="onInstanceChange" :disabled="!selectedRegion" style="width:280px">
+                <el-option v-for="inst in (instanceOptions[selectedRegion] || [])" :key="inst.value" :label="inst.label" :value="inst.value" />
+              </el-select>
+            </el-form-item>
+            <el-form-item :label="$t('traffic.vnic')">
+              <el-select v-model="selectedVnic" :placeholder="$t('traffic.selectVnic')" :disabled="!selectedInstance" style="width:280px">
+                <el-option v-for="v in vnicOptions" :key="v.value" :label="v.label" :value="v.value" />
+              </el-select>
+            </el-form-item>
+          </el-form>
 
-      <el-date-picker
-        v-model="endTime"
-        type="datetime"
-        placeholder="结束时间"
-        value-format="x"
-        style="width: 200px"
-      />
+          <el-form :inline="true">
+            <el-form-item :label="$t('traffic.timeRange')">
+              <el-date-picker v-model="timeRange" type="datetimerange" :range-separator="$t('traffic.to')" :start-placeholder="$t('traffic.start')" :end-placeholder="$t('traffic.end')" value-format="YYYY-MM-DDTHH:mm:ss" style="width:380px" />
+            </el-form-item>
+            <el-form-item>
+              <el-button type="primary" @click="loadTraffic" :loading="loading">{{ $t('traffic.query') }}</el-button>
+              <el-button @click="resetTimeRange">{{ $t('traffic.reset') }}</el-button>
+            </el-form-item>
+          </el-form>
 
-      <el-button
-        type="primary"
-        :loading="loading"
-        :disabled="!instanceId"
-        @click="handleQuery"
-      >
-        Query
-      </el-button>
-    </div>
+          <!-- Chart -->
+          <div v-if="trafficData && trafficData.length > 0" ref="trafficChart" class="chart-box"></div>
+          <el-empty v-if="!loading && trafficData && trafficData.length === 0 && selectedVnic" :description="$t('traffic.noData')" />
+        </el-card>
+      </el-tab-pane>
 
-    <!-- Error State -->
-    <el-alert
-      v-if="error"
-      :title="error"
-      type="error"
-      :closable="true"
-      show-icon
-      @close="error = ''"
-      style="margin-bottom: 16px"
-    />
+      <el-tab-pane :label="$t('traffic.monthlySummary')" name="summary">
+        <el-card>
+          <el-form :inline="true">
+            <el-form-item :label="$t('traffic.region')">
+              <el-select v-model="summaryRegion" :placeholder="$t('traffic.selectRegion')" style="width:200px">
+                <el-option v-for="r in regionOptions" :key="r.value" :label="r.label" :value="r.value" />
+              </el-select>
+            </el-form-item>
+            <el-form-item>
+              <el-button type="primary" @click="loadSummary" :loading="summaryLoading">{{ $t('traffic.query') }}</el-button>
+            </el-form-item>
+          </el-form>
 
-    <!-- Chart -->
-    <div v-if="trafficData.length > 0" class="chart-wrapper">
-      <VChart :option="chartOption" class="chart" autoresize />
-    </div>
+          <!-- Summary cards -->
+          <div v-if="summaryResult" class="summary-cards">
+            <div class="cost-card total">
+              <div class="cost-value">{{ summaryResult.instanceCount }}</div>
+              <div class="cost-label">{{ $t('traffic.instanceCount') }}</div>
+            </div>
+            <div class="cost-card inbound">
+              <div class="cost-value">{{ summaryResult.inboundTraffic }}</div>
+              <div class="cost-label">{{ $t('traffic.inboundTotal') }}</div>
+            </div>
+            <div class="cost-card outbound">
+              <div class="cost-value">{{ summaryResult.outboundTraffic }}</div>
+              <div class="cost-label">{{ $t('traffic.outboundTotal') }}</div>
+            </div>
+          </div>
+          <el-empty v-if="!summaryLoading && !summaryResult" :description="$t('traffic.selectRegionPrompt')" />
+        </el-card>
+      </el-tab-pane>
+    </el-tabs>
 
-    <!-- Empty State -->
-    <el-empty
-      v-if="!loading && !error && trafficData.length === 0"
-      description="选择租户和实例，点击查询"
-    />
+    <el-alert v-if="error" :title="error" type="error" :closable="false" show-icon style="margin-top:12px" />
   </div>
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
-import { ElMessage } from 'element-plus'
-import VChart from 'vue-echarts'
-import 'echarts'
-import { getTrafficData, getInstances } from '../api/traffic.js'
-import { get } from '../api/index.js'
+import { ref, onMounted, nextTick } from 'vue'
+import { get, post } from '../api/index.js'
+import { listTenants } from '../api/tenants.js'
+import * as echarts from 'echarts'
 
-// ---------------------------------------------------------------------------
-// State
-// ---------------------------------------------------------------------------
+const activeTab = ref('live')
+
+// ── Tenant ──
 const tenants = ref([])
-const instances = ref([])
-const tenantId = ref(0)
-const instanceId = ref('')
-const trafficData = ref([])
-const startTime = ref(Date.now() - 3600000) // 1 hour ago (milliseconds)
-const endTime = ref(Date.now())
+const tenantId = ref(null)
+
+// ── Cascade data ──
+const regionOptions = ref([])
+const instanceOptions = ref({})
+const vnicOptions = ref([])
+
+const selectedRegion = ref('')
+const selectedInstance = ref('')
+const selectedVnic = ref('')
+
+// ── Time range ──
+const timeRange = ref([])
+function initTimeRange() {
+  const now = new Date()
+  const oneHourAgo = new Date(now.getTime() - 3600000)
+  timeRange.value = [oneHourAgo.toISOString().slice(0, 19), now.toISOString().slice(0, 19)]
+}
+function resetTimeRange() { initTimeRange() }
+
+// ── Live query ──
+const trafficData = ref(null)
 const loading = ref(false)
 const error = ref('')
+const trafficChart = ref(null)
+let chart = null
 
-// ---------------------------------------------------------------------------
-// Chart option
-// ---------------------------------------------------------------------------
-const chartOption = computed(() => ({
-  title: { text: '流量统计' },
-  tooltip: { trigger: 'axis' },
-  legend: { data: ['Bytes In', 'Bytes Out', 'Packets In', 'Packets Out'] },
-  grid: { left: 60, right: 60, bottom: 40, top: 60 },
-  xAxis: {
-    type: 'category',
-    data: trafficData.value.map((d) => d.timestamp?.slice(11, 16) || '')
-  },
-  yAxis: [
-    { type: 'value', name: 'Bytes/s' },
-    { type: 'value', name: 'Packets/s' }
-  ],
-  series: [
-    {
-      name: '入站字节',
-      type: 'line',
-      data: trafficData.value.map((d) => d.bytesInPerSec || 0),
-      smooth: true,
-      itemStyle: { color: '#5470c6' }
-    },
-    {
-      name: '出站字节',
-      type: 'line',
-      data: trafficData.value.map((d) => d.bytesOutPerSec || 0),
-      smooth: true,
-      itemStyle: { color: '#91cc75' }
-    },
-    {
-      name: '入站包数',
-      type: 'line',
-      yAxisIndex: 1,
-      data: trafficData.value.map((d) => d.packetsInPerSec || 0),
-      smooth: true,
-      itemStyle: { color: '#fac858' }
-    },
-    {
-      name: '出站包数',
-      type: 'line',
-      yAxisIndex: 1,
-      data: trafficData.value.map((d) => d.packetsOutPerSec || 0),
-      smooth: true,
-      itemStyle: { color: '#ee6666' }
+// ── Monthly summary ──
+const summaryRegion = ref('')
+const summaryResult = ref(null)
+const summaryLoading = ref(false)
+
+// Load tenants then cascade on mount
+onMounted(async () => {
+  initTimeRange()
+  try {
+    const tRes = await listTenants()
+    tenants.value = tRes?.data || []
+    if (tenants.value.length > 0) {
+      tenantId.value = tenants.value[0].id
+      loadCondition()
     }
-  ]
-}))
+  } catch {}
+})
 
-// ---------------------------------------------------------------------------
-// Data loading
-// ---------------------------------------------------------------------------
-async function loadTenants() {
+async function loadCondition() {
+  if (!tenantId.value) return
   try {
-    const res = await get('/tenants')
-    tenants.value = res.data || []
-  } catch (e) {
-    console.error('Failed to load tenants:', e)
-  }
+    const res = await get('/traffic/getCondition', { tenant_id: tenantId.value })
+    regionOptions.value = res?.regionOptions || []
+    instanceOptions.value = res?.instanceOptions || {}
+  } catch {}
 }
 
-async function onTenantChange(val) {
-  instanceId.value = ''
-  trafficData.value = []
-  error.value = ''
-  if (!val) {
-    instances.value = []
-    return
-  }
-  try {
-    const res = await getInstances(val)
-    instances.value = res.data || []
-  } catch (e) {
-    const msg = e.response?.data?.error || e.message
-    ElMessage.error('Failed to load instances: ' + msg)
-  }
+// Region changed → clear downstream
+async function onRegionChange() {
+  selectedInstance.value = ''
+  selectedVnic.value = ''
+  vnicOptions.value = []
 }
 
-async function handleQuery() {
-  if (!tenantId.value || !instanceId.value) return
+// Instance changed → fetch VNICs
+async function onInstanceChange() {
+  selectedVnic.value = ''
+  vnicOptions.value = []
+  if (!selectedRegion.value || !selectedInstance.value) return
+  try {
+    const res = await get('/traffic/fetchVnics', { tenant_id: tenantId.value, instance_id: selectedInstance.value })
+    vnicOptions.value = (Array.isArray(res) ? res : [])
+    if (vnicOptions.value.length === 1) selectedVnic.value = vnicOptions.value[0].value
+  } catch {}
+}
 
+// Query traffic
+async function loadTraffic() {
+  if (!selectedVnic.value || !timeRange.value || timeRange.value.length !== 2) return
   loading.value = true
   error.value = ''
-  trafficData.value = []
-
   try {
-    const start = new Date(startTime.value).toISOString()
-    const end = new Date(endTime.value).toISOString()
-
-    const res = await getTrafficData({
+    const res = await post('/traffic', {
       tenant_id: tenantId.value,
-      instance_id: instanceId.value,
-      start_time: start,
-      end_time: end
+      vnic_id: selectedVnic.value,
+      start_time: new Date(timeRange.value[0]).toISOString(),
+      end_time: new Date(timeRange.value[1]).toISOString(),
     })
-
-    trafficData.value = res.data || []
-    if (trafficData.value.length === 0) {
-      ElMessage.info('No traffic data available for the selected time range')
-    }
+    trafficData.value = res?.data || []
+    await nextTick()
+    renderChart()
   } catch (e) {
-    const msg = e.response?.data?.error || e.message
-    error.value = 'Failed to query traffic data: ' + msg
-    ElMessage.error(error.value)
-  } finally {
-    loading.value = false
+    error.value = e.response?.data?.error || 'Failed to load traffic data'
   }
+  loading.value = false
 }
 
-// ---------------------------------------------------------------------------
-// Lifecycle
-// ---------------------------------------------------------------------------
-onMounted(() => {
-  loadTenants()
-})
+function renderChart() {
+  if (!trafficData.value?.length) return
+  if (chart) { chart.dispose(); chart = null }
+  if (!trafficChart.value) return
+
+  chart = echarts.init(trafficChart.value)
+  const times = trafficData.value.map(d => d.timestamp)
+  const bytesIn = trafficData.value.map(d => formatBytesForChart(d.bytesInPerSec || 0))
+  const bytesOut = trafficData.value.map(d => formatBytesForChart(d.bytesOutPerSec || 0))
+
+  chart.setOption({
+    tooltip: { trigger: 'axis' },
+    legend: { data: ['Bytes In/s', 'Bytes Out/s'], top: 0 },
+    grid: { left: 70, right: 30, top: 40, bottom: 60 },
+    xAxis: { type: 'category', data: times, axisLabel: { rotate: 45, fontSize: 10 } },
+    yAxis: { type: 'value', name: 'bps' },
+    series: [
+      { name: 'Bytes In/s', type: 'line', data: bytesIn, smooth: true, symbol: 'none', lineStyle: { color: '#67C23A' } },
+      { name: 'Bytes Out/s', type: 'line', data: bytesOut, smooth: true, symbol: 'none', lineStyle: { color: '#F56C6C' } },
+    ],
+  })
+}
+
+function formatBytesForChart(bps) {
+  if (bps >= 1e9) return parseFloat((bps / 1e9).toFixed(2))
+  if (bps >= 1e6) return parseFloat((bps / 1e6).toFixed(2))
+  if (bps >= 1e3) return parseFloat((bps / 1e3).toFixed(2))
+  return parseFloat(bps.toFixed(2))
+}
+
+// Monthly summary
+async function loadSummary() {
+  if (!summaryRegion.value) return
+  summaryLoading.value = true
+  try {
+    const res = await get('/traffic/fetchInstances', { tenant_id: tenantId.value, region: summaryRegion.value })
+    summaryResult.value = res || null
+  } catch (e) {
+    error.value = e.response?.data?.error || 'Failed to load summary'
+  }
+  summaryLoading.value = false
+}
 </script>
 
 <style scoped>
-.traffic-page {
-  padding: 20px;
+.chart-box { width:100%; height:380px; margin-top:12px }
+.summary-cards { display:flex; gap:16px; margin-top:16px; flex-wrap:wrap }
+.cost-card {
+  flex:1; background:var(--card-bg); border-radius:8px; padding:16px 20px;
+  box-shadow:var(--shadow-sm); max-width:240px; min-width:160px
 }
-
-/* ── Filter bar ───────────────────────────────────────────────────────── */
-.filter-bar {
-  display: flex;
-  gap: 12px;
-  margin-bottom: 16px;
-  align-items: center;
-  flex-wrap: wrap;
-}
-
-/* ── Chart ────────────────────────────────────────────────────────────── */
-.chart-wrapper {
-  border: 1px solid #e4e7ed;
-  border-radius: 6px;
-  padding: 16px;
-  background: #fff;
-}
-
-.dark .chart-wrapper {
-  border-color: #363636;
-  background: #1d1d1d;
-}
-
-.chart {
-  width: 100%;
-  height: 400px;
-}
+.cost-card.total { border-left:3px solid #2563eb }
+.cost-card.inbound { border-left:3px solid #67C23A }
+.cost-card.outbound { border-left:3px solid #F56C6C }
+.cost-value { font-size:22px; font-weight:700; color:var(--text-primary) }
+.cost-label { font-size:12px; color:var(--text-muted); margin-top:4px }
 </style>

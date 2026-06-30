@@ -4,5 +4,6 @@ frontend/node_modules/
 frontend/dist/
 internal/handler/dist/
 .superpowers/
+.worktrees/
 server
 .claude/worktrees/

@@ -160,7 +160,11 @@
     "userDeleted": "用户已删除",
     "passwordReset": "密码已重置",
     "mfaCleared": "MFA 设备已清除 ({count})",
-    "apiKeysCleared": "API 密钥已清除 ({count})"
+    "apiKeysCleared": "API 密钥已清除 ({count})",
+    "subscription": "订阅",
+    "passwordExpiresAfter": "密码过期时间",
+    "notificationRecipients": "通知接收人",
+    "days": "天"
   },
   "common": {
     "save": "保存",

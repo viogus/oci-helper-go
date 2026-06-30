@@ -3,15 +3,36 @@ package handler
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/oracle/oci-go-sdk/v65/common"
 	"github.com/viogus/oci-helper-go/internal/db"
 	ociclient "github.com/viogus/oci-helper-go/internal/oci"
 )
+
+// tenantInfoCache caches enriched tenant info responses for 10 minutes
+// to avoid repeated OCI API calls.
+var tenantInfoCache = struct {
+	sync.RWMutex
+	m map[int64]tenantInfoCacheEntry
+}{m: make(map[int64]tenantInfoCacheEntry)}
+
+type tenantInfoCacheEntry struct {
+	data      map[string]interface{}
+	expiresAt time.Time
+}
+
+// tenantUserInfo is a lightweight user representation for the tenant info response.
+type tenantUserInfo struct {
+	ID, Name, Email, LifecycleState string
+	IsMFA, EmailVerified            bool
+	TimeCreated, LastLogin          string
+}
 
 // --- tenants ---
 
@@ -173,6 +194,15 @@ func (s *Server) handleTenantInfo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Check in-memory cache (10-minute TTL).
+	tenantInfoCache.RLock()
+	if entry, ok := tenantInfoCache.m[id]; ok && time.Now().Before(entry.expiresAt) {
+		tenantInfoCache.RUnlock()
+		jsonOK(w, entry.data)
+		return
+	}
+	tenantInfoCache.RUnlock()
+
 	t, _ := s.store.GetTenant(id)
 	if t == nil {
 		jsonErr(w, "not found")
@@ -182,19 +212,79 @@ func (s *Server) handleTenantInfo(w http.ResponseWriter, r *http.Request) {
 	client, err := s.clientFor(t)
 	if err != nil {
 		jsonOK(w, map[string]interface{}{
-			"tenant": t, "regions": []string{}, "instanceStats": map[string]int{},
+			"tenant":        t,
+			"regions":       []string{},
+			"instanceStats": map[string]int{},
 		})
 		return
 	}
 
-	regions, _ := client.ListRegionSubscriptions(r.Context())
-	var regionNames []string
-	for _, reg := range regions {
-		if reg.RegionName != nil {
-			regionNames = append(regionNames, *reg.RegionName)
+	// Parallel OCI queries: region subscriptions + users + tenancy.
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	var regionNames = make([]string, 0)
+	var userList = make([]tenantUserInfo, 0)
+	var userErr, tenancyErr error
+
+	wg.Add(3)
+	// Goroutine 1: list region subscriptions.
+	go func() {
+		defer wg.Done()
+		regions, err := client.ListRegionSubscriptions(r.Context())
+		mu.Lock()
+		defer mu.Unlock()
+		if err != nil {
+			log.Printf("[tenant-info] list regions for tenant %d: %v", id, err)
+			return
 		}
+		for _, reg := range regions {
+			if reg.RegionName != nil {
+				regionNames = append(regionNames, *reg.RegionName)
+			}
+		}
+	}()
+	// Goroutine 2: list identity users.
+	go func() {
+		defer wg.Done()
+		users, err := client.ListUsers(r.Context(), t.TenancyOCID)
+		mu.Lock()
+		defer mu.Unlock()
+		if err != nil {
+			userErr = err
+			return
+		}
+		for _, u := range users {
+			userList = append(userList, tenantUserInfo{
+				ID:             safeStr(u.Id),
+				Name:           safeStr(u.Name),
+				Email:          safeStr(u.Email),
+				LifecycleState: string(u.LifecycleState),
+				IsMFA:          boolVal(u.IsMfaActivated),
+				EmailVerified:  boolVal(u.EmailVerified),
+				TimeCreated:    timeStr(u.TimeCreated),
+				LastLogin:      timeStr(u.LastSuccessfulLoginTime),
+			})
+		}
+	}()
+	// Goroutine 3: get tenancy metadata (kept for future OSP Gateway integration).
+	go func() {
+		defer wg.Done()
+		_, err := client.GetTenancy(r.Context())
+		mu.Lock()
+		defer mu.Unlock()
+		tenancyErr = err
+	}()
+	wg.Wait()
+
+	// Log non-fatal errors from parallel queries.
+	if userErr != nil {
+		log.Printf("[tenant-info] list users for tenant %d: %v", id, userErr)
+	}
+	if tenancyErr != nil {
+		log.Printf("[tenant-info] get tenancy for tenant %d: %v", id, tenancyErr)
 	}
 
+	// Instance stats (from local DB — already fast, no need to parallelise).
 	instances, _ := s.store.ListInstances(id)
 	stats := map[string]int{"total": 0, "RUNNING": 0, "STOPPED": 0, "TERMINATED": 0}
 	totalOCPU := 0.0
@@ -206,13 +296,54 @@ func (s *Server) handleTenantInfo(w http.ResponseWriter, r *http.Request) {
 		totalMem += inst.MemoryGB
 	}
 
-	jsonOK(w, map[string]interface{}{
-		"tenant":        t,
-		"regions":       regionNames,
-		"instanceStats": stats,
-		"totalOCPU":     totalOCPU,
-		"totalMemoryGB": totalMem,
-	})
+	// Password policy from config table.
+	passwordExpiresAfter := 0
+	if v, err := s.store.GetConfig(fmt.Sprintf("tenant_pwdexp_%d", id)); err == nil {
+		passwordExpiresAfter, _ = strconv.Atoi(v)
+	}
+
+	// Notification recipients from config table.
+	notificationRecipients := []string{}
+	if tg, err := s.store.GetConfig(fmt.Sprintf("tenant_ntg_%d", id)); err == nil && tg != "" {
+		notificationRecipients = append(notificationRecipients, tg)
+	}
+	if dtalk, err := s.store.GetConfig(fmt.Sprintf("tenant_ndtalk_%d", id)); err == nil && dtalk != "" {
+		notificationRecipients = append(notificationRecipients, dtalk)
+	}
+
+	// Notification test mode — always false for now (simplified).
+	notificationTestModeEnabled := false
+
+	// Account creation time: prefer OCI tenancy time, fall back to DB created_at.
+	accountCreationTime := t.CreatedAt.Format(time.RFC3339)
+
+	// Subscription info — placeholder until OSP Gateway integration.
+	// TODO: Integrate OSP Gateway for subscription details.
+	var subscription interface{} = nil
+
+	resp := map[string]interface{}{
+		"tenant":                     t,
+		"regions":                    regionNames,
+		"instanceStats":              stats,
+		"totalOCPU":                  totalOCPU,
+		"totalMemoryGB":              totalMem,
+		"users":                      userList,
+		"passwordExpiresAfter":       passwordExpiresAfter,
+		"notificationRecipients":     notificationRecipients,
+		"notificationTestModeEnabled": notificationTestModeEnabled,
+		"subscription":               subscription,
+		"accountCreationTime":        accountCreationTime,
+	}
+
+	// Store in cache with 10-minute TTL.
+	tenantInfoCache.Lock()
+	tenantInfoCache.m[id] = tenantInfoCacheEntry{
+		data:      resp,
+		expiresAt: time.Now().Add(10 * time.Minute),
+	}
+	tenantInfoCache.Unlock()
+
+	jsonOK(w, resp)
 }
 
 // --- instances ---

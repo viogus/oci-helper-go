@@ -113,6 +113,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/instances/vnc/wait", s.withAuth(s.handleConsoleWait))
 	s.mux.HandleFunc("/api/instances/config-info", s.withAuth(s.handleInstanceConfigInfo))
 	s.mux.HandleFunc("/api/instances/update-password", s.withAuth(s.handleUpdatePassword))
+	s.mux.HandleFunc("/api/shell/ws", s.withAuth(s.handleShellWS))
+	s.mux.HandleFunc("/api/cost", s.withAuth(s.handleCost))
 
 	// NEW exact-path routes
 	// instance mutations
@@ -134,6 +136,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/traffic", s.withAuth(s.handleTraffic))
 	s.mux.HandleFunc("/api/limits", s.withAuth(s.handleLimits))
 	s.mux.HandleFunc("/api/logs", s.withAuth(s.handleLogs))
+	s.mux.HandleFunc("/api/logs/ws", s.withAuth(s.handleLogWS))
 
 	// batch create tasks
 	s.mux.HandleFunc("/api/instances/batch-create", s.withAuth(s.handleBatchCreate))
@@ -343,11 +346,18 @@ func (s *Server) handleGoogleCallback(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		mfaEnabled, _ := s.store.GetConfig("mfa_enabled")
-		jsonOK(w, map[string]string{
-			"username": s.cfg.Username,
-			"mfa":      mfaEnabled,
-		})
+		// Return all config keys the frontend Settings page expects.
+		keys := []string{
+			"mfa_enabled", "telegram_token", "dingtalk_webhook",
+			"google_client_id", "google_client_secret",
+			"cloudflare_token", "siliconflow_key",
+		}
+		out := map[string]string{"username": s.cfg.Username}
+		for _, k := range keys {
+			v, _ := s.store.GetConfig(k)
+			out[k] = v
+		}
+		jsonOK(w, out)
 	case http.MethodPost:
 		var req struct {
 			Key   string `json:"key"`

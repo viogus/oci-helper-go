@@ -210,7 +210,7 @@
     <!-- ── Add Task Dialog ────────────────────────────────────────── -->
     <el-dialog
       v-model="dialogVisible"
-      :title="activeTab === 'change-ip' ? $t$t('task.addTitle') : $t$t('task.addCfgTitle')"
+      :title="activeTab === 'change-ip' ? $t('task.addTitle') : $t('task.addCfgTitle')"
       width="550px"
       :close-on-click-modal="false"
       @closed="onDialogClosed"
@@ -460,14 +460,14 @@ async function handleAdd() {
 
     if (activeTab.value === 'change-ip') {
       if (form.cidr_list) {
-        payload.cidr_list = form.cidr_list
+        payload.cidr_list = form.cidr_list.split(/[,\n]/).map(s => s.trim()).filter(Boolean)
       }
     } else {
       if (form.ocpus !== null && form.ocpus !== undefined) {
-        payload.ocpus = Number(form.ocpus)
+        payload.ocpus = String(form.ocpus)
       }
       if (form.memory !== null && form.memory !== undefined) {
-        payload.memory = Number(form.memory)
+        payload.memory = String(form.memory)
       }
       if (form.shape) {
         payload.shape = form.shape

@@ -21,7 +21,7 @@
       </el-input>
     </div>
 
-    <el-table :data="tenants" stripe v-loading="loading" :empty-text="$t('tenant.notFound')">
+    <el-table :data="tenants" stripe v-loading="loading" :empty-text="$t('tenant.notFound')" @row-click="(row) => $router.push('/tenants/' + row.id)" style="cursor:pointer">
       <el-table-column prop="id" :label="$t('tenant.id')" width="70" />
       <el-table-column prop="name" :label="$t('tenant.name')" min-width="160" />
       <el-table-column prop="region" :label="$t('tenant.region')" width="160" />

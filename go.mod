@@ -3,7 +3,8 @@ module github.com/viogus/oci-helper-go
 go 1.26.4
 
 require (
-	github.com/oracle/oci-go-sdk/v65 v65.117.1
+	github.com/gorilla/websocket v1.5.3
+	github.com/oracle/oci-go-sdk/v65 v65.118.1
 	golang.org/x/crypto v0.53.0
 	modernc.org/sqlite v1.52.0
 )

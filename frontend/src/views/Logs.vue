@@ -18,6 +18,8 @@
             <el-button type="primary" :loading="loading" @click="refreshLogs">
               Refresh
             </el-button>
+            <span v-if="liveActive" class="live-dot" style="color:#67C23A;margin-right:8px">&#x25CF; LIVE</span>
+            <el-switch v-model="liveActive" @change="toggleLive" :active-text="$t('logs.live')" size="small" style="margin-left:8px" />
           </div>
         </div>
       </template>
@@ -50,7 +52,8 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, nextTick } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import { ElMessage } from 'element-plus'
 import { get } from '../api/index.js'
 
 const tailLines = ref(100)
@@ -80,9 +83,64 @@ async function refreshLogs() {
   }
 }
 
+const liveActive = ref(false)
+let ws = null
+
+function toggleLive(val) {
+  if (val) {
+    startLiveWS()
+  } else {
+    stopLiveWS()
+  }
+}
+
+function startLiveWS() {
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
+  const url = proto + '//' + location.host + '/api/logs/ws?tail=' + (logLines.value?.length || 100)
+  try {
+    ws = new WebSocket(url)
+  } catch (e) {
+    ElMessage.error('Live log connection failed')
+    liveActive.value = false
+    return
+  }
+  ws.onmessage = (ev) => {
+    try {
+      const msg = JSON.parse(ev.data)
+      if (msg.type === 'init') {
+        logLines.value = msg.lines || []
+      } else if (msg.type === 'line') {
+        logLines.value.push(msg.data)
+        if (logLines.value.length > 5000) logLines.value.shift()
+      } else if (msg.type === 'reset') {
+        logLines.value = ['--- Log file rotated ---']
+      }
+      nextTick(() => {
+        const textarea = logAreaRef.value?.$el?.querySelector('textarea')
+        if (textarea) {
+          textarea.scrollTop = textarea.scrollHeight
+        }
+      })
+    } catch {}
+  }
+  ws.onerror = () => {
+    ElMessage.error('Live log connection failed')
+    liveActive.value = false
+  }
+  ws.onclose = () => {
+    if (liveActive.value) liveActive.value = false
+  }
+}
+
+function stopLiveWS() {
+  if (ws) { ws.close(); ws = null }
+}
+
 onMounted(() => {
   refreshLogs()
 })
+
+onBeforeUnmount(() => { stopLiveWS() })
 </script>
 
 <style scoped>

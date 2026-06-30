@@ -17,9 +17,11 @@ const pollInterval = 5 * time.Second
 
 // Worker runs pending background tasks (batch start, batch create) asynchronously.
 // Runs in its own goroutine started by Server.New().
+// Supports checkpoint-resume: interrupted tasks are reset to pending on restart
+// and resume from where they left off using saved progress in the payload.
 type Worker struct {
-	store   *db.Store
-	keysDir string
+	store    *db.Store
+	keysDir  string
 	restarts int
 }
 
@@ -38,9 +40,18 @@ func (w *Worker) newClient(t *db.Tenant) (*ociclient.Client, error) {
 }
 
 // Run starts the worker loop. Picks one pending task per poll interval (5s).
+// On startup, resets any "running" tasks (interrupted by previous shutdown) back to "pending".
 // Auto-restarts on panic with exponential backoff (resets after 50 consecutive panics).
 func (w *Worker) Run() {
 	log.Println("[worker] started")
+
+	// ── Checkpoint resume: reset interrupted tasks ──────────────────
+	if n, err := w.store.ResetRunningTasks(); err != nil {
+		log.Printf("[worker] reset running tasks: %v", err)
+	} else if n > 0 {
+		log.Printf("[worker] checkpoint-resume: reset %d interrupted task(s) to pending", n)
+	}
+
 	defer func() {
 		if r := recover(); r != nil {
 			w.restarts++
@@ -83,13 +94,18 @@ func (w *Worker) processNext() {
 	}
 }
 
+// batchStartPayload is saved in Task.Payload as JSON.
+// completedIndex tracks which instances have already been processed (checkpoint).
+type batchStartPayload struct {
+	TenantID       int64    `json:"tenantId"`
+	InstanceIDs    []string `json:"instanceIds"`
+	CompletedIndex int      `json:"completedIndex"`
+}
+
 func (w *Worker) runBatchStart(task *db.Task) {
 	w.store.UpdateTaskStatus(task.ID, "running", 0, "starting...")
 
-	var payload struct {
-		TenantID    int64    `json:"tenantId"`
-		InstanceIDs []string `json:"instanceIds"`
-	}
+	var payload batchStartPayload
 	if err := json.Unmarshal([]byte(task.Payload), &payload); err != nil {
 		w.store.UpdateTaskStatus(task.ID, "failed", 0, "invalid payload: "+err.Error())
 		return
@@ -108,7 +124,10 @@ func (w *Worker) runBatchStart(task *db.Task) {
 	}
 
 	total := len(payload.InstanceIDs)
-	for i, instID := range payload.InstanceIDs {
+
+	// Resume from checkpoint
+	for i := payload.CompletedIndex; i < total; i++ {
+		instID := payload.InstanceIDs[i]
 		progress := (i * 100) / total
 		w.store.UpdateTaskStatus(task.ID, "running", progress, instID)
 
@@ -117,6 +136,7 @@ func (w *Worker) runBatchStart(task *db.Task) {
 		cancel()
 		if err != nil {
 			w.store.UpdateTaskStatus(task.ID, "running", progress, "skip "+instID+": "+err.Error())
+			w.saveCheckpoint(task, &payload, i+1)
 			continue
 		}
 
@@ -125,27 +145,35 @@ func (w *Worker) runBatchStart(task *db.Task) {
 		cancel2()
 		if err != nil {
 			w.store.UpdateTaskStatus(task.ID, "running", progress, "fail "+instID+": "+err.Error())
+			w.saveCheckpoint(task, &payload, i+1)
 			continue
 		}
+
+		// Save checkpoint after each successful action
+		w.saveCheckpoint(task, &payload, i+1)
 	}
 
 	w.store.UpdateTaskStatus(task.ID, "completed", 100, "done")
 }
 
+// batchCreatePayload is saved in Task.Payload as JSON.
+type batchCreatePayload struct {
+	TenantID           int64  `json:"tenant_id"`
+	InstancesPerTenant int    `json:"instances_per_tenant"`
+	Region             string `json:"region"`
+	Shape              string `json:"shape"`
+	ImageID            string `json:"image_id"`
+	SubnetID           string `json:"subnet_id"`
+	AvailabilityDomain string `json:"availability_domain"`
+	BootVolumeSizeGB   int64  `json:"boot_volume_size_gb"`
+	DisplayNamePrefix  string `json:"display_name_prefix"`
+	CompletedIndex     int    `json:"completedIndex"`
+}
+
 func (w *Worker) runBatchCreate(task *db.Task) {
 	w.store.UpdateTaskStatus(task.ID, "running", 0, "creating instances...")
 
-	var payload struct {
-		TenantID           int64  `json:"tenant_id"`
-		InstancesPerTenant int    `json:"instances_per_tenant"`
-		Region             string `json:"region"`
-		Shape              string `json:"shape"`
-		ImageID            string `json:"image_id"`
-		SubnetID           string `json:"subnet_id"`
-		AvailabilityDomain string `json:"availability_domain"`
-		BootVolumeSizeGB   int64  `json:"boot_volume_size_gb"`
-		DisplayNamePrefix  string `json:"display_name_prefix"`
-	}
+	var payload batchCreatePayload
 	if err := json.Unmarshal([]byte(task.Payload), &payload); err != nil {
 		w.store.UpdateTaskStatus(task.ID, "failed", 0, "invalid payload: "+err.Error())
 		return
@@ -164,7 +192,9 @@ func (w *Worker) runBatchCreate(task *db.Task) {
 	}
 
 	total := payload.InstancesPerTenant
-	for i := 0; i < total; i++ {
+
+	// Resume from checkpoint
+	for i := payload.CompletedIndex; i < total; i++ {
 		progress := (i * 100) / total
 		displayName := fmt.Sprintf("%s-%s-%d", payload.DisplayNamePrefix, tenant.Name, i+1)
 		w.store.UpdateTaskStatus(task.ID, "running", progress, "creating "+displayName)
@@ -174,12 +204,28 @@ func (w *Worker) runBatchCreate(task *db.Task) {
 		cancel()
 		if err != nil {
 			w.store.UpdateTaskStatus(task.ID, "running", progress, "failed "+displayName+": "+err.Error())
+			w.saveCheckpoint(task, &payload, i+1)
 			continue
 		}
 
 		w.store.UpdateTaskStatus(task.ID, "running", progress, "created "+displayName)
+		w.saveCheckpoint(task, &payload, i+1)
 		time.Sleep(2 * time.Second)
 	}
 
 	w.store.UpdateTaskStatus(task.ID, "completed", 100, fmt.Sprintf("created %d instances", total))
+}
+
+// saveCheckpoint persists the current progress index into the task payload.
+// This allows the task to resume from where it left off after a restart.
+func (w *Worker) saveCheckpoint(task *db.Task, payload interface{}, index int) {
+	switch p := payload.(type) {
+	case *batchStartPayload:
+		p.CompletedIndex = index
+	case *batchCreatePayload:
+		p.CompletedIndex = index
+	}
+	if data, err := json.Marshal(payload); err == nil {
+		w.store.UpdateTaskPayload(task.ID, string(data))
+	}
 }

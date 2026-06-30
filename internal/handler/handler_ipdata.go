@@ -29,6 +29,10 @@ func (s *Server) handleIpData(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Action   string `json:"action"`
 			TenantID int64  `json:"tenant_id"`
+			CIDR     string `json:"cidr"`
+			Label    string `json:"label"`
+			Type     string `json:"type"`
+			Enabled  bool   `json:"enabled"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			jsonErr(w, "invalid body: "+err.Error())
@@ -42,18 +46,21 @@ func (s *Server) handleIpData(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Normal create
-		var data db.IpData
-		// Re-decode into IpData
-		raw, _ := json.Marshal(req)
-		json.Unmarshal(raw, &data)
-		if data.CIDR == "" {
+		if req.CIDR == "" {
 			jsonErr(w, "cidr required")
 			return
 		}
-		if data.Type == "" {
-			data.Type = "pool"
+		if req.Type == "" {
+			req.Type = "pool"
 		}
-		if err := s.store.CreateIpData(&data); err != nil {
+		data := &db.IpData{
+			TenantID: req.TenantID,
+			CIDR:     req.CIDR,
+			Label:    req.Label,
+			Type:     req.Type,
+			Enabled:  req.Enabled,
+		}
+		if err := s.store.CreateIpData(data); err != nil {
 			jsonErr(w, "create ip data: "+err.Error())
 			return
 		}

@@ -2,6 +2,24 @@
   <div class="create-instance-page">
     <h3>创建实例</h3>
 
+    <!-- Load from Plan -->
+    <div v-if="availablePlans.length > 0" style="margin-bottom:16px">
+      <el-select
+        v-model="selectedPlanId"
+        :placeholder="$t('instancePlans.loadFromPlan')"
+        clearable
+        @change="onPlanSelect"
+        style="width: 320px"
+      >
+        <el-option
+          v-for="p in availablePlans"
+          :key="p.id"
+          :label="p.name"
+          :value="p.id"
+        />
+      </el-select>
+    </div>
+
     <el-form
       ref="formRef"
       :model="form"
@@ -156,11 +174,12 @@
 
 <script setup>
 import { ref, reactive, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { get, post } from '../api/index.js'
 
 const router = useRouter()
+const route = useRoute()
 
 // --- form state ---
 const form = reactive({
@@ -191,9 +210,63 @@ const loadingVCNs = ref(false)
 const loadingSubnets = ref(false)
 const launching = ref(false)
 
+// --- plan support ---
+const availablePlans = ref([])
+const selectedPlanId = ref(null)
+
+async function loadPlansForSelect() {
+  try {
+    const res = await get('/instance-plans')
+    availablePlans.value = res.data || []
+  } catch {}
+}
+
+async function onPlanSelect(planId) {
+  if (!planId) return
+  const plan = availablePlans.value.find(p => p.id === planId)
+  if (!plan) return
+  // Pre-fill form fields from plan
+  if (plan.tenant_id) {
+    form.tenantId = String(plan.tenant_id)
+    await onTenantChange()
+    // Populate dependent fields after tenant-dependent data loads complete.
+    if (plan.availability_domain) {
+      form.availabilityDomain = plan.availability_domain
+    }
+    if (plan.image_id) {
+      form.imageId = plan.image_id
+    }
+    if (plan.shape) {
+      form.shape = plan.shape
+    }
+    if (plan.subnet_id) {
+      form.subnetId = plan.subnet_id
+    }
+    form.bootVolumeSizeGB = plan.boot_volume_size_gb || 50
+  }
+  if (plan.name) {
+    form.displayName = plan.name
+  }
+  form.bootVolumeSizeGB = plan.boot_volume_size_gb || 50
+}
+
 // --- lifecycle ---
-onMounted(() => {
+onMounted(async () => {
   loadTenants()
+  await loadPlansForSelect()
+  // Check for plan_id query param
+  const planId = route.query.plan_id
+  if (planId) {
+    try {
+      const res = await get('/instance-plans')
+      const plans = res.data || []
+      const plan = plans.find(p => p.id === Number(planId))
+      if (plan) {
+        selectedPlanId.value = plan.id
+        onPlanSelect(plan.id)
+      }
+    } catch {}
+  }
 })
 
 // --- data loading ---
@@ -294,9 +367,7 @@ async function onTenantChange() {
   subnets.value = []
 
   if (!form.tenantId) return
-  loadADs()
-  loadImages()
-  loadVCNs()
+  await Promise.all([loadADs(), loadImages(), loadVCNs()])
 }
 
 function onImageChange() {

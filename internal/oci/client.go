@@ -265,6 +265,135 @@ func (c *Client) ListRegionSubscriptions(ctx context.Context) ([]identity.Region
 	return resp.Items, nil
 }
 
+// ── Identity User Management ──────────────────────────────────────────
+
+func (c *Client) ListUsers(ctx context.Context, compartmentID string) ([]identity.User, error) {
+	defer withSubtreeInterceptor(&c.identity.Interceptor)()
+	req := identity.ListUsersRequest{
+		CompartmentId: common.String(compartmentID),
+		Limit:         common.Int(100),
+	}
+	resp, err := c.identity.ListUsers(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("list users: %w", err)
+	}
+	return resp.Items, nil
+}
+
+func (c *Client) GetUser(ctx context.Context, userID string) (*identity.User, error) {
+	defer withSubtreeInterceptor(&c.identity.Interceptor)()
+	req := identity.GetUserRequest{
+		UserId: common.String(userID),
+	}
+	resp, err := c.identity.GetUser(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("get user: %w", err)
+	}
+	return &resp.User, nil
+}
+
+func (c *Client) DeleteUser(ctx context.Context, userID string) error {
+	defer withSubtreeInterceptor(&c.identity.Interceptor)()
+	req := identity.DeleteUserRequest{
+		UserId: common.String(userID),
+	}
+	_, err := c.identity.DeleteUser(ctx, req)
+	if err != nil {
+		return fmt.Errorf("delete user: %w", err)
+	}
+	return nil
+}
+
+func (c *Client) CreateOrResetUIPassword(ctx context.Context, userID string) (*identity.UiPassword, error) {
+	defer withSubtreeInterceptor(&c.identity.Interceptor)()
+	req := identity.CreateOrResetUIPasswordRequest{
+		UserId: common.String(userID),
+	}
+	resp, err := c.identity.CreateOrResetUIPassword(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("create or reset UI password: %w", err)
+	}
+	return &resp.UiPassword, nil
+}
+
+func (c *Client) UpdateUser(ctx context.Context, userID, email, description string) (*identity.User, error) {
+	defer withSubtreeInterceptor(&c.identity.Interceptor)()
+	req := identity.UpdateUserRequest{
+		UserId: common.String(userID),
+		UpdateUserDetails: identity.UpdateUserDetails{
+			Email:       common.String(email),
+			Description: common.String(description),
+		},
+	}
+	resp, err := c.identity.UpdateUser(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("update user: %w", err)
+	}
+	return &resp.User, nil
+}
+
+func (c *Client) ListMfaTotpDevices(ctx context.Context, userID string) ([]identity.MfaTotpDeviceSummary, error) {
+	defer withSubtreeInterceptor(&c.identity.Interceptor)()
+	req := identity.ListMfaTotpDevicesRequest{
+		UserId: common.String(userID),
+	}
+	resp, err := c.identity.ListMfaTotpDevices(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("list MFA TOTP devices: %w", err)
+	}
+	return resp.Items, nil
+}
+
+func (c *Client) DeleteMfaTotpDevice(ctx context.Context, userID, deviceID string) error {
+	defer withSubtreeInterceptor(&c.identity.Interceptor)()
+	req := identity.DeleteMfaTotpDeviceRequest{
+		UserId:          common.String(userID),
+		MfaTotpDeviceId: common.String(deviceID),
+	}
+	_, err := c.identity.DeleteMfaTotpDevice(ctx, req)
+	if err != nil {
+		return fmt.Errorf("delete MFA TOTP device: %w", err)
+	}
+	return nil
+}
+
+func (c *Client) ListApiKeys(ctx context.Context, userID string) ([]identity.ApiKey, error) {
+	defer withSubtreeInterceptor(&c.identity.Interceptor)()
+	req := identity.ListApiKeysRequest{
+		UserId: common.String(userID),
+	}
+	resp, err := c.identity.ListApiKeys(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("list API keys: %w", err)
+	}
+	return resp.Items, nil
+}
+
+func (c *Client) DeleteApiKey(ctx context.Context, userID, keyID string) error {
+	defer withSubtreeInterceptor(&c.identity.Interceptor)()
+	req := identity.DeleteApiKeyRequest{
+		UserId:      common.String(userID),
+		Fingerprint: common.String(keyID),
+	}
+	_, err := c.identity.DeleteApiKey(ctx, req)
+	if err != nil {
+		return fmt.Errorf("delete API key: %w", err)
+	}
+	return nil
+}
+
+func (c *Client) GetTenancy(ctx context.Context) (*identity.Tenancy, error) {
+	defer withSubtreeInterceptor(&c.identity.Interceptor)()
+	req := identity.GetTenancyRequest{
+		TenancyId: common.String(c.tenant.TenancyOCID),
+	}
+	resp, err := c.identity.GetTenancy(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("get tenancy: %w", err)
+	}
+	return &resp.Tenancy, nil
+}
+
 func (c *Client) ListImages(ctx context.Context, compartmentID, os string) ([]core.Image, error) {
 	defer withSubtreeInterceptor(&c.compute.Interceptor)()
 	req := core.ListImagesRequest{

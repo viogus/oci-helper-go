@@ -5,3 +5,4 @@ frontend/dist/
 internal/handler/dist/
 .superpowers/
 server
+.claude/worktrees/

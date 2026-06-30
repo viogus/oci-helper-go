@@ -27,23 +27,29 @@ import (
 //go:embed all:dist/*
 var staticFiles embed.FS
 
+// version is the current application version, settable via -ldflags at build time.
+// Defaults to "dev" for local development.
+var version = "dev"
+
 type Server struct {
-	cfg    *config.Config
-	store  *db.Store
-	auth   *auth.Service
-	mux    *http.ServeMux
-	worker *Worker
+	cfg      *config.Config
+	store    *db.Store
+	auth     *auth.Service
+	mux      *http.ServeMux
+	worker   *Worker
 	ratelimit *loginRateLimiter
+	startTime time.Time
 }
 
 func New(cfg *config.Config, store *db.Store) *Server {
 	s := &Server{
-		cfg:    cfg,
-		store:  store,
-		auth:   auth.New(cfg.Username, cfg.Password, cfg.MFASecret, cfg.MFA),
-		mux:    http.NewServeMux(),
-		worker: NewWorker(store, cfg.KeysDir),
+		cfg:       cfg,
+		store:     store,
+		auth:      auth.New(cfg.Username, cfg.Password, cfg.MFASecret, cfg.MFA),
+		mux:       http.NewServeMux(),
+		worker:    NewWorker(store, cfg.KeysDir),
 		ratelimit: newLoginRateLimiter(),
+		startTime: time.Now(),
 	}
 	s.routes()
 	go s.worker.Run()
@@ -130,7 +136,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/instances/auto-rescue", s.withAuth(s.handleAutoRescue))
 	s.mux.HandleFunc("/api/instances/update-shape", s.withAuth(s.handleUpdateShape))
 
-	// security rules
+	// dashboard glance
+	s.mux.HandleFunc("/api/glance", s.withAuth(s.handleGlance))
+
 	s.mux.HandleFunc("/api/security-rules", s.withAuth(s.handleSecurityRules))
 
 	// traffic & monitoring

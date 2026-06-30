@@ -14,6 +14,52 @@ import (
 	"github.com/viogus/oci-helper-go/internal/telegram"
 )
 
+func (s *Server) handleGlance(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	db := s.store.DB()
+
+	var usersCount int64
+	db.QueryRow("SELECT COUNT(*) FROM users").Scan(&usersCount)
+
+	var tasksCount int64
+	db.QueryRow("SELECT COUNT(*) FROM tasks").Scan(&tasksCount)
+
+	var regionsCount int64
+	db.QueryRow("SELECT COUNT(DISTINCT region) FROM tenants").Scan(&regionsCount)
+
+	var tenantsCount int64
+	db.QueryRow("SELECT COUNT(*) FROM tenants").Scan(&tenantsCount)
+
+	var instancesCount int64
+	db.QueryRow("SELECT COUNT(*) FROM instances").Scan(&instancesCount)
+
+	var runningCount int64
+	db.QueryRow("SELECT COUNT(*) FROM instances WHERE state = 'RUNNING'").Scan(&runningCount)
+
+	// Add in-memory task count
+	memTasksMu.Lock()
+	memTasksCount := len(memTasks)
+	memTasksMu.Unlock()
+
+	totalTasks := tasksCount + int64(memTasksCount)
+	days := int(time.Since(s.startTime).Hours() / 24)
+
+	jsonOK(w, map[string]interface{}{
+		"users":           usersCount,
+		"tasks":           totalTasks,
+		"regions":         regionsCount,
+		"days":            days,
+		"currentVersion":  version,
+		"tenants":         tenantsCount,
+		"instances":       instancesCount,
+		"runningInstances": runningCount,
+	})
+}
+
 func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)

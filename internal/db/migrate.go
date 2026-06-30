@@ -135,6 +135,19 @@ var migrations = []struct {
 			)`,
 		},
 	},
+	{
+		Version: 3,
+		Name:    "add_ip_data_geolocation",
+		SQL: []string{
+			`ALTER TABLE ip_data ADD COLUMN lat REAL NOT NULL DEFAULT 0`,
+			`ALTER TABLE ip_data ADD COLUMN lng REAL NOT NULL DEFAULT 0`,
+			`ALTER TABLE ip_data ADD COLUMN country TEXT NOT NULL DEFAULT ''`,
+			`ALTER TABLE ip_data ADD COLUMN area TEXT NOT NULL DEFAULT ''`,
+			`ALTER TABLE ip_data ADD COLUMN city TEXT NOT NULL DEFAULT ''`,
+			`ALTER TABLE ip_data ADD COLUMN org TEXT NOT NULL DEFAULT ''`,
+			`ALTER TABLE ip_data ADD COLUMN asn TEXT NOT NULL DEFAULT ''`,
+		},
+	},
 }
 
 func (s *Store) runMigrations() error {

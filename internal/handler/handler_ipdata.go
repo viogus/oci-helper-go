@@ -3,11 +3,14 @@ package handler
 import (
 	"encoding/json"
 	"fmt"
+	"log"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
 
 	"github.com/viogus/oci-helper-go/internal/db"
+	"github.com/viogus/oci-helper-go/internal/geoip"
 )
 
 func (s *Server) handleIpData(w http.ResponseWriter, r *http.Request) {
@@ -53,6 +56,13 @@ func (s *Server) handleIpData(w http.ResponseWriter, r *http.Request) {
 		if req.Type == "" {
 			req.Type = "pool"
 		}
+
+		// Extract bare IP from CIDR for geolocation lookup.
+		bareIP := req.CIDR
+		if idx := strings.IndexByte(bareIP, '/'); idx >= 0 {
+			bareIP = bareIP[:idx]
+		}
+
 		data := &db.IpData{
 			TenantID: req.TenantID,
 			CIDR:     req.CIDR,
@@ -60,6 +70,22 @@ func (s *Server) handleIpData(w http.ResponseWriter, r *http.Request) {
 			Type:     req.Type,
 			Enabled:  req.Enabled,
 		}
+
+		// Best-effort geolocation lookup (non-blocking, non-fatal).
+		if ip := net.ParseIP(bareIP); ip != nil && !ip.IsLoopback() && !ip.IsPrivate() && !ip.IsUnspecified() {
+			if info, geoErr := geoip.Lookup(bareIP); geoErr == nil {
+				data.Lat = info.Lat
+				data.Lng = info.Lng
+				data.Country = info.Country
+				data.Area = info.Area
+				data.City = info.City
+				data.Org = info.Org
+				data.Asn = info.Asn
+			} else {
+				log.Printf("[ip-data] geoip lookup for %s: %v", bareIP, geoErr)
+			}
+		}
+
 		if err := s.store.CreateIpData(data); err != nil {
 			jsonErr(w, "create ip data: "+err.Error())
 			return
@@ -73,11 +99,13 @@ func (s *Server) handleIpData(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleIpDataLoadOCI(w http.ResponseWriter, r *http.Request, tenantID int64) {
-	tenant, err := s.store.GetTenant(tenantID)
-	if err != nil || tenant == nil {
+	// Verify tenant exists.
+	t, err := s.store.GetTenant(tenantID)
+	if err != nil || t == nil {
 		jsonErr(w, "tenant not found")
 		return
 	}
+	_ = t
 	instances, err := s.store.ListInstances(tenantID)
 	if err != nil {
 		jsonErr(w, "list instances: "+err.Error())
@@ -94,6 +122,16 @@ func (s *Server) handleIpDataLoadOCI(w http.ResponseWriter, r *http.Request, ten
 			Label:    inst.Name,
 			Type:     "pool",
 			Enabled:  true,
+		}
+		// Best-effort geolocation lookup for public IPs.
+		if info, geoErr := geoip.Lookup(inst.PublicIP); geoErr == nil {
+			d.Lat = info.Lat
+			d.Lng = info.Lng
+			d.Country = info.Country
+			d.Area = info.Area
+			d.City = info.City
+			d.Org = info.Org
+			d.Asn = info.Asn
 		}
 		if err := s.store.CreateIpData(d); err != nil {
 			continue

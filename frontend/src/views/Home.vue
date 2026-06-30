@@ -190,6 +190,30 @@ function updateMarkers(tenants, instances) {
     regionGroups[key].instances.push(inst)
   }
 
+// Render city markers from IP geolocation data (glance cities).
+function updateCityMarkers(cities) {
+  if (!markerLayer || !cities?.length) return
+  markerLayer.clearLayers()
+
+  for (const c of cities) {
+    const label = [c.city, c.area, c.country].filter(Boolean).join(', ')
+      || `${c.lat.toFixed(2)}, ${c.lng.toFixed(2)}`
+    const subtitle = [c.org, c.asn].filter(Boolean).join(' / ')
+    const tooltip = `${label}${subtitle ? ' — ' + subtitle : ''} (${c.count})`
+
+    const color = '#8b5cf6'
+    const icon = L.divIcon({
+      className: 'custom-marker',
+      html: '<div style="width:12px;height:12px;border-radius:50%;background:' + color + ';border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,0.3)"></div>',
+      iconSize: [12, 12],
+      iconAnchor: [6, 6],
+    })
+
+    const marker = L.marker([c.lat, c.lng], { icon }).addTo(markerLayer)
+    marker.bindTooltip(tooltip, { direction: 'top', offset: [0, -8] })
+  }
+}
+
   for (const [region, group] of Object.entries(regionGroups)) {
     // Offset markers slightly so overlapping regions are visible
     const jitter = (Object.keys(regionGroups).indexOf(region) % 5) * 0.0003
@@ -208,37 +232,40 @@ function updateMarkers(tenants, instances) {
 }
 
 onMounted(async () => {
-  let tList = [], iList = []
+  let tList = [], iList = [], cities = []
   try {
-    const [tenants, instances, tasks] = await Promise.all([
+    const [tenants, instances, tasks, glance] = await Promise.all([
       get('/tenants', { size: 100 }),
       get('/instances', { size: 500 }),
       get('/tasks', { size: 100 }),
+      get('/glance'),
     ])
     tList = tenants?.data || []
     iList = instances?.data || []
     const taList = tasks?.data || []
+    cities = glance?.cities || []
 
-    stats[0].value = tList.length
-    stats[1].value = iList.length
-    stats[2].value = iList.filter(i => i.state === 'RUNNING').length
-    stats[3].value = taList.filter(t => t.status === 'pending' || t.status === 'running').length
+    stats[0].value = glance?.tenants ?? tList.length
+    stats[1].value = glance?.instances ?? iList.length
+    stats[2].value = glance?.runningInstances ?? iList.filter(i => i.state === 'RUNNING').length
+    stats[3].value = glance?.tasks ?? taList.filter(t => t.status === 'pending' || t.status === 'running').length
 
     runningCount.value = stats[2].value
     activeTasks.value = stats[3].value
     syncedTenants.value = tList.filter(t => t.status === 'active').length
-
-    // Count unique regions from tenants
-    const regions = new Set()
-    tList.forEach(t => { if (t.region) regions.add(t.region) })
-    regionCount.value = regions.size
+    regionCount.value = glance?.regions ?? 0
   } catch { /* ignore load errors */ }
   loading.value = false
 
   // Init map after data loaded
   await nextTick()
   initMap()
-  updateMarkers(tList, iList)
+  // Prefer IP geolocation cities markers; fall back to region-based markers.
+  if (cities.length > 0) {
+    updateCityMarkers(cities)
+  } else {
+    updateMarkers(tList, iList)
+  }
 })
 
 onBeforeUnmount(() => {

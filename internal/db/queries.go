@@ -414,7 +414,7 @@ func (s *Store) DeleteCfCfg(id int64) error {
 // ── IpData ─────────────────────────────────────────────────────────────
 
 func (s *Store) ListIpData(tenantID int64, dataType string) ([]IpData, error) {
-	q := `SELECT id, tenant_id, cidr, label, type, enabled, created_at FROM ip_data WHERE (tenant_id=? OR ?=0)`
+	q := `SELECT id, tenant_id, cidr, label, type, enabled, lat, lng, country, area, city, org, asn, created_at FROM ip_data WHERE (tenant_id=? OR ?=0)`
 	args := []interface{}{tenantID, tenantID}
 	if dataType != "" {
 		q += ` AND type=?`
@@ -429,7 +429,7 @@ func (s *Store) ListIpData(tenantID int64, dataType string) ([]IpData, error) {
 	var list []IpData
 	for rows.Next() {
 		var d IpData
-		if err := rows.Scan(&d.ID, &d.TenantID, &d.CIDR, &d.Label, &d.Type, &d.Enabled, &d.CreatedAt); err != nil {
+		if err := rows.Scan(&d.ID, &d.TenantID, &d.CIDR, &d.Label, &d.Type, &d.Enabled, &d.Lat, &d.Lng, &d.Country, &d.Area, &d.City, &d.Org, &d.Asn, &d.CreatedAt); err != nil {
 			return nil, err
 		}
 		list = append(list, d)
@@ -438,14 +438,14 @@ func (s *Store) ListIpData(tenantID int64, dataType string) ([]IpData, error) {
 }
 
 func (s *Store) CreateIpData(d *IpData) error {
-	_, err := s.db.Exec(`INSERT INTO ip_data (tenant_id, cidr, label, type, enabled) VALUES (?,?,?,?,?)`,
-		d.TenantID, d.CIDR, d.Label, d.Type, d.Enabled)
+	_, err := s.db.Exec(`INSERT INTO ip_data (tenant_id, cidr, label, type, enabled, lat, lng, country, area, city, org, asn) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+		d.TenantID, d.CIDR, d.Label, d.Type, d.Enabled, d.Lat, d.Lng, d.Country, d.Area, d.City, d.Org, d.Asn)
 	return err
 }
 
 func (s *Store) UpdateIpData(d *IpData) error {
-	_, err := s.db.Exec(`UPDATE ip_data SET cidr=?, label=?, type=?, enabled=? WHERE id=?`,
-		d.CIDR, d.Label, d.Type, d.Enabled, d.ID)
+	_, err := s.db.Exec(`UPDATE ip_data SET cidr=?, label=?, type=?, enabled=?, lat=?, lng=?, country=?, area=?, city=?, org=?, asn=? WHERE id=?`,
+		d.CIDR, d.Label, d.Type, d.Enabled, d.Lat, d.Lng, d.Country, d.Area, d.City, d.Org, d.Asn, d.ID)
 	return err
 }
 

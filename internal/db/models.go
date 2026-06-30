@@ -92,6 +92,14 @@ type IpData struct {
 	Label     string    `json:"label"`
 	Type      string    `json:"type"`
 	Enabled   bool      `json:"enabled"`
+	// Geolocation fields populated via IP lookup on creation.
+	Lat       float64   `json:"lat,omitempty"`
+	Lng       float64   `json:"lng,omitempty"`
+	Country   string    `json:"country,omitempty"`
+	Area      string    `json:"area,omitempty"`
+	City      string    `json:"city,omitempty"`
+	Org       string    `json:"org,omitempty"`
+	Asn       string    `json:"asn,omitempty"`
 	CreatedAt time.Time `json:"createdAt"`
 }
 

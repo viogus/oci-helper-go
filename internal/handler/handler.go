@@ -831,10 +831,19 @@ func (s *Server) handleAIChatCacheClear(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	sessionID := r.URL.Query().Get("session_id")
 	conversationCacheMu.Lock()
-	cleared := len(conversationCache)
-	conversationCache = make(map[string][]ai.ChatMessage)
+	var cleared int
+	if sessionID != "" {
+		if _, ok := conversationCache[sessionID]; ok {
+			delete(conversationCache, sessionID)
+			cleared = 1
+		}
+	} else {
+		cleared = len(conversationCache)
+		conversationCache = make(map[string][]ai.ChatMessage)
+	}
 	conversationCacheMu.Unlock()
-	s.audit(0, "ai:cache-clear", fmt.Sprintf("cleared %d conversations", cleared), r)
+	s.audit(0, "ai:cache-clear", fmt.Sprintf("cleared %d conversations (session=%s)", cleared, sessionID), r)
 	jsonOK(w, map[string]interface{}{"status": "ok", "cleared": cleared})
 }

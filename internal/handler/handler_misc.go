@@ -49,6 +49,9 @@ func (s *Server) handleGlance(w http.ResponseWriter, r *http.Request) {
 	totalTasks := tasksCount + int64(memTasksCount)
 	days := int(time.Since(s.startTime).Hours() / 24)
 
+	// Aggregate cities/map data from ip_data geolocation fields.
+	cities := s.glanceCities()
+
 	jsonOK(w, map[string]interface{}{
 		"users":           usersCount,
 		"tasks":           totalTasks,
@@ -58,6 +61,7 @@ func (s *Server) handleGlance(w http.ResponseWriter, r *http.Request) {
 		"tenants":         tenantsCount,
 		"instances":       instancesCount,
 		"runningInstances": runningCount,
+		"cities":          cities,
 	})
 }
 
@@ -511,4 +515,43 @@ func (s *Server) handleCaptchaSend(w http.ResponseWriter, r *http.Request) {
 
 	s.audit(0, "captcha:send", req.Recipient, r)
 	jsonOK(w, map[string]string{"status": "ok", "message": "captcha sent"})
+}
+
+// ── Glance Cities (IP geolocation map data) ───────────────────────────────
+
+// glanceCity is a single map marker for the dashboard world map.
+type glanceCity struct {
+	Lat     float64 `json:"lat"`
+	Lng     float64 `json:"lng"`
+	Country string  `json:"country"`
+	Area    string  `json:"area"`
+	City    string  `json:"city"`
+	Org     string  `json:"org"`
+	Asn     string  `json:"asn"`
+	Count   int     `json:"count"`
+}
+
+func (s *Server) glanceCities() []glanceCity {
+	rows, err := s.store.DB().Query(`SELECT lat, lng, country, area, city, org, asn, COUNT(*) as cnt
+		FROM ip_data
+		WHERE lat != 0 AND lng != 0
+		GROUP BY lat, lng
+		ORDER BY cnt DESC`)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+
+	var cities []glanceCity
+	for rows.Next() {
+		var c glanceCity
+		if err := rows.Scan(&c.Lat, &c.Lng, &c.Country, &c.Area, &c.City, &c.Org, &c.Asn, &c.Count); err != nil {
+			continue
+		}
+		cities = append(cities, c)
+	}
+	if cities == nil {
+		cities = []glanceCity{}
+	}
+	return cities
 }

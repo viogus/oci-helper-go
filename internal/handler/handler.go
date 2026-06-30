@@ -166,6 +166,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/defense/disable", s.withAuth(s.handleDefenseDisable))
 	s.mux.HandleFunc("/api/ip-blacklist", s.withAuth(s.handleIPBlacklist))
 	s.mux.HandleFunc("/api/create-tasks", s.withAuth(s.handleCreateTasks))
+	s.mux.HandleFunc("/api/create-tasks/", s.withAuth(s.handleCreateTasks))
 
 	// in-memory tasks
 	s.mux.HandleFunc("/api/mem-tasks/change-ip", s.withAuth(s.handleMemTasksChangeIP))

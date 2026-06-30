@@ -43,6 +43,13 @@ func setupTestServer(t *testing.T) (*Server, *db.Store, *httptest.Server, func()
 	cleanup := func() {
 		ts.Close()
 		store.Close()
+		// Clear in-memory tasks between tests to avoid cross-test pollution
+		memTasksMu.Lock()
+		for _, t := range memTasks {
+			close(t.Cancel)
+		}
+		memTasks = make(map[string]*memTask)
+		memTasksMu.Unlock()
 	}
 
 	return srv, store, ts, cleanup

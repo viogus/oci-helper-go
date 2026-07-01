@@ -33,14 +33,8 @@ func (s *Server) handlePublicIPs(w http.ResponseWriter, r *http.Request) {
 			jsonErr(w, "invalid body: "+err.Error())
 			return
 		}
-		t, err := s.store.GetTenant(req.TenantID)
-		if err != nil || t == nil {
-			jsonErr(w, "tenant not found")
-			return
-		}
-		client, err := s.clientFor(t)
-		if err != nil {
-			jsonErr(w, "oci client: "+err.Error())
+		client, t, ok := s.getTenantClient(req.TenantID, w)
+		if !ok {
 			return
 		}
 		lifetime := core.CreatePublicIpDetailsLifetimeReserved
@@ -74,14 +68,8 @@ func (s *Server) handlePublicIPByID(w http.ResponseWriter, r *http.Request) {
 	}
 
 	tenantID, _ := strconv.ParseInt(r.URL.Query().Get("tenant_id"), 10, 64)
-	t, err := s.store.GetTenant(tenantID)
-	if err != nil || t == nil {
-		jsonErr(w, "tenant not found")
-		return
-	}
-	client, err := s.clientFor(t)
-	if err != nil {
-		jsonErr(w, "oci client: "+err.Error())
+	client, _, ok := s.getTenantClient(tenantID, w)
+	if !ok {
 		return
 	}
 	if err := client.DeletePublicIP(r.Context(), idStr); err != nil {

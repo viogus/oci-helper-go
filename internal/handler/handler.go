@@ -58,15 +58,15 @@ func New(cfg *config.Config, store *db.Store) *Server {
 	return s
 }
 
-// clientFor resolves the tenant's key file path (may be relative filename)
-// to an absolute path under KeysDir before creating the OCI client.
-func (s *Server) clientFor(t *db.Tenant) (*ociclient.Client, error) {
+// clientForTenant resolves the tenant's key file path (may be relative filename)
+// to an absolute path under keysDir before creating the OCI client.
+// Shared by Server.clientFor and Worker.newClient.
+func clientForTenant(t *db.Tenant, keysDir string) (*ociclient.Client, error) {
 	keyPath := t.KeyFile
 	if keyPath != "" && !filepath.IsAbs(keyPath) {
-		keyPath = filepath.Join(s.cfg.KeysDir, keyPath)
+		keyPath = filepath.Join(keysDir, keyPath)
 	}
 
-	// verify file exists and is readable before passing to SDK
 	if keyPath != "" {
 		if _, err := os.Stat(keyPath); err != nil {
 			log.Printf("[clientFor] key file stat error: %v", err)
@@ -76,6 +76,28 @@ func (s *Server) clientFor(t *db.Tenant) (*ociclient.Client, error) {
 	resolved := *t
 	resolved.KeyFile = keyPath
 	return ociclient.NewClient(&resolved)
+}
+
+// clientFor delegates to clientForTenant with the server's configured KeysDir.
+func (s *Server) clientFor(t *db.Tenant) (*ociclient.Client, error) {
+	return clientForTenant(t, s.cfg.KeysDir)
+}
+
+// getTenantClient fetches the tenant and creates an OCI client for it.
+// Writes an error response and returns (nil, nil, false) on failure.
+// Caller must return immediately when ok is false.
+func (s *Server) getTenantClient(tenantID int64, w http.ResponseWriter) (*ociclient.Client, *db.Tenant, bool) {
+	tenant, err := s.store.GetTenant(tenantID)
+	if err != nil || tenant == nil {
+		jsonErr(w, "tenant not found")
+		return nil, nil, false
+	}
+	client, err := s.clientFor(tenant)
+	if err != nil {
+		jsonErr(w, "oci client: "+err.Error())
+		return nil, nil, false
+	}
+	return client, tenant, true
 }
 
 func (s *Server) routes() {

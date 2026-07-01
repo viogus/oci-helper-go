@@ -20,14 +20,8 @@ func (s *Server) handleVCNByID(w http.ResponseWriter, r *http.Request) {
 	}
 
 	tenantID, _ := strconv.ParseInt(r.URL.Query().Get("tenant_id"), 10, 64)
-	t, err := s.store.GetTenant(tenantID)
-	if err != nil || t == nil {
-		jsonErr(w, "tenant not found")
-		return
-	}
-	client, err := s.clientFor(t)
-	if err != nil {
-		jsonErr(w, "oci client: "+err.Error())
+	client, _, ok := s.getTenantClient(tenantID, w)
+	if !ok {
 		return
 	}
 	if err := client.DeleteVcn(r.Context(), idStr); err != nil {

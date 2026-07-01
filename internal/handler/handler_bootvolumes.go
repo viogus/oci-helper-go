@@ -57,14 +57,8 @@ func (s *Server) handleBootVolumeByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	t, err := s.store.GetTenant(req.TenantID)
-	if err != nil || t == nil {
-		jsonErr(w, "tenant not found")
-		return
-	}
-	client, err := s.clientFor(t)
-	if err != nil {
-		jsonErr(w, "oci client: "+err.Error())
+	client, t, ok := s.getTenantClient(req.TenantID, w)
+	if !ok {
 		return
 	}
 

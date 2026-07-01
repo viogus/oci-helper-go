@@ -62,15 +62,8 @@ func (s *Server) createInstance(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	t, err := s.store.GetTenant(req.TenantID)
-	if err != nil || t == nil {
-		jsonErr(w, "tenant not found")
-		return
-	}
-
-	client, err := s.clientFor(t)
-	if err != nil {
-		jsonErr(w, "oci client: "+err.Error())
+	client, t, ok := s.getTenantClient(req.TenantID, w)
+	if !ok {
 		return
 	}
 
@@ -162,15 +155,8 @@ func (s *Server) handleInstanceAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	t, err := s.store.GetTenant(req.TenantID)
-	if err != nil || t == nil {
-		jsonErr(w, "tenant not found")
-		return
-	}
-
-	client, err := s.clientFor(t)
-	if err != nil {
-		jsonErr(w, "oci client: "+err.Error())
+	client, _, ok := s.getTenantClient(req.TenantID, w)
+	if !ok {
 		return
 	}
 
@@ -268,14 +254,8 @@ func (s *Server) handleSync(w http.ResponseWriter, r *http.Request) {
 	tenantIDStr := strings.TrimPrefix(r.URL.Path, "/api/sync/")
 	tenantID, _ := strconv.ParseInt(tenantIDStr, 10, 64)
 
-	t, err := s.store.GetTenant(tenantID)
-	if err != nil || t == nil {
-		jsonErr(w, "tenant not found")
-		return
-	}
-	client, err := s.clientFor(t)
-	if err != nil {
-		jsonErr(w, "oci client: "+err.Error())
+	client, t, ok := s.getTenantClient(tenantID, w)
+	if !ok {
 		return
 	}
 	instances, err := client.ListInstances(r.Context(), t.TenancyOCID)
@@ -404,14 +384,8 @@ func (s *Server) handleChangeShape(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, "invalid body: "+err.Error())
 		return
 	}
-	tenant, err := s.store.GetTenant(req.TenantID)
-	if err != nil || tenant == nil {
-		jsonErr(w, "tenant not found")
-		return
-	}
-	client, err := s.clientFor(tenant)
-	if err != nil {
-		jsonErr(w, "oci client: "+err.Error())
+	client, _, ok := s.getTenantClient(req.TenantID, w)
+	if !ok {
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
@@ -437,14 +411,8 @@ func (s *Server) handleChangeBootVolume(w http.ResponseWriter, r *http.Request) 
 		jsonErr(w, "invalid body: "+err.Error())
 		return
 	}
-	tenant, err := s.store.GetTenant(req.TenantID)
-	if err != nil || tenant == nil {
-		jsonErr(w, "tenant not found")
-		return
-	}
-	client, err := s.clientFor(tenant)
-	if err != nil {
-		jsonErr(w, "oci client: "+err.Error())
+	client, tenant, ok := s.getTenantClient(req.TenantID, w)
+	if !ok {
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
@@ -474,14 +442,8 @@ func (s *Server) handleAttachIPv6(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, "invalid body: "+err.Error())
 		return
 	}
-	tenant, err := s.store.GetTenant(req.TenantID)
-	if err != nil || tenant == nil {
-		jsonErr(w, "tenant not found")
-		return
-	}
-	client, err := s.clientFor(tenant)
-	if err != nil {
-		jsonErr(w, "oci client: "+err.Error())
+	client, tenant, ok := s.getTenantClient(req.TenantID, w)
+	if !ok {
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
@@ -516,14 +478,8 @@ func (s *Server) handleUpdateInstanceName(w http.ResponseWriter, r *http.Request
 		jsonErr(w, "invalid body: "+err.Error())
 		return
 	}
-	tenant, err := s.store.GetTenant(req.TenantID)
-	if err != nil || tenant == nil {
-		jsonErr(w, "tenant not found")
-		return
-	}
-	client, err := s.clientFor(tenant)
-	if err != nil {
-		jsonErr(w, "oci client: "+err.Error())
+	client, _, ok := s.getTenantClient(req.TenantID, w)
+	if !ok {
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
@@ -549,14 +505,8 @@ func (s *Server) handleChangeIP(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, "invalid body: "+err.Error())
 		return
 	}
-	tenant, err := s.store.GetTenant(req.TenantID)
-	if err != nil || tenant == nil {
-		jsonErr(w, "tenant not found")
-		return
-	}
-	client, err := s.clientFor(tenant)
-	if err != nil {
-		jsonErr(w, "oci client: "+err.Error())
+	client, _, ok := s.getTenantClient(req.TenantID, w)
+	if !ok {
 		return
 	}
 	// Try to change IP once (synchronous)
@@ -705,14 +655,8 @@ func (s *Server) handleOneClick500M(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, "invalid body: "+err.Error())
 		return
 	}
-	tenant, err := s.store.GetTenant(req.TenantID)
-	if err != nil || tenant == nil {
-		jsonErr(w, "tenant not found")
-		return
-	}
-	client, err := s.clientFor(tenant)
-	if err != nil {
-		jsonErr(w, "oci client: "+err.Error())
+	client, _, ok := s.getTenantClient(req.TenantID, w)
+	if !ok {
 		return
 	}
 	if err := client.Enable500Mbps(r.Context(), req.InstanceID); err != nil {
@@ -736,14 +680,8 @@ func (s *Server) handleOneClickClose500M(w http.ResponseWriter, r *http.Request)
 		jsonErr(w, "invalid body: "+err.Error())
 		return
 	}
-	tenant, err := s.store.GetTenant(req.TenantID)
-	if err != nil || tenant == nil {
-		jsonErr(w, "tenant not found")
-		return
-	}
-	client, err := s.clientFor(tenant)
-	if err != nil {
-		jsonErr(w, "oci client: "+err.Error())
+	client, _, ok := s.getTenantClient(req.TenantID, w)
+	if !ok {
 		return
 	}
 	if err := client.Disable500Mbps(r.Context(), req.InstanceID); err != nil {
@@ -766,14 +704,8 @@ func (s *Server) handleAutoRescue(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, "invalid body: "+err.Error())
 		return
 	}
-	tenant, err := s.store.GetTenant(req.TenantID)
-	if err != nil || tenant == nil {
-		jsonErr(w, "tenant not found")
-		return
-	}
-	client, err := s.clientFor(tenant)
-	if err != nil {
-		jsonErr(w, "oci client: "+err.Error())
+	client, _, ok := s.getTenantClient(req.TenantID, w)
+	if !ok {
 		return
 	}
 	inst, err := s.store.GetInstanceByID(fmt.Sprintf("%d:%s", req.TenantID, req.InstanceID))
@@ -871,14 +803,8 @@ func (s *Server) handleInstanceConfigUpdate(w http.ResponseWriter, r *http.Reque
 		jsonErr(w, "invalid body: "+err.Error())
 		return
 	}
-	tenant, err := s.store.GetTenant(req.TenantID)
-	if err != nil || tenant == nil {
-		jsonErr(w, "tenant not found")
-		return
-	}
-	client, err := s.clientFor(tenant)
-	if err != nil {
-		jsonErr(w, "oci client: "+err.Error())
+	client, _, ok := s.getTenantClient(req.TenantID, w)
+	if !ok {
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
@@ -911,14 +837,8 @@ func (s *Server) handleUpdateShape(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, "invalid body: "+err.Error())
 		return
 	}
-	tenant, err := s.store.GetTenant(req.TenantID)
-	if err != nil || tenant == nil {
-		jsonErr(w, "tenant not found")
-		return
-	}
-	client, err := s.clientFor(tenant)
-	if err != nil {
-		jsonErr(w, "oci client: "+err.Error())
+	client, _, ok := s.getTenantClient(req.TenantID, w)
+	if !ok {
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
@@ -947,14 +867,8 @@ func (s *Server) handleStartVNC(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, "invalid body: "+err.Error())
 		return
 	}
-	tenant, err := s.store.GetTenant(req.TenantID)
-	if err != nil || tenant == nil {
-		jsonErr(w, "tenant not found")
-		return
-	}
-	client, err := s.clientFor(tenant)
-	if err != nil {
-		jsonErr(w, "oci client: "+err.Error())
+	client, _, ok := s.getTenantClient(req.TenantID, w)
+	if !ok {
 		return
 	}
 	// Get SSH key for console connection
@@ -1020,14 +934,8 @@ func (s *Server) handleInstanceConfigInfo(w http.ResponseWriter, r *http.Request
 		jsonErr(w, "invalid body: "+err.Error())
 		return
 	}
-	tenant, err := s.store.GetTenant(req.TenantID)
-	if err != nil || tenant == nil {
-		jsonErr(w, "tenant not found")
-		return
-	}
-	client, err := s.clientFor(tenant)
-	if err != nil {
-		jsonErr(w, "oci client: "+err.Error())
+	client, tenant, ok := s.getTenantClient(req.TenantID, w)
+	if !ok {
 		return
 	}
 	ctx := r.Context()

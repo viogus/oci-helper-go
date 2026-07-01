@@ -29,14 +29,8 @@ func (s *Server) handleTraffic(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tenant, err := s.store.GetTenant(req.TenantID)
-	if err != nil || tenant == nil {
-		jsonErr(w, "tenant not found")
-		return
-	}
-	client, err := s.clientFor(tenant)
-	if err != nil {
-		jsonErr(w, "oci client: "+err.Error())
+	client, tenant, ok := s.getTenantClient(req.TenantID, w)
+	if !ok {
 		return
 	}
 
@@ -93,14 +87,8 @@ func (s *Server) handleTrafficCondition(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	tenant, err := s.store.GetTenant(tenantID)
-	if err != nil || tenant == nil {
-		jsonErr(w, "tenant not found")
-		return
-	}
-	client, err := s.clientFor(tenant)
-	if err != nil {
-		jsonErr(w, "oci client: "+err.Error())
+	client, tenant, ok := s.getTenantClient(tenantID, w)
+	if !ok {
 		return
 	}
 
@@ -123,14 +111,10 @@ func (s *Server) handleTrafficCondition(w http.ResponseWriter, r *http.Request) 
 		rn := *reg.RegionName
 		regionOptions = append(regionOptions, ValueLabel{Label: rn, Value: rn})
 
-		// Make a fresh client subscribed to this region.
-		regTenant := *tenant
-		regTenant.Region = rn
-		regClient, err := s.clientFor(&regTenant)
-		if err != nil {
-			continue
-		}
-		instances, err := regClient.ListInstances(r.Context(), tenant.TenancyOCID)
+		// Reuse the existing client — only switch region (avoids re-reading key file
+		// and re-creating all SDK clients per region).
+		client.SetRegion(rn)
+		instances, err := client.ListInstances(r.Context(), tenant.TenancyOCID)
 		if err != nil {
 			continue
 		}
@@ -170,14 +154,8 @@ func (s *Server) handleTrafficVnics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tenant, err := s.store.GetTenant(tenantID)
-	if err != nil || tenant == nil {
-		jsonErr(w, "tenant not found")
-		return
-	}
-	client, err := s.clientFor(tenant)
-	if err != nil {
-		jsonErr(w, "oci client: "+err.Error())
+	client, tenant, ok := s.getTenantClient(tenantID, w)
+	if !ok {
 		return
 	}
 

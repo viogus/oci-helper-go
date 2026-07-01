@@ -40,14 +40,8 @@ func (s *Server) handleSecurityRules(w http.ResponseWriter, r *http.Request) {
 		req.Size = 20
 	}
 
-	tenant, err := s.store.GetTenant(req.TenantID)
-	if err != nil || tenant == nil {
-		jsonErr(w, "tenant not found")
-		return
-	}
-	client, err := s.clientFor(tenant)
-	if err != nil {
-		jsonErr(w, "oci client: "+err.Error())
+	client, _, ok := s.getTenantClient(req.TenantID, w)
+	if !ok {
 		return
 	}
 
@@ -126,14 +120,8 @@ func (s *Server) handleSecurityRuleRelease(w http.ResponseWriter, r *http.Reques
 		jsonErr(w, "vcn_id and ports required")
 		return
 	}
-	tenant, err := s.store.GetTenant(req.TenantID)
-	if err != nil || tenant == nil {
-		jsonErr(w, "tenant not found")
-		return
-	}
-	client, err := s.clientFor(tenant)
-	if err != nil {
-		jsonErr(w, "oci client: "+err.Error())
+	client, _, ok := s.getTenantClient(req.TenantID, w)
+	if !ok {
 		return
 	}
 	added := 0

@@ -69,11 +69,8 @@
         </div>
       </div>
 
-      <!-- Trend chart (DAILY) -->
-      <div v-if="result && result.total > 0 && granularity === 'DAILY'" ref="trendChart" class="chart-box"></div>
-
-      <!-- Pie chart (MONTHLY) -->
-      <div v-if="result && result.total > 0 && granularity === 'MONTHLY'" ref="pieChart" class="chart-box"></div>
+      <!-- Bar chart (DAILY: stacked by service; MONTHLY: grouped by category) -->
+      <div v-if="result && result.total > 0" ref="barChart" class="chart-box"></div>
 
       <!-- Table -->
       <el-table v-if="result && result.total > 0" :data="result.items" stripe size="small" style="margin-top:16px" :default-sort="{prop: 'cost', order: 'descending'}">
@@ -122,9 +119,16 @@ const reportType = ref('MONTHLY_COST')
 const granularity = ref('MONTHLY')
 const queryType = ref('COST')
 
-const trendChart = ref(null)
-const pieChart = ref(null)
+const barChart = ref(null)
 let chart = null
+
+// Color palette — distinct colors per category, cycling for many services
+const COLORS = [
+  '#5470c6', '#91cc75', '#fac858', '#ee6666', '#73c0de',
+  '#3ba272', '#fc8452', '#9a60b4', '#ea7ccc', '#48b8d0',
+  '#f56c6c', '#409EFF', '#e6a23c', '#67c23a', '#909399',
+  '#ff85c0', '#5cdbd3', '#b37feb', '#ffd666', '#95de64',
+]
 
 // Default to last 3 months
 function initDateRange() {
@@ -184,68 +188,206 @@ function renderChart() {
   if (chart) { chart.dispose(); chart = null }
 
   if (granularity.value === 'DAILY') {
-    renderTrendChart()
+    renderDailyStackedBar()
   } else {
-    renderPieChart()
+    renderMonthlyGroupedBar()
   }
 }
 
-function renderTrendChart() {
-  if (!trendChart.value) return
-  chart = echarts.init(trendChart.value)
+// Pick display name for an item based on report type
+function categoryName(item) {
+  if (reportType.value === 'COST_BY_COMPARTMENT') return item.compartmentName || 'Unknown'
+  if (reportType.value === 'COST_BY_SERVICE_AND_SKU') return item.skuName || item.service || 'Unknown'
+  if (reportType.value === 'COST_BY_SERVICE_AND_DESCRIPTION') return `${item.service || '?'} / ${item.description || '?'}`
+  return item.service || item.skuName || item.compartmentName || 'Unknown'
+}
 
-  // Group by date, sum cost per day
-  const byDate = {}
-  for (const item of result.value.items) {
-    const d = item.date || 'unknown'
-    byDate[d] = (byDate[d] || 0) + (item.cost || 0)
+// DAILY: stacked bar chart — each day's bar broken down by service with distinct colors
+function renderDailyStackedBar() {
+  if (!barChart.value) return
+  chart = echarts.init(barChart.value)
+
+  const items = result.value.items.filter(i => i.cost > 0)
+  const currency = result.value.currency || 'USD'
+
+  // Collect all dates (sorted) and all unique services
+  const dateSet = new Set()
+  const serviceSet = new Set()
+  for (const item of items) {
+    dateSet.add(item.date || 'unknown')
+    serviceSet.add(item.service || 'Other')
   }
-  const dates = Object.keys(byDate).sort()
-  const values = dates.map(d => parseFloat(byDate[d].toFixed(4)))
+  const dates = [...dateSet].sort()
+  const services = [...serviceSet]
+
+  // Assign color per service
+  const colorMap = {}
+  services.forEach((s, i) => { colorMap[s] = COLORS[i % COLORS.length] })
+
+  // Build data per service: stacked bars
+  const series = services.map(svc => {
+    const byDate = {}
+    for (const item of items) {
+      if ((item.service || 'Other') === svc) {
+        byDate[item.date || 'unknown'] = (byDate[item.date || 'unknown'] || 0) + (item.cost || 0)
+      }
+    }
+    return {
+      name: svc,
+      type: 'bar',
+      stack: 'cost',
+      data: dates.map(d => parseFloat((byDate[d] || 0).toFixed(4))),
+      itemStyle: { color: colorMap[svc] },
+      emphasis: { focus: 'series' },
+    }
+  })
+
+  // Build color legend: { svc → hex }
+  const svcLegend = {}
+  services.forEach((s, i) => { svcLegend[s] = COLORS[i % COLORS.length] })
 
   chart.setOption({
-    tooltip: { trigger: 'axis' },
-    grid: { left: 60, right: 30, top: 20, bottom: 40 },
-    xAxis: { type: 'category', data: dates, axisLabel: { rotate: 45, fontSize: 10 } },
-    yAxis: { type: 'value', name: result.value.currency || 'USD' },
-    series: [{
-      type: 'bar',
-      data: values,
-      itemStyle: { color: '#409EFF' },
-      markLine: {
-        data: [{ type: 'average', name: 'Avg' }],
-        lineStyle: { color: '#E6A23C', type: 'dashed' },
+    tooltip: {
+      trigger: 'axis',
+      axisPointer: { type: 'shadow' },
+      formatter: (params) => {
+        // params = array of { seriesName, value, color } for each stack segment
+        let html = `<div style="font-weight:600;margin-bottom:6px">${params[0].axisValue}</div>`
+        let total = 0
+        params.forEach(p => {
+          if (p.value > 0) {
+            html += `<div style="display:flex;align-items:center;gap:6px;margin:2px 0">
+              <span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${p.color};flex-shrink:0"></span>
+              <span style="flex:1">${p.seriesName}</span>
+              <span style="font-weight:600">${currency} ${p.value.toFixed(2)}</span>
+            </div>`
+            total += p.value
+          }
+        })
+        html += `<div style="border-top:1px solid #ddd;margin-top:6px;padding-top:4px;font-weight:700">
+          Total: ${currency} ${total.toFixed(2)}
+        </div>`
+        return html
       },
-    }],
+    },
+    legend: {
+      type: 'scroll',
+      bottom: 0,
+      textStyle: { fontSize: 11 },
+    },
+    grid: { left: 70, right: 30, top: 20, bottom: 60 },
+    xAxis: {
+      type: 'category',
+      data: dates,
+      axisLabel: { rotate: 45, fontSize: 10 },
+    },
+    yAxis: {
+      type: 'value',
+      name: currency,
+    },
+    series,
   })
 }
 
-function renderPieChart() {
-  if (!pieChart.value) return
-  chart = echarts.init(pieChart.value)
+// MONTHLY: grouped bar chart — each service/category gets own bar with distinct color
+function renderMonthlyGroupedBar() {
+  if (!barChart.value) return
+  chart = echarts.init(barChart.value)
 
-  const data = result.value.items
-    .filter(i => i.cost > 0)
-    .sort((a, b) => b.cost - a.cost)
-    .slice(0, 10)
-    .map(i => ({ name: i.service || i.skuName || i.compartmentName || 'Unknown', value: parseFloat(i.cost.toFixed(4)) }))
+  const items = result.value.items.filter(i => i.cost > 0)
+  const currency = result.value.currency || 'USD'
 
-  const other = result.value.items
-    .filter(i => i.cost > 0)
-    .sort((a, b) => b.cost - a.cost)
-    .slice(10)
-    .reduce((s, i) => s + (i.cost || 0), 0)
-  if (other > 0) data.push({ name: 'Other', value: parseFloat(other.toFixed(4)) })
+  // Collect all sub-categories for this category to show breakdown on hover
+  const catSubs = {}  // catName → { service → cost }
+  for (const item of items) {
+    const cat = categoryName(item)
+    if (!catSubs[cat]) catSubs[cat] = {}
+    const sub = item.service || item.skuName || item.compartmentName || 'Other'
+    catSubs[cat][sub] = (catSubs[cat][sub] || 0) + (item.cost || 0)
+  }
+
+  // Aggregate by category name
+  const byCat = {}
+  for (const item of items) {
+    const name = categoryName(item)
+    byCat[name] = (byCat[name] || 0) + (item.cost || 0)
+  }
+
+  // Sort by cost descending, keep top 15, rest → Other
+  let entries = Object.entries(byCat).sort((a, b) => b[1] - a[1])
+  let other = 0
+  const otherSubs = {}
+  if (entries.length > 15) {
+    const rest = entries.slice(15)
+    for (const [cat, v] of rest) {
+      other += v
+      if (catSubs[cat]) {
+        for (const [sub, sv] of Object.entries(catSubs[cat])) {
+          otherSubs[sub] = (otherSubs[sub] || 0) + sv
+        }
+      }
+    }
+    entries = entries.slice(0, 15)
+  }
+  if (other > 0) {
+    entries.push(['Other', other])
+    catSubs['Other'] = otherSubs
+  }
+
+  const names = entries.map(([n]) => n)
+  const values = entries.map(([, v]) => parseFloat(v.toFixed(4)))
+  const barColors = names.map((_, i) => COLORS[i % COLORS.length])
 
   chart.setOption({
-    tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
+    tooltip: {
+      trigger: 'axis',
+      axisPointer: { type: 'shadow' },
+      formatter: (params) => {
+        const p = params[0]
+        const catName = p.name
+        const subs = catSubs[catName] || {}
+        // Sort sub-categories by cost desc
+        const subEntries = Object.entries(subs).sort((a, b) => b[1] - a[1])
+        let html = `<div style="font-weight:600;margin-bottom:6px">
+          <span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${p.color};margin-right:6px;vertical-align:middle"></span>
+          ${catName}
+        </div>`
+        subEntries.forEach(([sub, v]) => {
+          html += `<div style="display:flex;align-items:center;gap:6px;margin:2px 0;padding-left:16px">
+            <span style="flex:1;font-size:12px;color:#666">${sub}</span>
+            <span style="font-weight:600">${currency} ${v.toFixed(2)}</span>
+          </div>`
+        })
+        html += `<div style="border-top:1px solid #ddd;margin-top:6px;padding-top:4px;font-weight:700">
+          Total: ${currency} ${p.value.toFixed(2)}
+        </div>`
+        return html
+      },
+    },
+    grid: { left: 90, right: 30, top: 20, bottom: 100 },
+    xAxis: {
+      type: 'category',
+      data: names,
+      axisLabel: {
+        rotate: 45,
+        fontSize: 10,
+        interval: 0,
+        formatter: v => v.length > 20 ? v.slice(0, 19) + '…' : v,
+      },
+    },
+    yAxis: {
+      type: 'value',
+      name: currency,
+    },
     series: [{
-      type: 'pie',
-      radius: ['40%', '70%'],
-      center: ['50%', '50%'],
-      data,
-      label: { formatter: '{b}\n{d}%', fontSize: 11 },
-      emphasis: { label: { fontSize: 16 } },
+      type: 'bar',
+      data: values.map((v, i) => ({ value: v, itemStyle: { color: barColors[i] } })),
+      label: {
+        show: true,
+        position: 'top',
+        fontSize: 10,
+        formatter: p => p.value > 0 ? p.value.toFixed(1) : '',
+      },
     }],
   })
 }

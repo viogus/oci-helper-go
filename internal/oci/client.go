@@ -111,6 +111,24 @@ func NewClient(t *db.Tenant) (*Client, error) {
 	}, nil
 }
 
+// SetRegion changes the region on all sub-clients in this Client.
+// Client MUST NOT be shared across goroutines (current design creates a fresh
+// Client per request, so this is safe for sequential region-switching within a
+// single handler call). Mutating region is much cheaper than creating a new
+// Client per region — avoids re-reading the key file and re-creating all SDK
+// clients.
+func (c *Client) SetRegion(region string) {
+	c.compute.SetRegion(region)
+	c.vcn.SetRegion(region)
+	c.identity.SetRegion(region)
+	c.bootVolume.SetRegion(region)
+	c.monitoring.SetRegion(region)
+	c.limits.SetRegion(region)
+	c.nlb.SetRegion(region)
+	c.usageapi.SetRegion(region)
+	c.subscription.SetRegion(region)
+}
+
 func (c *Client) ListInstances(ctx context.Context, compartmentID string) ([]core.Instance, error) {
 	var all []core.Instance
 	page := common.String("")

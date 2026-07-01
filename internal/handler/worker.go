@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"path/filepath"
 	"time"
 
 	"github.com/oracle/oci-go-sdk/v65/core"
@@ -30,13 +29,9 @@ func NewWorker(store *db.Store, keysDir string) *Worker {
 	return &Worker{store: store, keysDir: keysDir}
 }
 
+// newClient delegates to the package-level clientForTenant with the worker's keysDir.
 func (w *Worker) newClient(t *db.Tenant) (*ociclient.Client, error) {
-	if t.KeyFile != "" && !filepath.IsAbs(t.KeyFile) {
-		resolved := *t
-		resolved.KeyFile = filepath.Join(w.keysDir, t.KeyFile)
-		return ociclient.NewClient(&resolved)
-	}
-	return ociclient.NewClient(t)
+	return clientForTenant(t, w.keysDir)
 }
 
 // Run starts the worker loop. Picks one pending task per poll interval (5s).

@@ -30,14 +30,8 @@ func (s *Server) handleDefenseEnable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tenant, err := s.store.GetTenant(req.TenantID)
-	if err != nil || tenant == nil {
-		jsonErr(w, "tenant not found")
-		return
-	}
-	client, err := s.clientFor(tenant)
-	if err != nil {
-		jsonErr(w, "oci client: "+err.Error())
+	client, tenant, ok := s.getTenantClient(req.TenantID, w)
+	if !ok {
 		return
 	}
 	vcn := client.VcnClient()
@@ -114,14 +108,8 @@ func (s *Server) handleDefenseDisable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tenant, err := s.store.GetTenant(req.TenantID)
-	if err != nil || tenant == nil {
-		jsonErr(w, "tenant not found")
-		return
-	}
-	client, err := s.clientFor(tenant)
-	if err != nil {
-		jsonErr(w, "oci client: "+err.Error())
+	client, tenant, ok := s.getTenantClient(req.TenantID, w)
+	if !ok {
 		return
 	}
 	vcn := client.VcnClient()

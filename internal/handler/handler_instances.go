@@ -13,7 +13,9 @@ import (
 	"github.com/oracle/oci-go-sdk/v65/common"
 	"github.com/oracle/oci-go-sdk/v65/core"
 	"log"
+
 	"github.com/viogus/oci-helper-go/internal/db"
+	ociclient "github.com/viogus/oci-helper-go/internal/oci"
 )
 
 func (s *Server) handleInstances(w http.ResponseWriter, r *http.Request) {
@@ -273,13 +275,17 @@ func (s *Server) handleSync(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Discover subscribed regions, fall back to tenant's default region.
-	regions := getSubscribedRegions(t)
+	// Discover subscribed regions from OCI Identity API.
+	// Falls back to DB-cached regions, then tenant's home region.
+	regions := discoverRegions(r.Context(), client)
+	if len(regions) == 0 {
+		regions = getSubscribedRegions(t)
+	}
 	if len(regions) == 0 {
 		regions = []string{t.Region}
 	}
 
-	// Persist discovered regions back to tenant.
+	// Persist discovered regions back to tenant for next sync.
 	updateTenantRegions(s.store, tenantID, regions)
 
 	totalCount := 0
@@ -1090,6 +1096,23 @@ func (s *Server) handleUpdatePassword(w http.ResponseWriter, r *http.Request) {
 4. Log in as root/opc and run: passwd
 5. Enter the new password twice`,
 	})
+}
+
+// discoverRegions calls the OCI Identity API to list subscribed regions for the tenancy.
+// Returns region names, or nil on any error (caller should fall back to cached/default).
+func discoverRegions(ctx context.Context, client *ociclient.Client) []string {
+	subs, err := client.ListRegionSubscriptions(ctx)
+	if err != nil {
+		log.Printf("[regions] ListRegionSubscriptions: %v", err)
+		return nil
+	}
+	var regions []string
+	for _, sub := range subs {
+		if sub.RegionName != nil && *sub.RegionName != "" {
+			regions = append(regions, *sub.RegionName)
+		}
+	}
+	return regions
 }
 
 // getSubscribedRegions parses the tenant's subscribed JSON field into a string slice.

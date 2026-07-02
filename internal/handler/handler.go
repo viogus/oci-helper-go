@@ -244,12 +244,35 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/users/", s.withAuth(s.handleUserByID))
 	s.mux.HandleFunc("/api/sync/", s.withAuth(s.handleSync))
 
-	// Static files (frontend)
-	staticFS, err := fs.Sub(staticFiles, "dist")
-	if err != nil {
-		log.Fatalf("embedded dist directory not found: %v", err)
-	}
-	s.mux.Handle("/", http.FileServer(http.FS(staticFS)))
+
+		// Static files (frontend) with SPA fallback.
+		// Client-side routes (/ssh-keys, /settings, etc.) get index.html
+		// so the SPA router can handle them.
+		staticFS, err := fs.Sub(staticFiles, "dist")
+		if err != nil {
+			log.Fatalf("embedded dist directory not found: %v", err)
+		}
+		fileFS := http.FS(staticFS)
+		s.mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+			// API paths that fell through — genuine 404.
+			if strings.HasPrefix(r.URL.Path, "/api/") {
+				http.NotFound(w, r)
+				return
+			}
+			// Try to open the file; if it doesn't exist in the embedded FS,
+			// serve index.html for SPA client-side routing.
+			path := strings.TrimPrefix(r.URL.Path, "/")
+			if path == "" {
+				path = "index.html"
+			}
+			f, err := staticFS.Open(path)
+			if err != nil {
+				r.URL.Path = "/"
+			} else {
+				f.Close()
+			}
+			http.FileServer(fileFS).ServeHTTP(w, r)
+		})
 }
 
 func (s *Server) Handler() http.Handler { return s.mux }

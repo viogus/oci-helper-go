@@ -58,6 +58,11 @@ func New(cfg *config.Config, store *db.Store) *Server {
 	return s
 }
 
+// Shutdown gracefully stops background workers.
+func (s *Server) Shutdown() {
+	s.worker.Shutdown()
+}
+
 // clientForTenant resolves the tenant's key file path (may be relative filename)
 // to an absolute path under keysDir before creating the OCI client.
 // Shared by Server.clientFor and Worker.newClient.
@@ -121,6 +126,7 @@ func (s *Server) clientForInstance(tenantID int64, instanceID string, w http.Res
 
 func (s *Server) routes() {
 	// API — exact paths
+	s.mux.HandleFunc("/api/health", s.handleHealth)
 	s.mux.HandleFunc("/api/login", s.handleLogin)
 	s.mux.HandleFunc("/api/logout", s.withAuth(s.handleLogout))
 	s.mux.HandleFunc("/api/config", s.withAuth(s.handleConfig))
@@ -259,6 +265,9 @@ func (s *Server) routes() {
 				http.NotFound(w, r)
 				return
 			}
+			// Set CSP on the HTML document (the SPA shell). CSP is a
+			// document-level policy; setting it on API responses has no effect.
+			w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://*.tile.openstreetmap.org; connect-src 'self' ws: wss:; font-src 'self' data:; frame-src 'self'")
 			// Try to open the file; if it doesn't exist in the embedded FS,
 			// serve index.html for SPA client-side routing.
 			path := strings.TrimPrefix(r.URL.Path, "/")

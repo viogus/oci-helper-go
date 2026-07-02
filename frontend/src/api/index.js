@@ -65,8 +65,8 @@ export async function put(path, data = {}) {
 }
 
 // helper: DELETE
-export async function del(path) {
-  const res = await api.delete(path)
+export async function del(path, config = {}) {
+  const res = await api.delete(path, config)
   return res.data
 }
 

@@ -111,6 +111,7 @@
     "selected": "{count} instance(s) selected",
     "loading": "Loading instances...",
     "shape": "Shape",
+    "region": "Region",
     "memoryGB": "Memory (GB)",
     "state": "State",
     "publicIP": "Public IP",
@@ -196,7 +197,16 @@
     "selectInstance": "Instance",
     "selectSSHKey": "SSH Key",
     "connect": "Connect",
-    "disconnect": "Disconnect"
+    "disconnect": "Disconnect",
+    "manageKeys": "Manage SSH Keys",
+    "quickGenerate": "Quick Generate",
+    "generateTitle": "Generate SSH Keypair",
+    "keyName": "Key Name",
+    "keyType": "Key Type",
+    "publicKey": "Public Key",
+    "generate": "Generate",
+    "copyKey": "Copy Public Key",
+    "keyWarning": "Save your private key now. It will not be shown again."
   },
   "metrics": {
     "title": "Instance Metrics",
@@ -405,7 +415,7 @@
     "save": "Save",
     "needInstance": "Cannot find an instance matching this boot volume. Please sync instances first.",
     "needInstanceTitle": "Instance Required",
-    "confirmShrink": "Shrink boot volume <strong>{name}</strong> to 47 GB? The instance will be stopped during this operation.",
+    "confirmShrink": "Shrink boot volume \"{name}\" to 47 GB? The instance will be stopped during this operation.",
     "shrinkTitle": "Shrink to 47GB",
     "shrinkBtn": "Shrink"
   },
@@ -599,6 +609,8 @@
     "generate": "Generate",
     "upload": "Upload PEM",
     "name": "Name",
+    "tenant": "Tenant",
+    "global": "Global",
     "fingerprint": "Fingerprint",
     "type": "Type",
     "publicKey": "Public Key",

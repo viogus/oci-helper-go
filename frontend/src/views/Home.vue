@@ -101,21 +101,21 @@ let map = null
 let markerLayer = null
 
 const stats = reactive([
-  { labelKey: 'home.tenant', value: '—', icon: 'User', color: '#2563eb' },
-  { labelKey: 'home.instance', value: '—', icon: 'Monitor', color: '#10b981' },
-  { labelKey: 'home.running', value: '—', icon: 'Timer', color: '#f59e0b' },
-  { labelKey: 'home.activeTasks', value: '—', icon: 'Timer', color: '#8b5cf6' },
+  { labelKey: 'home.tenant', value: '—', icon: User, color: '#2563eb' },
+  { labelKey: 'home.instance', value: '—', icon: Monitor, color: '#10b981' },
+  { labelKey: 'home.running', value: '—', icon: Timer, color: '#f59e0b' },
+  { labelKey: 'home.activeTasks', value: '—', icon: Timer, color: '#8b5cf6' },
 ])
 
 const links = [
-  { labelKey: 'home.instance', path: '/instances', icon: 'Monitor', bg: 'linear-gradient(135deg,#2563eb,#6366f1)' },
-  { labelKey: 'home.create', path: '/instances/create', icon: 'Plus', bg: 'linear-gradient(135deg,#10b981,#059669)' },
-  { labelKey: 'home.security', path: '/security-rules', icon: 'Lock', bg: 'linear-gradient(135deg,#f59e0b,#d97706)' },
-  { labelKey: 'home.network', path: '/traffic', icon: 'Connection', bg: 'linear-gradient(135deg,#8b5cf6,#7c3aed)' },
-  { labelKey: 'home.cloudflare', path: '/cloudflare', icon: 'Cloudy', bg: 'linear-gradient(135deg,#06b6d4,#0891b2)' },
-  { labelKey: 'home.aiChat', path: '/ai-chat', icon: 'ChatDotRound', bg: 'linear-gradient(135deg,#ec4899,#db2777)' },
-  { labelKey: 'home.tenant', path: '/tenants', icon: 'User', bg: 'linear-gradient(135deg,#64748b,#475569)' },
-  { labelKey: 'home.settings', path: '/settings', icon: 'Setting', bg: 'linear-gradient(135deg,#78716c,#57534e)' },
+  { labelKey: 'home.instance', path: '/instances', icon: Monitor, bg: 'linear-gradient(135deg,#2563eb,#6366f1)' },
+  { labelKey: 'home.create', path: '/instances/create', icon: Plus, bg: 'linear-gradient(135deg,#10b981,#059669)' },
+  { labelKey: 'home.security', path: '/security-rules', icon: Lock, bg: 'linear-gradient(135deg,#f59e0b,#d97706)' },
+  { labelKey: 'home.network', path: '/traffic', icon: Connection, bg: 'linear-gradient(135deg,#8b5cf6,#7c3aed)' },
+  { labelKey: 'home.cloudflare', path: '/cloudflare', icon: Cloudy, bg: 'linear-gradient(135deg,#06b6d4,#0891b2)' },
+  { labelKey: 'home.aiChat', path: '/ai-chat', icon: ChatDotRound, bg: 'linear-gradient(135deg,#ec4899,#db2777)' },
+  { labelKey: 'home.tenant', path: '/tenants', icon: User, bg: 'linear-gradient(135deg,#64748b,#475569)' },
+  { labelKey: 'home.settings', path: '/settings', icon: Setting, bg: 'linear-gradient(135deg,#78716c,#57534e)' },
 ]
 
 // Custom Leaflet marker icons

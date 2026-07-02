@@ -13,7 +13,7 @@ import (
 
 // ListDomains returns all active identity domains in the tenancy.
 func (c *Client) ListDomains(ctx context.Context) ([]identity.DomainSummary, error) {
-	defer withSubtreeInterceptor(&c.identity.Interceptor)()
+	defer c.withSubtreeInterceptor(&c.identity.Interceptor)()
 	req := identity.ListDomainsRequest{
 		CompartmentId: common.String(c.tenant.TenancyOCID),
 		Limit:         common.Int(100),

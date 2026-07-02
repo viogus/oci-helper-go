@@ -38,7 +38,8 @@ type Client struct {
 	nlb          networkloadbalancer.NetworkLoadBalancerClient
 	usageapi     usageapi.UsageapiClient
 	subscription ospgateway.SubscriptionServiceClient
-	mu           sync.Mutex
+
+	mu sync.Mutex // guards interceptor mutations on all sub-clients
 }
 
 func NewClient(t *db.Tenant) (*Client, error) {
@@ -219,13 +220,16 @@ func (c *Client) TerminateInstance(ctx context.Context, instanceID string) error
 // field pointer that adds compartmentIdInSubtree=true to all requests. This
 // enables recursive cross-compartment resource listing.
 //
-// IMPORTANT: This mutates the Client struct field directly. Client instances
-// MUST NOT be shared across goroutines — each request gets a fresh Client via
-// clientFor(). If client caching/pooling is ever added, this function must be
-// guarded with c.mu.Lock() or replaced with per-request options.
+// The Client mutex guards interceptor setup so that concurrent callers do not
+// clobber each other's interceptor before their OCI API call begins. The
+// cleanup function returned by this method does NOT acquire the mutex; Clients
+// SHOULD NOT be shared across goroutines (the current design creates a fresh
+// Client per request via clientFor, so no sharing occurs in practice).
 //
 // Returns a cleanup function to restore the previous interceptor (or nil).
-func withSubtreeInterceptor(interceptor *common.RequestInterceptor) func() {
+func (c *Client) withSubtreeInterceptor(interceptor *common.RequestInterceptor) func() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	prev := *interceptor
 	*interceptor = func(r *http.Request) error {
 		q := r.URL.Query()
@@ -244,7 +248,7 @@ func (c *Client) ListVCNs(ctx context.Context, compartmentID string) ([]core.Vcn
 		CompartmentId: common.String(compartmentID),
 		Limit:         common.Int(1000),
 	}
-	defer withSubtreeInterceptor(&c.vcn.Interceptor)()
+	defer c.withSubtreeInterceptor(&c.vcn.Interceptor)()
 	resp, err := c.vcn.ListVcns(ctx, req)
 	if err != nil {
 		return nil, err
@@ -258,7 +262,7 @@ func (c *Client) ListSubnets(ctx context.Context, compartmentID, vcnID string) (
 		VcnId:         common.String(vcnID),
 		Limit:         common.Int(1000),
 	}
-	defer withSubtreeInterceptor(&c.vcn.Interceptor)()
+	defer c.withSubtreeInterceptor(&c.vcn.Interceptor)()
 	resp, err := c.vcn.ListSubnets(ctx, req)
 	if err != nil {
 		return nil, err
@@ -267,7 +271,7 @@ func (c *Client) ListSubnets(ctx context.Context, compartmentID, vcnID string) (
 }
 
 func (c *Client) ListAvailabilityDomains(ctx context.Context, compartmentID string) ([]identity.AvailabilityDomain, error) {
-	defer withSubtreeInterceptor(&c.identity.Interceptor)()
+	defer c.withSubtreeInterceptor(&c.identity.Interceptor)()
 	req := identity.ListAvailabilityDomainsRequest{
 		CompartmentId: common.String(compartmentID),
 	}
@@ -280,7 +284,7 @@ func (c *Client) ListAvailabilityDomains(ctx context.Context, compartmentID stri
 
 // ListRegionSubscriptions returns subscribed regions for the tenancy.
 func (c *Client) ListRegionSubscriptions(ctx context.Context) ([]identity.RegionSubscription, error) {
-	defer withSubtreeInterceptor(&c.identity.Interceptor)()
+	defer c.withSubtreeInterceptor(&c.identity.Interceptor)()
 	req := identity.ListRegionSubscriptionsRequest{
 		TenancyId: common.String(c.tenant.TenancyOCID),
 	}
@@ -294,7 +298,7 @@ func (c *Client) ListRegionSubscriptions(ctx context.Context) ([]identity.Region
 // ── Identity User Management ──────────────────────────────────────────
 
 func (c *Client) ListUsers(ctx context.Context, compartmentID string) ([]identity.User, error) {
-	defer withSubtreeInterceptor(&c.identity.Interceptor)()
+	defer c.withSubtreeInterceptor(&c.identity.Interceptor)()
 	var all []identity.User
 	page := common.String("")
 	for {
@@ -317,7 +321,7 @@ func (c *Client) ListUsers(ctx context.Context, compartmentID string) ([]identit
 }
 
 func (c *Client) GetUser(ctx context.Context, userID string) (*identity.User, error) {
-	defer withSubtreeInterceptor(&c.identity.Interceptor)()
+	defer c.withSubtreeInterceptor(&c.identity.Interceptor)()
 	req := identity.GetUserRequest{
 		UserId: common.String(userID),
 	}
@@ -329,7 +333,7 @@ func (c *Client) GetUser(ctx context.Context, userID string) (*identity.User, er
 }
 
 func (c *Client) DeleteUser(ctx context.Context, userID string) error {
-	defer withSubtreeInterceptor(&c.identity.Interceptor)()
+	defer c.withSubtreeInterceptor(&c.identity.Interceptor)()
 	req := identity.DeleteUserRequest{
 		UserId: common.String(userID),
 	}
@@ -341,7 +345,7 @@ func (c *Client) DeleteUser(ctx context.Context, userID string) error {
 }
 
 func (c *Client) CreateOrResetUIPassword(ctx context.Context, userID string) (*identity.UiPassword, error) {
-	defer withSubtreeInterceptor(&c.identity.Interceptor)()
+	defer c.withSubtreeInterceptor(&c.identity.Interceptor)()
 	req := identity.CreateOrResetUIPasswordRequest{
 		UserId: common.String(userID),
 	}
@@ -353,7 +357,7 @@ func (c *Client) CreateOrResetUIPassword(ctx context.Context, userID string) (*i
 }
 
 func (c *Client) UpdateUser(ctx context.Context, userID string, email, description *string) (*identity.User, error) {
-	defer withSubtreeInterceptor(&c.identity.Interceptor)()
+	defer c.withSubtreeInterceptor(&c.identity.Interceptor)()
 	req := identity.UpdateUserRequest{
 		UserId: common.String(userID),
 		UpdateUserDetails: identity.UpdateUserDetails{
@@ -369,7 +373,7 @@ func (c *Client) UpdateUser(ctx context.Context, userID string, email, descripti
 }
 
 func (c *Client) ListMfaTotpDevices(ctx context.Context, userID string) ([]identity.MfaTotpDeviceSummary, error) {
-	defer withSubtreeInterceptor(&c.identity.Interceptor)()
+	defer c.withSubtreeInterceptor(&c.identity.Interceptor)()
 	req := identity.ListMfaTotpDevicesRequest{
 		UserId: common.String(userID),
 		Limit:  common.Int(100),
@@ -382,7 +386,7 @@ func (c *Client) ListMfaTotpDevices(ctx context.Context, userID string) ([]ident
 }
 
 func (c *Client) DeleteMfaTotpDevice(ctx context.Context, userID, deviceID string) error {
-	defer withSubtreeInterceptor(&c.identity.Interceptor)()
+	defer c.withSubtreeInterceptor(&c.identity.Interceptor)()
 	req := identity.DeleteMfaTotpDeviceRequest{
 		UserId:          common.String(userID),
 		MfaTotpDeviceId: common.String(deviceID),
@@ -395,7 +399,7 @@ func (c *Client) DeleteMfaTotpDevice(ctx context.Context, userID, deviceID strin
 }
 
 func (c *Client) ListApiKeys(ctx context.Context, userID string) ([]identity.ApiKey, error) {
-	defer withSubtreeInterceptor(&c.identity.Interceptor)()
+	defer c.withSubtreeInterceptor(&c.identity.Interceptor)()
 	req := identity.ListApiKeysRequest{
 		UserId: common.String(userID),
 	}
@@ -407,7 +411,7 @@ func (c *Client) ListApiKeys(ctx context.Context, userID string) ([]identity.Api
 }
 
 func (c *Client) DeleteApiKey(ctx context.Context, userID, fingerprint string) error {
-	defer withSubtreeInterceptor(&c.identity.Interceptor)()
+	defer c.withSubtreeInterceptor(&c.identity.Interceptor)()
 	req := identity.DeleteApiKeyRequest{
 		UserId:      common.String(userID),
 		Fingerprint: common.String(fingerprint),
@@ -420,7 +424,7 @@ func (c *Client) DeleteApiKey(ctx context.Context, userID, fingerprint string) e
 }
 
 func (c *Client) GetTenancy(ctx context.Context) (*identity.Tenancy, error) {
-	defer withSubtreeInterceptor(&c.identity.Interceptor)()
+	defer c.withSubtreeInterceptor(&c.identity.Interceptor)()
 	req := identity.GetTenancyRequest{
 		TenancyId: common.String(c.tenant.TenancyOCID),
 	}
@@ -432,7 +436,7 @@ func (c *Client) GetTenancy(ctx context.Context) (*identity.Tenancy, error) {
 }
 
 func (c *Client) ListImages(ctx context.Context, compartmentID, os string) ([]core.Image, error) {
-	defer withSubtreeInterceptor(&c.compute.Interceptor)()
+	defer c.withSubtreeInterceptor(&c.compute.Interceptor)()
 	req := core.ListImagesRequest{
 		CompartmentId:   common.String(compartmentID),
 		OperatingSystem: common.String(os),
@@ -450,7 +454,7 @@ func (c *Client) ListImages(ctx context.Context, compartmentID, os string) ([]co
 // VNIC
 
 func (c *Client) ListVnicAttachments(ctx context.Context, compartmentID, instanceID string) ([]core.VnicAttachment, error) {
-	defer withSubtreeInterceptor(&c.compute.Interceptor)()
+	defer c.withSubtreeInterceptor(&c.compute.Interceptor)()
 	req := core.ListVnicAttachmentsRequest{
 		CompartmentId: common.String(compartmentID),
 		InstanceId:    common.String(instanceID),
@@ -475,7 +479,7 @@ func (c *Client) GetVnic(ctx context.Context, vnicID string) (*core.Vnic, error)
 // Public IP
 
 func (c *Client) ListPublicIPs(ctx context.Context, compartmentID string) ([]core.PublicIp, error) {
-	defer withSubtreeInterceptor(&c.vcn.Interceptor)()
+	defer c.withSubtreeInterceptor(&c.vcn.Interceptor)()
 	req := core.ListPublicIpsRequest{
 		CompartmentId: common.String(compartmentID),
 		Scope:         core.ListPublicIpsScopeRegion,
@@ -513,7 +517,7 @@ func (c *Client) GetPublicIP(ctx context.Context, publicIPID string) (*core.Publ
 }
 
 func (c *Client) ListShapes(ctx context.Context, compartmentID, imageID string) ([]core.Shape, error) {
-	defer withSubtreeInterceptor(&c.compute.Interceptor)()
+	defer c.withSubtreeInterceptor(&c.compute.Interceptor)()
 	req := core.ListShapesRequest{
 		CompartmentId: common.String(compartmentID),
 		ImageId:       common.String(imageID),
@@ -529,7 +533,7 @@ func (c *Client) ListShapes(ctx context.Context, compartmentID, imageID string) 
 // Boot Volumes
 
 func (c *Client) ListBootVolumes(ctx context.Context, compartmentID string) ([]core.BootVolume, error) {
-	defer withSubtreeInterceptor(&c.bootVolume.Interceptor)()
+	defer c.withSubtreeInterceptor(&c.bootVolume.Interceptor)()
 	req := core.ListBootVolumesRequest{
 		CompartmentId: common.String(compartmentID),
 		Limit:         common.Int(1000),
@@ -570,7 +574,7 @@ func (c *Client) UpdateBootVolume(ctx context.Context, id string, sizeInGBs int6
 }
 
 func (c *Client) ListBootVolumeAttachments(ctx context.Context, compartmentID, instanceID string) ([]core.BootVolumeAttachment, error) {
-	defer withSubtreeInterceptor(&c.compute.Interceptor)()
+	defer c.withSubtreeInterceptor(&c.compute.Interceptor)()
 	req := core.ListBootVolumeAttachmentsRequest{
 		CompartmentId: common.String(compartmentID),
 		InstanceId:    common.String(instanceID),
@@ -642,7 +646,7 @@ func (c *Client) UpdateInstanceDisplayName(ctx context.Context, instanceID, disp
 }
 
 func (c *Client) GetBootVolumeAttachment(ctx context.Context, compartmentID, instanceID string) (*core.BootVolumeAttachment, error) {
-	defer withSubtreeInterceptor(&c.compute.Interceptor)()
+	defer c.withSubtreeInterceptor(&c.compute.Interceptor)()
 	req := core.ListBootVolumeAttachmentsRequest{
 		CompartmentId: common.String(compartmentID),
 		InstanceId:    common.String(instanceID),
@@ -659,7 +663,7 @@ func (c *Client) GetBootVolumeAttachment(ctx context.Context, compartmentID, ins
 }
 
 func (c *Client) GetInstanceVNICs(ctx context.Context, compartmentID, instanceID string) ([]core.Vnic, error) {
-	defer withSubtreeInterceptor(&c.compute.Interceptor)()
+	defer c.withSubtreeInterceptor(&c.compute.Interceptor)()
 	attachments, err := c.ListVnicAttachments(ctx, compartmentID, instanceID)
 	if err != nil {
 		return nil, err
@@ -1029,7 +1033,7 @@ func securityRuleID(slID, direction string, protocol, source, dest *string, tcpO
 }
 
 func (c *Client) ListSecurityRules(ctx context.Context, vcnID, keyword string, page, size int) ([]SecurityRuleInfo, int64, error) {
-	defer withSubtreeInterceptor(&c.vcn.Interceptor)()
+	defer c.withSubtreeInterceptor(&c.vcn.Interceptor)()
 	compartmentID := c.tenant.TenancyOCID
 	req := core.ListSecurityListsRequest{
 		CompartmentId: common.String(compartmentID),
@@ -1397,7 +1401,7 @@ type LimitInfo struct {
 
 // ListServices returns all available service names for limit queries.
 func (c *Client) ListServices(ctx context.Context) ([]string, error) {
-	defer withSubtreeInterceptor(&c.limits.Interceptor)()
+	defer c.withSubtreeInterceptor(&c.limits.Interceptor)()
 	req := limits.ListServicesRequest{
 		CompartmentId: common.String(c.tenant.TenancyOCID),
 		Limit:         common.Int(100),
@@ -1418,7 +1422,7 @@ func (c *Client) ListServices(ctx context.Context) ([]string, error) {
 // GetLimits queries limits for a tenant and optional service in a specific region.
 // If serviceName is empty, queries ALL services.
 func (c *Client) GetLimits(ctx context.Context, region, serviceName string) ([]LimitInfo, error) {
-	defer withSubtreeInterceptor(&c.limits.Interceptor)()
+	defer c.withSubtreeInterceptor(&c.limits.Interceptor)()
 	compartmentID := c.tenant.TenancyOCID
 
 	// Determine which services to query.
@@ -1691,8 +1695,8 @@ func (c *Client) Disable500Mbps(ctx context.Context, instanceID string) error {
 
 // ChangeInstanceIP replaces the ephemeral public IP of an instance.
 func (c *Client) ChangeInstanceIP(ctx context.Context, instanceID string, cidrList []string) (string, error) {
-	defer withSubtreeInterceptor(&c.compute.Interceptor)()
-	defer withSubtreeInterceptor(&c.vcn.Interceptor)()
+	defer c.withSubtreeInterceptor(&c.compute.Interceptor)()
+	defer c.withSubtreeInterceptor(&c.vcn.Interceptor)()
 	// Get current VNIC
 	attReq := core.ListVnicAttachmentsRequest{
 		CompartmentId: common.String(c.tenant.TenancyOCID),
@@ -1873,7 +1877,7 @@ func (c *Client) DeleteConsoleConnection(ctx context.Context, connectionID strin
 }
 
 func (c *Client) ListConsoleConnections(ctx context.Context, instanceID string) ([]core.InstanceConsoleConnection, error) {
-	defer withSubtreeInterceptor(&c.compute.Interceptor)()
+	defer c.withSubtreeInterceptor(&c.compute.Interceptor)()
 	req := core.ListInstanceConsoleConnectionsRequest{
 		CompartmentId: common.String(c.tenant.TenancyOCID),
 		InstanceId:    common.String(instanceID),

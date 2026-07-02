@@ -11,7 +11,7 @@
     <!-- Header -->
     <div class="metrics-dialog__header">
       <div class="metrics-dialog__title">
-        $t('metrics.metricsFor') + ' <strong>'{{ instance?.name }}</strong>
+        {{ $t('metrics.metricsFor') }} <strong>{{ instance?.name }}</strong>
         <span class="metrics-dialog__shape">{{ instance?.shape }}</span>
       </div>
       <div class="metrics-dialog__toolbar">
@@ -116,8 +116,13 @@
 <script setup>
 import { ref, computed, watch } from 'vue'
 import VChart from 'vue-echarts'
-import 'echarts'
+import { use } from 'echarts/core'
+import { BarChart, GaugeChart } from 'echarts/charts'
+import { GridComponent, TooltipComponent } from 'echarts/components'
+import { CanvasRenderer } from 'echarts/renderers'
 import { Clock, Refresh } from '@element-plus/icons-vue'
+
+use([BarChart, GaugeChart, GridComponent, TooltipComponent, CanvasRenderer])
 import { getMetrics } from '../api/metrics.js'
 
 const props = defineProps({

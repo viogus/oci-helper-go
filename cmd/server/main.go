@@ -26,12 +26,13 @@ func main() {
 		if port == "" {
 			port = "8818"
 		}
-		resp, err := http.Get("http://localhost:" + port + "/api/config")
+		client := &http.Client{Timeout: 5 * time.Second}
+		resp, err := client.Get("http://localhost:" + port + "/api/health")
 		if err != nil {
 			os.Exit(1)
 		}
 		resp.Body.Close()
-		if resp.StatusCode == 401 || resp.StatusCode == 200 {
+		if resp.StatusCode == 200 {
 			os.Exit(0)
 		}
 		os.Exit(1)
@@ -52,10 +53,10 @@ func main() {
 	}
 
 	// ensure keys dir exists and is writable (nobody user in container)
-	if err := os.MkdirAll(cfg.KeysDir, 0777); err != nil {
+	if err := os.MkdirAll(cfg.KeysDir, 0700); err != nil {
 		log.Printf("warn: cannot create keys dir %s: %v", cfg.KeysDir, err)
 	}
-	if err := os.Chmod(cfg.KeysDir, 0777); err != nil {
+	if err := os.Chmod(cfg.KeysDir, 0700); err != nil {
 		log.Printf("warn: cannot set keys dir permission %s: %v (PEM upload may fail)", cfg.KeysDir, err)
 	}
 
@@ -82,6 +83,7 @@ func main() {
 		signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 		<-sig
 		log.Println("shutting down...")
+		server.Shutdown() // stop background worker first
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		if err := srv.Shutdown(ctx); err != nil {

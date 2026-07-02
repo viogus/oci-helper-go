@@ -32,7 +32,7 @@ func getSSHEncryptionKey() []byte {
 		}
 		sshKeyEncryptionKey = make([]byte, 32)
 		if _, err := rand.Read(sshKeyEncryptionKey); err != nil {
-			log.Printf("[crypto] failed to generate key: %v", err)
+			log.Fatalf("[crypto] failed to generate SSH key encryption key: %v", err)
 		}
 		log.Println("[crypto] using auto-generated SSH key encryption key (per-process)")
 	})

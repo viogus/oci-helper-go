@@ -54,7 +54,13 @@ func (s *Server) handleLogWS(w http.ResponseWriter, r *http.Request) {
 		sendLogWS(conn, logWSMsg{Type: "error", Data: "Cannot open log file: " + err.Error()})
 		return
 	}
-	defer f.Close()
+	// Use closure-based defer so the latest f is always closed on exit,
+	// even after log rotation reassigns f. Guard against nil (reopen failure).
+	defer func() {
+		if f != nil {
+			f.Close()
+		}
+	}()
 
 	// Send last N lines as initial batch
 	initLines := readLastNLines(f, tail)
@@ -96,10 +102,10 @@ func (s *Server) handleLogWS(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 				f.Close()
-				var err error
-				f, err = os.Open(logFile)
-				if err != nil {
-					sendLogWS(conn, logWSMsg{Type: "error", Data: "Cannot reopen log: " + err.Error()})
+				var openErr error
+				f, openErr = os.Open(logFile)
+				if openErr != nil {
+					sendLogWS(conn, logWSMsg{Type: "error", Data: "Cannot reopen log: " + openErr.Error()})
 					return
 				}
 				lastSize = 0

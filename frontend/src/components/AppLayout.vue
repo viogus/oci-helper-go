@@ -129,7 +129,7 @@
 import { ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth.js'
-import { Fold, Moon, Sunny } from '@element-plus/icons-vue'
+import { Fold, Moon, Sunny, HomeFilled, Monitor, Connection, Timer, Tools, Upload, Setting } from '@element-plus/icons-vue'
 
 const route = useRoute()
 const router = useRouter()

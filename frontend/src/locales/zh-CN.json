@@ -111,6 +111,7 @@
     "selected": "{count} 个实例已选中",
     "loading": "正在加载实例...",
     "shape": "规格",
+    "region": "区域",
     "memoryGB": "内存 (GB)",
     "state": "状态",
     "publicIP": "公网 IP",
@@ -196,7 +197,16 @@
     "selectInstance": "选择实例",
     "selectSSHKey": "选择 SSH 密钥",
     "connect": "连接",
-    "disconnect": "断开"
+    "disconnect": "断开",
+    "manageKeys": "管理 SSH 密钥",
+    "quickGenerate": "快速生成",
+    "generateTitle": "生成 SSH 密钥对",
+    "keyName": "密钥名称",
+    "keyType": "密钥类型",
+    "publicKey": "公钥",
+    "generate": "生成",
+    "copyKey": "复制公钥",
+    "keyWarning": "请立即保存私钥，它将不会再被显示。"
   },
   "metrics": {
     "title": "实例监控",
@@ -405,7 +415,7 @@
     "save": "保存",
     "needInstance": "未找到与此引导卷匹配的实例。请确保实例已同步后再试。",
     "needInstanceTitle": "需要实例",
-    "confirmShrink": "缩容引导卷 <strong>{name}</strong> 到 47 GB？操作期间实例将被停止。",
+    "confirmShrink": "缩容引导卷 \"{name}\" 到 47 GB？操作期间实例将被停止。",
     "shrinkTitle": "缩容到 47GB",
     "shrinkBtn": "缩容"
   },
@@ -599,6 +609,8 @@
     "generate": "生成",
     "upload": "上传 PEM",
     "name": "名称",
+    "tenant": "所属租户",
+    "global": "全局",
     "fingerprint": "指纹",
     "type": "类型",
     "publicKey": "公钥",

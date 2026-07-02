@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -15,6 +16,27 @@ import (
 	"github.com/viogus/oci-helper-go/internal/dingtalk"
 	"github.com/viogus/oci-helper-go/internal/telegram"
 )
+
+// handleHealth is the Docker healthcheck endpoint. Validates database connectivity.
+// Used by: docker-compose healthcheck, ./oci-helper health
+func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	// Verify database is accessible with a short deadline so a busy DB
+	// doesn't cause false-negative health checks.
+	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+	defer cancel()
+	if err := s.store.DB().PingContext(ctx); err != nil {
+		log.Printf("[health] db ping failed: %v", err)
+		http.Error(w, "db unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(`{"status":"ok"}`))
+}
 
 func (s *Server) handleGlance(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {

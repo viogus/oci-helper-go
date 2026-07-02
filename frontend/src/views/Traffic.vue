@@ -87,7 +87,12 @@
 import { ref, onMounted, nextTick } from 'vue'
 import { get, post } from '../api/index.js'
 import { listTenants } from '../api/tenants.js'
-import * as echarts from 'echarts'
+import { use, init } from 'echarts/core'
+import { LineChart } from 'echarts/charts'
+import { GridComponent, TooltipComponent } from 'echarts/components'
+import { CanvasRenderer } from 'echarts/renderers'
+
+use([LineChart, GridComponent, TooltipComponent, CanvasRenderer])
 
 const activeTab = ref('live')
 
@@ -192,7 +197,7 @@ function renderChart() {
   if (chart) { chart.dispose(); chart = null }
   if (!trafficChart.value) return
 
-  chart = echarts.init(trafficChart.value)
+  chart = init(trafficChart.value)
   const times = trafficData.value.map(d => d.timestamp)
   const bytesIn = trafficData.value.map(d => formatBytesForChart(d.bytesInPerSec || 0))
   const bytesOut = trafficData.value.map(d => formatBytesForChart(d.bytesOutPerSec || 0))

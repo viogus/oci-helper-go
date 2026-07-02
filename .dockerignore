@@ -1,0 +1,40 @@
+# Git
+.git/
+.gitignore
+
+# Docs
+*.md
+docs/
+
+# Runtime data
+data/
+
+# Frontend dev / build artifacts
+frontend/node_modules/
+frontend/dist/
+
+# Embedded frontend (rebuilt during Docker build)
+internal/handler/dist/
+
+# Pre-built binaries
+oci-helper
+server
+
+# IDE / Claude
+.worktrees/
+.claude/
+.superpowers/
+.vscode/
+.idea/
+
+# Docker
+.dockerignore
+Dockerfile
+docker-compose.yml
+
+# CI
+.github/
+
+# OS
+.DS_Store
+Thumbs.db

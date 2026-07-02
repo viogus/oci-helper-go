@@ -68,7 +68,7 @@
               Resize
             </el-button>
             <el-button type="warning" size="small" @click="handleShrink(row)">
-              $t('bootVolume.shrink')
+              {{ $t('bootVolume.shrink') }}
             </el-button>
           </template>
         </el-table-column>
@@ -333,8 +333,7 @@ async function handleShrink(volume) {
         confirmButtonText: t('bootVolume.shrinkBtn'),
         cancelButtonText: 'Cancel',
         type: 'warning',
-        dangerouslyUseHTMLString: true
-      }
+        }
     )
   } catch {
     return // user cancelled

@@ -98,7 +98,12 @@
 import { ref, reactive, onMounted, nextTick } from 'vue'
 import { post } from '../api/index.js'
 import { listTenants } from '../api/tenants.js'
-import * as echarts from 'echarts'
+import { use, init } from 'echarts/core'
+import { BarChart } from 'echarts/charts'
+import { GridComponent, TooltipComponent, LegendComponent } from 'echarts/components'
+import { CanvasRenderer } from 'echarts/renderers'
+
+use([BarChart, GridComponent, TooltipComponent, LegendComponent, CanvasRenderer])
 
 const tenants = ref([])
 const tenantId = ref(null)
@@ -205,7 +210,7 @@ function categoryName(item) {
 // DAILY: stacked bar chart — each day's bar broken down by service with distinct colors
 function renderDailyStackedBar() {
   if (!barChart.value) return
-  chart = echarts.init(barChart.value)
+  chart = init(barChart.value)
 
   const items = result.value.items.filter(i => i.cost > 0)
   const currency = result.value.currency || 'USD'
@@ -292,7 +297,7 @@ function renderDailyStackedBar() {
 // MONTHLY: grouped bar chart — each service/category gets own bar with distinct color
 function renderMonthlyGroupedBar() {
   if (!barChart.value) return
-  chart = echarts.init(barChart.value)
+  chart = init(barChart.value)
 
   const items = result.value.items.filter(i => i.cost > 0)
   const currency = result.value.currency || 'USD'

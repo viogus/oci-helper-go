@@ -306,10 +306,13 @@
 
 <script setup>
 import { ref, reactive, onMounted, onBeforeUnmount } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Refresh } from '@element-plus/icons-vue'
 import { get, post } from '../api/index.js'
 import { listTenants } from '../api/tenants.js'
+
+const { t } = useI18n()
 
 // ---------------------------------------------------------------------------
 // State
@@ -493,8 +496,8 @@ async function handleAction(taskIds, action, taskType) {
   if (action === 'delete') {
     try {
       await ElMessageBox.confirm(
-        ('task.confirmDelete'),
-        ('task.confirmTitle'),
+        t('task.confirmDelete'),
+        t('task.confirmTitle'),
         {
           confirmButtonText: 'Delete',
           cancelButtonText: 'Cancel',

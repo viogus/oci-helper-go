@@ -22,11 +22,31 @@ type Worker struct {
 	store    *db.Store
 	keysDir  string
 	restarts int
+	stop     chan struct{}
 }
 
 // NewWorker creates a Worker with the given store and keys directory.
 func NewWorker(store *db.Store, keysDir string) *Worker {
-	return &Worker{store: store, keysDir: keysDir}
+	return &Worker{store: store, keysDir: keysDir, stop: make(chan struct{})}
+}
+
+// Shutdown signals the worker to stop gracefully. Resets any running tasks
+// back to pending so they can be picked up after restart. Safe to call
+// multiple times (subsequent calls are no-ops).
+func (w *Worker) Shutdown() {
+	select {
+	case <-w.stop:
+		return // already stopped
+	default:
+	}
+	log.Println("[worker] shutting down...")
+	// Reset running tasks so they are not orphaned
+	if n, err := w.store.ResetRunningTasks(); err != nil {
+		log.Printf("[worker] shutdown: reset running tasks: %v", err)
+	} else if n > 0 {
+		log.Printf("[worker] shutdown: reset %d running task(s) to pending", n)
+	}
+	close(w.stop)
 }
 
 // newClient delegates to the package-level clientForTenant with the worker's keysDir.
@@ -61,8 +81,23 @@ func (w *Worker) Run() {
 		}
 	}()
 	for {
+		select {
+		case <-w.stop:
+			log.Println("[worker] stopped")
+			return
+		default:
+		}
 		w.processNext()
-		time.Sleep(pollInterval)
+		// Sleep in small increments so shutdown is responsive.
+		for i := 0; i < 5; i++ {
+			select {
+			case <-w.stop:
+				log.Println("[worker] stopped")
+				return
+			default:
+				time.Sleep(pollInterval / 5)
+			}
+		}
 	}
 }
 

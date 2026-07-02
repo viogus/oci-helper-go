@@ -9,7 +9,8 @@ services:
       - oci-helper-data:/app/oci-helper
     environment:
       - OCI_USERNAME=admin
-      - OCI_PASSWORD=change-me
+      # OCI_PASSWORD is auto-generated on first start if unset; set a strong password here to persist across restarts.
+      # - OCI_PASSWORD=your-strong-password-here
       - PORT=8818
     healthcheck:
       test: ["CMD", "/oci-helper", "health"]

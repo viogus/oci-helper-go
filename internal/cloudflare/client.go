@@ -8,6 +8,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -24,13 +27,16 @@ type Zone struct {
 }
 
 type DNSRecord struct {
-	ID      string `json:"id"`
-	Type    string `json:"type"`
-	Name    string `json:"name"`
-	Content string `json:"content"`
-	Proxied bool   `json:"proxied"`
-	TTL     int    `json:"ttl"`
+	ID      string `json:"id,omitempty"`
+	Type    string `json:"type,omitempty"`
+	Name    string `json:"name,omitempty"`
+	Content string `json:"content,omitempty"`
+	Proxied *bool  `json:"proxied,omitempty"`
+	TTL     int    `json:"ttl,omitempty"`
 }
+
+// boolPtr helper
+func boolPtr(b bool) *bool { return &b }
 
 type apiResponse[T any] struct {
 	Success  bool   `json:"success"`
@@ -47,19 +53,39 @@ func New(token string) *Client {
 }
 
 func (c *Client) ListZones() ([]Zone, error) {
-	var resp apiResponse[[]Zone]
-	if err := c.do("GET", "/zones", nil, &resp); err != nil {
-		return nil, err
+	var all []Zone
+	page := 1
+	for {
+		var resp apiResponse[[]Zone]
+		path := "/zones?" + url.Values{"page": {strconv.Itoa(page)}, "per_page": {"100"}}.Encode()
+		if err := c.do("GET", path, nil, &resp); err != nil {
+			return nil, err
+		}
+		all = append(all, resp.Result...)
+		if len(resp.Result) < 100 {
+			break
+		}
+		page++
 	}
-	return resp.Result, nil
+	return all, nil
 }
 
 func (c *Client) ListDNSRecords(zoneID string) ([]DNSRecord, error) {
-	var resp apiResponse[[]DNSRecord]
-	if err := c.do("GET", "/zones/"+zoneID+"/dns_records", nil, &resp); err != nil {
-		return nil, err
+	var all []DNSRecord
+	page := 1
+	for {
+		var resp apiResponse[[]DNSRecord]
+		path := "/zones/" + zoneID + "/dns_records?" + url.Values{"page": {strconv.Itoa(page)}, "per_page": {"100"}}.Encode()
+		if err := c.do("GET", path, nil, &resp); err != nil {
+			return nil, err
+		}
+		all = append(all, resp.Result...)
+		if len(resp.Result) < 100 {
+			break
+		}
+		page++
 	}
-	return resp.Result, nil
+	return all, nil
 }
 
 func (c *Client) CreateDNSRecord(zoneID string, record DNSRecord) (*DNSRecord, error) {
@@ -88,22 +114,20 @@ func (c *Client) UpdateDNSRecordIP(zoneID, name, newIP string) error {
 	if err != nil {
 		return err
 	}
+	// Normalize name for comparison: strip trailing dot, lowercase.
+	normalize := func(s string) string {
+		s = strings.TrimRight(s, ".")
+		return strings.ToLower(s)
+	}
+	target := normalize(name)
 	for _, r := range records {
-		if r.Name == name {
+		if normalize(r.Name) == target {
 			r.Content = newIP
 			_, err := c.UpdateDNSRecord(zoneID, r.ID, r)
 			return err
 		}
 	}
-	// create if not found
-	_, err = c.CreateDNSRecord(zoneID, DNSRecord{
-		Type:    "A",
-		Name:    name,
-		Content: newIP,
-		Proxied: false,
-		TTL:     120,
-	})
-	return err
+	return fmt.Errorf("dns record %s not found in zone %s", name, zoneID)
 }
 
 func (c *Client) do(method, path string, body interface{}, result interface{}) error {

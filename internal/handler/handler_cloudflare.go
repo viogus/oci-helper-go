@@ -281,6 +281,25 @@ func (s *Server) handleCloudflareOCISync(w http.ResponseWriter, r *http.Request)
 
 		switch req.Action {
 		case "add":
+			// Check existing records to avoid duplicates
+			existing, _ := cf.ListDNSRecords(req.ZoneID)
+			dup := false
+			for _, r := range existing {
+				if strings.EqualFold(strings.TrimRight(r.Name, "."), strings.TrimRight(dnsName, ".")) {
+					results = append(results, map[string]interface{}{
+						"instance": inst.Name,
+						"ip":       inst.PublicIP,
+						"dns":      dnsName,
+						"action":   "skip",
+						"reason":   "record already exists",
+					})
+					dup = true
+					break
+				}
+			}
+			if dup {
+				continue
+			}
 			_, err := cf.CreateDNSRecord(req.ZoneID, cloudflare.DNSRecord{
 				Type:    "A",
 				Name:    dnsName,
@@ -304,17 +323,29 @@ func (s *Server) handleCloudflareOCISync(w http.ResponseWriter, r *http.Request)
 				})
 				continue
 			}
-			for _, r := range records {
-				if r.Name == dnsName || r.Content == inst.PublicIP {
-					err := cf.DeleteDNSRecord(req.ZoneID, r.ID)
+			found := false
+			for _, rec := range records {
+				if strings.EqualFold(strings.TrimRight(rec.Name, "."), strings.TrimRight(dnsName, ".")) {
+					err := cf.DeleteDNSRecord(req.ZoneID, rec.ID)
 					results = append(results, map[string]interface{}{
 						"instance": inst.Name,
 						"ip":       inst.PublicIP,
-						"dns":      r.Name,
+						"dns":      rec.Name,
 						"action":   "remove",
 						"error":    errStr(err),
 					})
+					found = true
+					break // only delete first matching record
 				}
+			}
+			if !found {
+				results = append(results, map[string]interface{}{
+					"instance": inst.Name,
+					"ip":       inst.PublicIP,
+					"dns":      dnsName,
+					"action":   "skip",
+					"reason":   "no matching record found",
+				})
 			}
 
 		case "update":

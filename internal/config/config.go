@@ -41,7 +41,7 @@ func Load() *Config {
 		KeysDir:       envOr("OCI_KEYS_DIR", "/app/oci-helper/keys"),
 		LogLevel:      envOr("OCI_LOG_LEVEL", "info"),
 		LogFile:       envOr("OCI_LOG_FILE", "/app/oci-helper/oci-helper.log"),
-		SecureCookies: envOr("OCI_SECURE_COOKIES", "true") == "true",
+		SecureCookies: envOr("OCI_SECURE_COOKIES", "false") == "true",
 	}
 
 	if c.Password == "" {

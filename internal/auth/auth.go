@@ -103,7 +103,7 @@ func (s *Service) Login(w http.ResponseWriter, r *http.Request) bool {
 		Value:    base64.RawURLEncoding.EncodeToString(encrypted),
 		Path:     "/",
 		HttpOnly: true,
-		Secure:   s.secureCookies,
+		Secure:   s.secureCookies && (r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https"),
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   int(sessionTTL.Seconds()),
 	}

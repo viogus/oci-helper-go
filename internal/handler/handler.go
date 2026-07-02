@@ -335,7 +335,7 @@ func (s *Server) handleGoogleLogin(w http.ResponseWriter, r *http.Request) {
 		Value:    state,
 		Path:     "/",
 		HttpOnly: true,
-		Secure:   s.cfg.SecureCookies,
+		Secure:   s.cfg.SecureCookies && (r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https"),
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   600,
 	})
@@ -432,7 +432,7 @@ func (s *Server) handleGoogleCallback(w http.ResponseWriter, r *http.Request) {
 		Value:    signedValue,
 		Path:     "/",
 		HttpOnly: true,
-		Secure:   s.cfg.SecureCookies,
+		Secure:   s.cfg.SecureCookies && (r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https"),
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   86400,
 	})

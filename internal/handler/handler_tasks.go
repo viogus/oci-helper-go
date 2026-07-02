@@ -187,10 +187,14 @@ func (s *Server) handleCreateTasks(w http.ResponseWriter, r *http.Request) {
 		}
 		switch req.Action {
 		case "stop":
+			if len(req.TaskIDs) == 0 {
+				jsonErr(w, "task_ids required")
+				return
+			}
 			for _, id := range req.TaskIDs {
 				s.store.UpdateTaskStatus(id, "cancelled", 0, "stopped by user")
 			}
-			s.audit(0, "create-tasks:stop", strings.Trim(strings.Join(strings.Fields(strconv.FormatInt(req.TaskIDs[0], 10)), ","), "[]"), r)
+			s.audit(0, "create-tasks:stop", strconv.FormatInt(req.TaskIDs[0], 10), r)
 			jsonOK(w, map[string]string{"status": "ok"})
 		case "pause":
 			for _, id := range req.TaskIDs {

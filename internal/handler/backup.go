@@ -26,10 +26,10 @@ type dbTenant struct {
 }
 
 type dbInstance struct {
-	ID, Name, OCID, Shape, State, PublicIP, PrivateIP string
-	TenantID                                          int64
-	OCPU, MemoryGB                                    float64
-	BootVolumeGB                                      int64
+	ID, Name, OCID, Shape, State, PublicIP, PrivateIP, Region string
+	TenantID                                                   int64
+	OCPU, MemoryGB                                             float64
+	BootVolumeGB                                               int64
 }
 
 type dbConfig struct {
@@ -75,7 +75,7 @@ func (s *Server) handleBackup(w http.ResponseWriter, r *http.Request) {
 	for _, i := range instances {
 		data.Instances = append(data.Instances, dbInstance{
 			ID: i.ID, Name: i.Name, OCID: i.OCID, Shape: i.Shape,
-			State: i.State, PublicIP: i.PublicIP, PrivateIP: i.PrivateIP,
+			State: i.State, PublicIP: i.PublicIP, PrivateIP: i.PrivateIP, Region: i.Region,
 			TenantID: i.TenantID, OCPU: i.OCPU, MemoryGB: i.MemoryGB, BootVolumeGB: i.BootVolumeGB,
 		})
 	}
@@ -160,7 +160,7 @@ func (s *Server) handleRestore(w http.ResponseWriter, r *http.Request) {
 
 	// restore instances
 	for _, i := range data.Instances {
-		if err := s.store.UpsertInstanceImportTx(tx, i.ID, i.TenantID, i.Name, i.OCID, i.Shape, i.State, i.PublicIP, i.PrivateIP, i.OCPU, i.MemoryGB, i.BootVolumeGB); err != nil {
+		if err := s.store.UpsertInstanceImportTx(tx, i.ID, i.TenantID, i.Name, i.OCID, i.Shape, i.State, i.PublicIP, i.PrivateIP, i.Region, i.OCPU, i.MemoryGB, i.BootVolumeGB); err != nil {
 			tx.Rollback()
 			jsonErr(w, "restore instance: "+err.Error())
 			return

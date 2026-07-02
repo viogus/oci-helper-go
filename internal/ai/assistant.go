@@ -55,9 +55,15 @@ func (c *Client) Chat(messages []ChatMessage) (string, error) {
 		Messages: messages,
 		Stream:   false,
 	}
-	data, _ := json.Marshal(req)
+	data, err := json.Marshal(req)
+	if err != nil {
+		return "", fmt.Errorf("marshal: %w", err)
+	}
 
-	httpReq, _ := http.NewRequest("POST", "https://api.siliconflow.cn/v1/chat/completions", bytes.NewReader(data))
+	httpReq, err := http.NewRequest("POST", "https://api.siliconflow.cn/v1/chat/completions", bytes.NewReader(data))
+	if err != nil {
+		return "", fmt.Errorf("new request: %w", err)
+	}
 	httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
 	httpReq.Header.Set("Content-Type", "application/json")
 
@@ -66,6 +72,11 @@ func (c *Client) Chat(messages []ChatMessage) (string, error) {
 		return "", fmt.Errorf("request: %w", err)
 	}
 	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return "", fmt.Errorf("api error %d: %s", resp.StatusCode, string(body))
+	}
 
 	var chatResp ChatResponse
 	if err := json.NewDecoder(resp.Body).Decode(&chatResp); err != nil {
@@ -84,11 +95,14 @@ func (c *Client) ChatStream(ctx context.Context, messages []ChatMessage) (<-chan
 		Messages: messages,
 		Stream:   true,
 	}
-	data, _ := json.Marshal(req)
+	data, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("marshal: %w", err)
+	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", "https://api.siliconflow.cn/v1/chat/completions", bytes.NewReader(data))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("new request: %w", err)
 	}
 	httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
 	httpReq.Header.Set("Content-Type", "application/json")
@@ -97,6 +111,11 @@ func (c *Client) ChatStream(ctx context.Context, messages []ChatMessage) (<-chan
 	resp, err := c.client.Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("request: %w", err)
+	}
+	if resp.StatusCode >= 400 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		resp.Body.Close()
+		return nil, fmt.Errorf("api error %d: %s", resp.StatusCode, string(body))
 	}
 
 	ch := make(chan string, 16)

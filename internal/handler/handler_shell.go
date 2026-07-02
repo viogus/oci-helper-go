@@ -152,12 +152,15 @@ func (s *Server) handleShellWS(w http.ResponseWriter, r *http.Request) {
 	pubKeyStr := strings.TrimSpace(string(gossh.MarshalAuthorizedKey(signer.PublicKey())))
 
 	// ── Establish SSH session ─────────────────────────────────────────
-	sshClient, viaProxy, err := s.connectSSH(tenant, inst, signer, pubKeyStr)
+	sshClient, cleanup, err := s.connectSSH(tenant, inst, signer, pubKeyStr)
 	if err != nil {
 		sendWSError(wsConn, "SSH connection failed: "+err.Error())
 		return
 	}
 	defer sshClient.Close()
+	if cleanup != nil {
+		defer cleanup()
+	}
 
 	session, err := sshClient.NewSession()
 	if err != nil {
@@ -202,7 +205,7 @@ func (s *Server) handleShellWS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	route := "direct"
-	if viaProxy {
+	if cleanup != nil {
 		route = "console-proxy"
 	}
 	log.Printf("[shell] connected to %s (via=%s user=%s)", inst.Name, route, sshClient.User())
@@ -284,7 +287,9 @@ func (s *Server) handleShellWS(w http.ResponseWriter, r *http.Request) {
 
 // connectSSH establishes an SSH connection to the instance.
 // Tries direct SSH to PublicIP first, then private IP, then OCI Console Connection proxy.
-func (s *Server) connectSSH(tenant *db.Tenant, inst *db.Instance, signer gossh.Signer, pubKeyStr string) (*gossh.Client, bool, error) {
+// Returns a cleanup function (non-nil only for console proxy path) that the caller
+// MUST defer/run when done with the client.
+func (s *Server) connectSSH(tenant *db.Tenant, inst *db.Instance, signer gossh.Signer, pubKeyStr string) (*gossh.Client, func(), error) {
 	config := &gossh.ClientConfig{
 		Auth:            []gossh.AuthMethod{gossh.PublicKeys(signer)},
 		HostKeyCallback: tofuHostKeyCallback(inst.PublicIP),
@@ -298,7 +303,7 @@ func (s *Server) connectSSH(tenant *db.Tenant, inst *db.Instance, signer gossh.S
 			cfg.User = user
 			client, dialErr := gossh.Dial("tcp", net.JoinHostPort(inst.PublicIP, "22"), &cfg)
 			if dialErr == nil {
-				return client, false, nil
+				return client, nil, nil
 			}
 		}
 		log.Printf("[shell] direct ssh to %s:22 failed, trying console proxy", inst.PublicIP)
@@ -311,7 +316,7 @@ func (s *Server) connectSSH(tenant *db.Tenant, inst *db.Instance, signer gossh.S
 			cfg.User = user
 			client, dialErr := gossh.Dial("tcp", net.JoinHostPort(inst.PrivateIP, "22"), &cfg)
 			if dialErr == nil {
-				return client, false, nil
+				return client, nil, nil
 			}
 		}
 	}
@@ -321,10 +326,13 @@ func (s *Server) connectSSH(tenant *db.Tenant, inst *db.Instance, signer gossh.S
 }
 
 // connectViaConsoleProxy creates an OCI Console Connection and uses it as an SSH tunnel.
-func (s *Server) connectViaConsoleProxy(tenant *db.Tenant, inst *db.Instance, config *gossh.ClientConfig, pubKeyStr string) (*gossh.Client, bool, error) {
+// On success, returns the instance SSH client and a cleanup function the caller MUST
+// defer/run when done with the client. The cleanup closes the proxy SSH tunnel and
+// deletes the OCI console connection.
+func (s *Server) connectViaConsoleProxy(tenant *db.Tenant, inst *db.Instance, config *gossh.ClientConfig, pubKeyStr string) (*gossh.Client, func(), error) {
 	client, err := s.clientFor(tenant)
 	if err != nil {
-		return nil, true, fmt.Errorf("oci client: %w", err)
+		return nil, nil, fmt.Errorf("oci client: %w", err)
 	}
 
 	// Extract instance OCID from composite ID
@@ -333,20 +341,23 @@ func (s *Server) connectViaConsoleProxy(tenant *db.Tenant, inst *db.Instance, co
 	log.Printf("[shell] creating console connection for %s...", inst.Name)
 	conn, err := client.CreateConsoleConnection(nil, instanceOCID, pubKeyStr)
 	if err != nil {
-		return nil, true, fmt.Errorf("create console connection: %w", err)
+		return nil, nil, fmt.Errorf("create console connection: %w", err)
 	}
 
 	connID := *conn.Id
-	defer func() {
+
+	// Build a cleanup function that accumulates resources as we acquire them.
+	cleanup := func() {
 		if delErr := client.DeleteConsoleConnection(nil, connID); delErr != nil {
 			log.Printf("[shell] cleanup console connection %s: %v", connID, delErr)
 		}
-	}()
+	}
 
 	log.Printf("[shell] waiting for console connection %s to become active...", connID)
 	activeConn, err := client.WaitForConsoleConnectionActive(nil, connID)
 	if err != nil {
-		return nil, true, fmt.Errorf("console connection not ready: %w", err)
+		cleanup()
+		return nil, nil, fmt.Errorf("console connection not ready: %w", err)
 	}
 
 	connStr := ""
@@ -354,12 +365,14 @@ func (s *Server) connectViaConsoleProxy(tenant *db.Tenant, inst *db.Instance, co
 		connStr = *activeConn.ConnectionString
 	}
 	if connStr == "" {
-		return nil, true, fmt.Errorf("no SSH connection string in console connection")
+		cleanup()
+		return nil, nil, fmt.Errorf("no SSH connection string in console connection")
 	}
 
 	proxyInfo, err := parseConsoleConnectionString(connStr)
 	if err != nil {
-		return nil, true, fmt.Errorf("parse connection string: %w", err)
+		cleanup()
+		return nil, nil, fmt.Errorf("parse connection string: %w", err)
 	}
 
 	log.Printf("[shell] console proxy: %s:%d user=%s", proxyInfo.ProxyHost, proxyInfo.ProxyPort, proxyInfo.ProxyUser)
@@ -374,9 +387,16 @@ func (s *Server) connectViaConsoleProxy(tenant *db.Tenant, inst *db.Instance, co
 
 	proxyClient, err := gossh.Dial("tcp", net.JoinHostPort(proxyInfo.ProxyHost, strconv.Itoa(proxyInfo.ProxyPort)), proxyConfig)
 	if err != nil {
-		return nil, true, fmt.Errorf("connect to console proxy: %w", err)
+		cleanup()
+		return nil, nil, fmt.Errorf("connect to console proxy: %w", err)
 	}
-	defer proxyClient.Close()
+
+	// Extend cleanup to also close the proxy tunnel.
+	prevCleanup := cleanup
+	cleanup = func() {
+		proxyClient.Close()
+		prevCleanup()
+	}
 
 	// Use direct-tcpip through the proxy to reach the instance's SSH port
 	targetAddr := net.JoinHostPort(proxyInfo.TargetHost, strconv.Itoa(proxyInfo.TargetPort))
@@ -390,7 +410,8 @@ func (s *Server) connectViaConsoleProxy(tenant *db.Tenant, inst *db.Instance, co
 			}
 		}
 		if err != nil {
-			return nil, true, fmt.Errorf("proxy dial to %s: %w", targetAddr, err)
+			cleanup()
+			return nil, nil, fmt.Errorf("proxy dial to %s: %w", targetAddr, err)
 		}
 	}
 
@@ -400,12 +421,13 @@ func (s *Server) connectViaConsoleProxy(tenant *db.Tenant, inst *db.Instance, co
 		cfg.User = user
 		sshConn, chans, reqs, sshErr := gossh.NewClientConn(proxyConn, targetAddr, &cfg)
 		if sshErr == nil {
-			return gossh.NewClient(sshConn, chans, reqs), true, nil
+			return gossh.NewClient(sshConn, chans, reqs), cleanup, nil
 		}
 	}
 
 	proxyConn.Close()
-	return nil, true, fmt.Errorf("all auth attempts through console proxy failed")
+	cleanup()
+	return nil, nil, fmt.Errorf("all auth attempts through console proxy failed")
 }
 
 // consoleProxyInfo holds parsed OCI console connection proxy details.

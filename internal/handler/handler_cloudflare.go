@@ -1,9 +1,10 @@
 package handler
 
 import (
-	"fmt"
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/viogus/oci-helper-go/internal/cloudflare"
@@ -113,9 +114,8 @@ func (s *Server) resolveCFToken(r *http.Request) string {
 	if cfgIDStr == "" {
 		return ""
 	}
-	cfgID := 0
-	fmt.Sscanf(cfgIDStr, "%d", &cfgID)
-	if cfgID <= 0 {
+	cfgID, err := strconv.ParseInt(cfgIDStr, 10, 64)
+	if err != nil || cfgID <= 0 {
 		return ""
 	}
 	cfg, err := s.store.GetCfCfg(int64(cfgID))
@@ -222,6 +222,10 @@ func (s *Server) handleCloudflareOCISync(w http.ResponseWriter, r *http.Request)
 		jsonErr(w, "tenant_id and zone_id required")
 		return
 	}
+	if req.Action != "add" && req.Action != "remove" && req.Action != "update" {
+		jsonErr(w, "action must be add, remove, or update")
+		return
+	}
 
 	// Resolve token
 	var token string
@@ -314,8 +318,6 @@ func (s *Server) handleCloudflareOCISync(w http.ResponseWriter, r *http.Request)
 			}
 
 		case "update":
-			fallthrough
-		default:
 			if err := cf.UpdateDNSRecordIP(req.ZoneID, dnsName, inst.PublicIP); err != nil {
 				results = append(results, map[string]interface{}{
 					"instance": inst.Name,
@@ -339,9 +341,7 @@ func (s *Server) handleCloudflareOCISync(w http.ResponseWriter, r *http.Request)
 }
 
 func parseInt64(s string) (int64, error) {
-	var n int64
-	_, err := fmt.Sscanf(s, "%d", &n)
-	return n, err
+	return strconv.ParseInt(s, 10, 64)
 }
 
 func errStr(err error) string {

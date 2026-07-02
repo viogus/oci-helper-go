@@ -3,6 +3,7 @@ package handler
 import (
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
@@ -78,6 +79,15 @@ func (rl *loginRateLimiter) stop() {
 }
 
 func extractIP(r *http.Request) string {
+	// Check X-Forwarded-For from trusted proxies first.
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" && isTrustedProxy(r.RemoteAddr) {
+		parts := strings.Split(xff, ",")
+		return strings.TrimSpace(parts[0])
+	}
+	// Fall back to X-Real-IP from trusted proxies.
+	if xri := r.Header.Get("X-Real-IP"); xri != "" && isTrustedProxy(r.RemoteAddr) {
+		return strings.TrimSpace(xri)
+	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return r.RemoteAddr

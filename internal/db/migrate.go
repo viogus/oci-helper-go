@@ -148,6 +148,13 @@ var migrations = []struct {
 			`ALTER TABLE ip_data ADD COLUMN asn TEXT NOT NULL DEFAULT ''`,
 		},
 	},
+	{
+		Version: 4,
+		Name:    "add_instance_region",
+		SQL: []string{
+			`ALTER TABLE instances ADD COLUMN region TEXT NOT NULL DEFAULT ''`,
+		},
+	},
 }
 
 func (s *Store) runMigrations() error {
@@ -167,22 +174,33 @@ func (s *Store) runMigrations() error {
 	// get current version
 	var currentVersion int
 	if err := s.db.QueryRow(`SELECT COALESCE(MAX(version), 0) FROM schema_version`).Scan(&currentVersion); err != nil {
-		currentVersion = 0
+		return fmt.Errorf("read schema_version: %w", err)
 	}
 
-	// run pending migrations
+	// run pending migrations — each version wrapped in a transaction
+	// so a partial failure does not leave the DB in an unrecoverable state.
 	for _, m := range migrations {
 		if m.Version <= currentVersion {
 			continue
 		}
 		log.Printf("[migrate] v%d: %s", m.Version, m.Name)
+
+		tx, err := s.db.Begin()
+		if err != nil {
+			return fmt.Errorf("begin migration v%d: %w", m.Version, err)
+		}
 		for _, ddl := range m.SQL {
-			if _, err := s.db.Exec(ddl); err != nil {
+			if _, err := tx.Exec(ddl); err != nil {
+				tx.Rollback()
 				return fmt.Errorf("migration v%d %s: %w", m.Version, m.Name, err)
 			}
 		}
-		if _, err := s.db.Exec(`INSERT INTO schema_version (version, name) VALUES (?, ?)`, m.Version, m.Name); err != nil {
+		if _, err := tx.Exec(`INSERT INTO schema_version (version, name) VALUES (?, ?)`, m.Version, m.Name); err != nil {
+			tx.Rollback()
 			return fmt.Errorf("record migration v%d: %w", m.Version, err)
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("commit migration v%d: %w", m.Version, err)
 		}
 	}
 	return nil

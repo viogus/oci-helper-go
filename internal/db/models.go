@@ -36,6 +36,7 @@ type Instance struct {
 	FaultDomain   string    `json:"faultDomain"`
 	ImageID       string    `json:"imageId"`
 	SubnetID      string    `json:"subnetId"`
+	Region        string    `json:"region"`
 	CreatedAt     time.Time `json:"createdAt"`
 	SyncedAt      time.Time `json:"syncedAt"`
 }

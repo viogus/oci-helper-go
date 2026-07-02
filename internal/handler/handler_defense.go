@@ -82,6 +82,10 @@ func (s *Server) handleDefenseEnable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Save the original rules so disable can restore them exactly.
+	origJSON, _ := json.Marshal(sl.IngressSecurityRules)
+	s.store.SetConfig("defense_original_rules", string(origJSON))
+
 	s.store.SetConfig("defense_enabled", "true")
 	s.store.SetConfig("defense_tenant", strconv.FormatInt(req.TenantID, 10))
 	s.store.SetConfig("defense_vcn", req.VcnID)
@@ -130,11 +134,20 @@ func (s *Server) handleDefenseDisable(w http.ResponseWriter, r *http.Request) {
 	}
 	sl := slResp.Items[0]
 
-	// Restore: add back an allow-all ingress rule to undo the blacklist
-	restoredRules := append(sl.IngressSecurityRules, core.IngressSecurityRule{
-		Protocol: common.String("all"),
-		Source:   common.String("0.0.0.0/0"),
-	})
+	// Restore: load the original rules saved during enable.
+	// If none saved (legacy), fall back to adding an allow-all rule.
+	var restoredRules []core.IngressSecurityRule
+	if origStr, err := s.store.GetConfig("defense_original_rules"); err == nil && origStr != "" {
+		if err := json.Unmarshal([]byte(origStr), &restoredRules); err != nil {
+			restoredRules = nil
+		}
+	}
+	if restoredRules == nil {
+		restoredRules = append(sl.IngressSecurityRules, core.IngressSecurityRule{
+			Protocol: common.String("all"),
+			Source:   common.String("0.0.0.0/0"),
+		})
+	}
 
 	updateReq := core.UpdateSecurityListRequest{
 		SecurityListId: sl.Id,
@@ -150,6 +163,7 @@ func (s *Server) handleDefenseDisable(w http.ResponseWriter, r *http.Request) {
 
 	s.store.SetConfig("defense_enabled", "false")
 	s.store.SetConfig("defense_cidrs", "")
+	s.store.SetConfig("defense_original_rules", "")
 	s.audit(req.TenantID, "defense:disable", req.VcnID, r)
 	jsonOK(w, map[string]string{"status": "ok"})
 }

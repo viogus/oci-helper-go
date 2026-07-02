@@ -55,6 +55,7 @@ func (s *Server) createInstance(w http.ResponseWriter, r *http.Request) {
 		AvailabilityDomain  string  `json:"availabilityDomain"`
 		BootVolumeSizeGB    *int64  `json:"bootVolumeSizeGB"`
 		OCPUs               *float32 `json:"ocpus"`
+			Region              string   `json:"region"`
 		MemoryGB            *float32 `json:"memoryGB"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -66,6 +67,11 @@ func (s *Server) createInstance(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+
+		// If a region is specified, use it; otherwise use tenant's default.
+		if req.Region != "" {
+			client.SetRegion(req.Region)
+		}
 
 	launchReq := core.LaunchInstanceRequest{
 		LaunchInstanceDetails: core.LaunchInstanceDetails{
@@ -107,13 +113,18 @@ func (s *Server) createInstance(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	region := req.Region
+	if region == "" {
+		region = t.Region
+	}
 	s.store.UpsertInstance(&db.Instance{
-		ID:       strOr(inst.Id, ""),
+		ID:       fmt.Sprintf("%d:%s", req.TenantID, strOr(inst.Id, "")),
 		TenantID: req.TenantID,
 		Name:     strOr(inst.DisplayName, ""),
 		OCID:     strOr(inst.Id, ""),
 		Shape:    strOr(inst.Shape, ""),
 		State:    string(inst.LifecycleState),
+		Region:   region,
 	})
 	s.audit(req.TenantID, "instance:create", strOr(inst.DisplayName, ""), r)
 	jsonOK(w, map[string]string{"status": "ok", "instanceId": strOr(inst.Id, "")})
@@ -155,9 +166,12 @@ func (s *Server) handleInstanceAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	client, _, ok := s.getTenantClient(req.TenantID, w)
+	client, _, ok := s.clientForInstance(req.TenantID, instanceID, w)
 	if !ok {
 		return
+	}
+	if inst, err := s.store.GetInstanceByID(instanceID); err == nil && inst != nil && inst.Region != "" {
+		client.SetRegion(inst.Region)
 	}
 
 	ctx := r.Context()
@@ -167,42 +181,42 @@ func (s *Server) handleInstanceAction(w http.ResponseWriter, r *http.Request) {
 			jsonErr(w, "terminate: "+err.Error())
 			return
 		}
-		s.store.UpsertInstance(&db.Instance{ID: instanceID, TenantID: req.TenantID, State: "TERMINATING"})
+		s.store.UpdateInstanceState(instanceID, "TERMINATING")
 	case "start":
 		_, err := client.InstanceAction(ctx, instanceID, core.InstanceActionActionStart)
 		if err != nil {
 			jsonErr(w, "start: "+err.Error())
 			return
 		}
-		s.store.UpsertInstance(&db.Instance{ID: instanceID, TenantID: req.TenantID, State: "STARTING"})
+		s.store.UpdateInstanceState(instanceID, "STARTING")
 	case "stop":
 		_, err := client.InstanceAction(ctx, instanceID, core.InstanceActionActionStop)
 		if err != nil {
 			jsonErr(w, "stop: "+err.Error())
 			return
 		}
-		s.store.UpsertInstance(&db.Instance{ID: instanceID, TenantID: req.TenantID, State: "STOPPING"})
+		s.store.UpdateInstanceState(instanceID, "STOPPING")
 	case "reboot":
 		_, err := client.InstanceAction(ctx, instanceID, core.InstanceActionActionReset)
 		if err != nil {
 			jsonErr(w, "reboot: "+err.Error())
 			return
 		}
-		s.store.UpsertInstance(&db.Instance{ID: instanceID, TenantID: req.TenantID, State: "STARTING"})
+		s.store.UpdateInstanceState(instanceID, "STARTING")
 	case "softstop":
 		_, err := client.InstanceAction(ctx, instanceID, core.InstanceActionActionSoftstop)
 		if err != nil {
 			jsonErr(w, "softstop: "+err.Error())
 			return
 		}
-		s.store.UpsertInstance(&db.Instance{ID: instanceID, TenantID: req.TenantID, State: "STOPPING"})
+		s.store.UpdateInstanceState(instanceID, "STOPPING")
 	case "softreset":
 		_, err := client.InstanceAction(ctx, instanceID, core.InstanceActionActionSoftreset)
 		if err != nil {
 			jsonErr(w, "softreset: "+err.Error())
 			return
 		}
-		s.store.UpsertInstance(&db.Instance{ID: instanceID, TenantID: req.TenantID, State: "STARTING"})
+		s.store.UpdateInstanceState(instanceID, "STARTING")
 	default:
 		jsonErr(w, "unknown action: "+req.Action+". use start|stop|reboot|softstop|softreset|terminate")
 		return
@@ -258,25 +272,40 @@ func (s *Server) handleSync(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	instances, err := client.ListInstances(r.Context(), t.TenancyOCID)
-	if err != nil {
-		jsonErr(w, "list instances: "+err.Error())
-		return
+
+	// Discover subscribed regions, fall back to tenant's default region.
+	regions := getSubscribedRegions(t)
+	if len(regions) == 0 {
+		regions = []string{t.Region}
 	}
-	for _, inst := range instances {
-		if err := s.store.UpsertInstance(ociToDB(inst, tenantID)); err != nil {
-			log.Printf("[sync] upsert %s: %v", strOr(inst.Id, ""), err)
+
+	// Persist discovered regions back to tenant.
+	updateTenantRegions(s.store, tenantID, regions)
+
+	totalCount := 0
+	for _, region := range regions {
+		client.SetRegion(region)
+		instances, err := client.ListInstances(r.Context(), t.TenancyOCID)
+		if err != nil {
+			log.Printf("[sync] region %s: list instances: %v", region, err)
+			continue
 		}
+		for _, inst := range instances {
+			if err := s.store.UpsertInstance(ociToDB(inst, tenantID, region)); err != nil {
+				log.Printf("[sync] upsert %s: %v", strOr(inst.Id, ""), err)
+			}
+		}
+		totalCount += len(instances)
 	}
 
 	// Best-effort VNIC sync for public IP / private IP / subnet
-	s.syncVNICs(r.Context(), tenantID)
+	s.syncVNICs(r.Context(), tenantID, regions)
 
-	s.audit(tenantID, "sync", fmt.Sprintf("synced %d instances", len(instances)), r)
-	jsonOK(w, map[string]int{"count": len(instances)})
+	s.audit(tenantID, "sync", fmt.Sprintf("synced %d instances across %d regions", totalCount, len(regions)), r)
+	jsonOK(w, map[string]interface{}{"count": totalCount, "regions": len(regions)})
 }
 
-func ociToDB(i core.Instance, tenantID int64) *db.Instance {
+func ociToDB(i core.Instance, tenantID int64, region string) *db.Instance {
 	var ocpu, memGB float64
 	var bootVolGB int64
 	var imageID, ad, fd string
@@ -318,10 +347,11 @@ func ociToDB(i core.Instance, tenantID int64) *db.Instance {
 		ImageID:    imageID,
 		AvailabilityDomain: ad,
 		FaultDomain: fd,
+		Region:     region,
 	}
 }
 
-func (s *Server) syncVNICs(ctx context.Context, tenantID int64) {
+func (s *Server) syncVNICs(ctx context.Context, tenantID int64, regions []string) {
 	instances, err := s.store.ListInstances(tenantID)
 	if err != nil {
 		log.Printf("[syncVnics] list instances: %v", err)
@@ -344,6 +374,11 @@ func (s *Server) syncVNICs(ctx context.Context, tenantID int64) {
 		if ocid == "" {
 			continue
 		}
+		region := inst.Region
+		if region == "" {
+			region = tenant.Region
+		}
+		client.SetRegion(region)
 		vnics, err := client.GetInstanceVNICs(ctx, tenant.TenancyOCID, ocid)
 		if err != nil || len(vnics) == 0 {
 			continue
@@ -384,7 +419,7 @@ func (s *Server) handleChangeShape(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, "invalid body: "+err.Error())
 		return
 	}
-	client, _, ok := s.getTenantClient(req.TenantID, w)
+	client, _, ok := s.clientForInstance(req.TenantID, req.InstanceID, w)
 	if !ok {
 		return
 	}
@@ -411,7 +446,7 @@ func (s *Server) handleChangeBootVolume(w http.ResponseWriter, r *http.Request) 
 		jsonErr(w, "invalid body: "+err.Error())
 		return
 	}
-	client, tenant, ok := s.getTenantClient(req.TenantID, w)
+	client, tenant, ok := s.clientForInstance(req.TenantID, req.InstanceID, w)
 	if !ok {
 		return
 	}
@@ -420,6 +455,10 @@ func (s *Server) handleChangeBootVolume(w http.ResponseWriter, r *http.Request) 
 	attachment, err := client.GetBootVolumeAttachment(ctx, tenant.TenancyOCID, req.InstanceID)
 	if err != nil {
 		jsonErr(w, "get boot volume: "+err.Error())
+		return
+	}
+	if attachment.BootVolumeId == nil {
+		jsonErr(w, "boot volume id not found in attachment")
 		return
 	}
 	if _, err := client.UpdateBootVolume(ctx, *attachment.BootVolumeId, req.SizeGB, ""); err != nil {
@@ -442,7 +481,7 @@ func (s *Server) handleAttachIPv6(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, "invalid body: "+err.Error())
 		return
 	}
-	client, tenant, ok := s.getTenantClient(req.TenantID, w)
+	client, tenant, ok := s.clientForInstance(req.TenantID, req.InstanceID, w)
 	if !ok {
 		return
 	}
@@ -455,6 +494,10 @@ func (s *Server) handleAttachIPv6(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(vnics) == 0 {
 		jsonErr(w, "no VNIC found for instance")
+		return
+	}
+	if vnics[0].Id == nil {
+		jsonErr(w, "VNIC has no id")
 		return
 	}
 	if err := client.AssignIPv6(ctx, *vnics[0].Id); err != nil {
@@ -478,7 +521,7 @@ func (s *Server) handleUpdateInstanceName(w http.ResponseWriter, r *http.Request
 		jsonErr(w, "invalid body: "+err.Error())
 		return
 	}
-	client, _, ok := s.getTenantClient(req.TenantID, w)
+	client, _, ok := s.clientForInstance(req.TenantID, req.InstanceID, w)
 	if !ok {
 		return
 	}
@@ -505,7 +548,7 @@ func (s *Server) handleChangeIP(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, "invalid body: "+err.Error())
 		return
 	}
-	client, _, ok := s.getTenantClient(req.TenantID, w)
+	client, _, ok := s.clientForInstance(req.TenantID, req.InstanceID, w)
 	if !ok {
 		return
 	}
@@ -555,7 +598,12 @@ func (s *Server) handleCheckAlive(w http.ResponseWriter, r *http.Request) {
 
 	var results []checkResult
 	for _, id := range ids {
-		inst, err := s.store.GetInstanceByID(fmt.Sprintf("%d:%s", req.TenantID, id))
+		// Handle both bare OCIDs and composite tenantID:ocid format.
+		lookupID := id
+		if !strings.Contains(id, ":") {
+			lookupID = fmt.Sprintf("%d:%s", req.TenantID, id)
+		}
+		inst, err := s.store.GetInstanceByID(lookupID)
 		if err != nil || inst == nil {
 			results = append(results, checkResult{InstanceID: id, Alive: false, Error: "instance not found in DB"})
 			continue
@@ -655,7 +703,7 @@ func (s *Server) handleOneClick500M(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, "invalid body: "+err.Error())
 		return
 	}
-	client, _, ok := s.getTenantClient(req.TenantID, w)
+	client, _, ok := s.clientForInstance(req.TenantID, req.InstanceID, w)
 	if !ok {
 		return
 	}
@@ -680,7 +728,7 @@ func (s *Server) handleOneClickClose500M(w http.ResponseWriter, r *http.Request)
 		jsonErr(w, "invalid body: "+err.Error())
 		return
 	}
-	client, _, ok := s.getTenantClient(req.TenantID, w)
+	client, _, ok := s.clientForInstance(req.TenantID, req.InstanceID, w)
 	if !ok {
 		return
 	}
@@ -704,7 +752,7 @@ func (s *Server) handleAutoRescue(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, "invalid body: "+err.Error())
 		return
 	}
-	client, _, ok := s.getTenantClient(req.TenantID, w)
+	client, _, ok := s.clientForInstance(req.TenantID, req.InstanceID, w)
 	if !ok {
 		return
 	}
@@ -803,7 +851,7 @@ func (s *Server) handleInstanceConfigUpdate(w http.ResponseWriter, r *http.Reque
 		jsonErr(w, "invalid body: "+err.Error())
 		return
 	}
-	client, _, ok := s.getTenantClient(req.TenantID, w)
+	client, _, ok := s.clientForInstance(req.TenantID, req.InstanceID, w)
 	if !ok {
 		return
 	}
@@ -837,7 +885,7 @@ func (s *Server) handleUpdateShape(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, "invalid body: "+err.Error())
 		return
 	}
-	client, _, ok := s.getTenantClient(req.TenantID, w)
+	client, _, ok := s.clientForInstance(req.TenantID, req.InstanceID, w)
 	if !ok {
 		return
 	}
@@ -867,7 +915,7 @@ func (s *Server) handleStartVNC(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, "invalid body: "+err.Error())
 		return
 	}
-	client, _, ok := s.getTenantClient(req.TenantID, w)
+	client, _, ok := s.clientForInstance(req.TenantID, req.InstanceID, w)
 	if !ok {
 		return
 	}
@@ -934,7 +982,7 @@ func (s *Server) handleInstanceConfigInfo(w http.ResponseWriter, r *http.Request
 		jsonErr(w, "invalid body: "+err.Error())
 		return
 	}
-	client, tenant, ok := s.getTenantClient(req.TenantID, w)
+	client, tenant, ok := s.clientForInstance(req.TenantID, req.InstanceID, w)
 	if !ok {
 		return
 	}
@@ -946,7 +994,10 @@ func (s *Server) handleInstanceConfigInfo(w http.ResponseWriter, r *http.Request
 		return
 	}
 	// Get VNIC info
-	vnics, _ := client.GetInstanceVNICs(ctx, tenant.TenancyOCID, req.InstanceID)
+	vnics, vnicErr := client.GetInstanceVNICs(ctx, tenant.TenancyOCID, req.InstanceID)
+	if vnicErr != nil {
+		log.Printf("[configInfo] get VNICs for %s: %v", req.InstanceID, vnicErr)
+	}
 	var vnicInfo map[string]interface{}
 	if len(vnics) > 0 {
 		v := vnics[0]
@@ -959,7 +1010,10 @@ func (s *Server) handleInstanceConfigInfo(w http.ResponseWriter, r *http.Request
 		}
 	}
 	// Get boot volume info
-	attachments, _ := client.ListBootVolumeAttachments(ctx, tenant.TenancyOCID, req.InstanceID)
+	attachments, bvErr := client.ListBootVolumeAttachments(ctx, tenant.TenancyOCID, req.InstanceID)
+	if bvErr != nil {
+		log.Printf("[configInfo] get boot volumes for %s: %v", req.InstanceID, bvErr)
+	}
 	var bootVolumeInfo map[string]interface{}
 	if len(attachments) > 0 {
 		bvID := attachments[0].BootVolumeId
@@ -1036,4 +1090,31 @@ func (s *Server) handleUpdatePassword(w http.ResponseWriter, r *http.Request) {
 4. Log in as root/opc and run: passwd
 5. Enter the new password twice`,
 	})
+}
+
+// getSubscribedRegions parses the tenant's subscribed JSON field into a string slice.
+// Returns nil if the field is empty or unparseable.
+func getSubscribedRegions(t *db.Tenant) []string {
+	if t.Subscribed == "" {
+		return nil
+	}
+	var regions []string
+	if err := json.Unmarshal([]byte(t.Subscribed), &regions); err != nil {
+		return nil
+	}
+	return regions
+}
+
+// updateTenantRegions persists the discovered region list to the tenant record.
+// Uses a direct DB update to avoid a full tenant round-trip.
+func updateTenantRegions(store *db.Store, tenantID int64, regions []string) {
+	data, err := json.Marshal(regions)
+	if err != nil {
+		return
+	}
+	// Update the subscribed field via raw SQL since Store has no UpdateTenant method.
+	// This is intentionally minimal to avoid adding a full UpdateTenant to Store.
+	if err := store.UpdateTenantRegions(tenantID, string(data)); err != nil {
+		log.Printf("[regions] update tenant %d regions: %v", tenantID, err)
+	}
 }

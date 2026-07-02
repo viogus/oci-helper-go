@@ -47,7 +47,7 @@ func New(cfg *config.Config, store *db.Store) *Server {
 	s := &Server{
 		cfg:       cfg,
 		store:     store,
-		auth:      auth.New(cfg.Username, cfg.Password, cfg.MFASecret, cfg.MFA),
+		auth:      auth.New(cfg.Username, cfg.Password, cfg.MFASecret, cfg.MFA, cfg.SecureCookies),
 		mux:       http.NewServeMux(),
 		worker:    NewWorker(store, cfg.KeysDir),
 		ratelimit: newLoginRateLimiter(),
@@ -66,8 +66,13 @@ func clientForTenant(t *db.Tenant, keysDir string) (*ociclient.Client, error) {
 	if keyPath != "" && !filepath.IsAbs(keyPath) {
 		keyPath = filepath.Join(keysDir, keyPath)
 	}
-
+	// Prevent path traversal: resolved path must stay within keysDir.
 	if keyPath != "" {
+		cleanKey := filepath.Clean(keyPath)
+		cleanDir := filepath.Clean(keysDir)
+		if !strings.HasPrefix(cleanKey, cleanDir+string(os.PathSeparator)) {
+			return nil, fmt.Errorf("key file path escapes keys directory: %s", t.KeyFile)
+		}
 		if _, err := os.Stat(keyPath); err != nil {
 			log.Printf("[clientFor] key file stat error: %v", err)
 		}
@@ -100,10 +105,24 @@ func (s *Server) getTenantClient(tenantID int64, w http.ResponseWriter) (*ocicli
 	return client, tenant, true
 }
 
+// clientForInstance gets the OCI client for the tenant, then sets its region
+// to match the instance's actual region from the DB. Falls back to tenant's
+// default region if the instance has no region stored or can't be found.
+func (s *Server) clientForInstance(tenantID int64, instanceID string, w http.ResponseWriter) (*ociclient.Client, *db.Tenant, bool) {
+	client, tenant, ok := s.getTenantClient(tenantID, w)
+	if !ok {
+		return nil, nil, false
+	}
+	if inst, err := s.store.GetInstanceByID(instanceID); err == nil && inst != nil && inst.Region != "" {
+		client.SetRegion(inst.Region)
+	}
+	return client, tenant, true
+}
+
 func (s *Server) routes() {
 	// API — exact paths
 	s.mux.HandleFunc("/api/login", s.handleLogin)
-	s.mux.HandleFunc("/api/logout", s.handleLogout)
+	s.mux.HandleFunc("/api/logout", s.withAuth(s.handleLogout))
 	s.mux.HandleFunc("/api/config", s.withAuth(s.handleConfig))
 	s.mux.HandleFunc("/api/oauth/google/login", s.handleGoogleLogin)
 	s.mux.HandleFunc("/api/oauth/google/callback", s.handleGoogleCallback)
@@ -316,6 +335,8 @@ func (s *Server) handleGoogleLogin(w http.ResponseWriter, r *http.Request) {
 		Value:    state,
 		Path:     "/",
 		HttpOnly: true,
+		Secure:   s.cfg.SecureCookies,
+		SameSite: http.SameSiteLaxMode,
 		MaxAge:   600,
 	})
 	// NOTE: redirect_uri must match the URI registered in Google Cloud Console
@@ -378,9 +399,13 @@ func (s *Server) handleGoogleCallback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// get user info
-	userReq, _ := http.NewRequest("GET", "https://www.googleapis.com/oauth2/v2/userinfo", nil)
+	userReq, err := http.NewRequest("GET", "https://www.googleapis.com/oauth2/v2/userinfo", nil)
+	if err != nil {
+		jsonErr(w, "userinfo request: "+err.Error())
+		return
+	}
 	userReq.Header.Set("Authorization", "Bearer "+tokenResp.AccessToken)
-	userResp, err := http.DefaultClient.Do(userReq)
+	userResp, err := httpClient.Do(userReq)
 	if err != nil {
 		jsonErr(w, "userinfo: "+err.Error())
 		return
@@ -396,13 +421,18 @@ func (s *Server) handleGoogleCallback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// set session using signed cookie
-	signedValue := s.auth.CreateSession(userInfo.Email)
+	// Look up user role from DB (default to "user" for new accounts).
+	role := "user"
+	if u, err := s.store.GetUserByUsername(userInfo.Email); err == nil && u != nil {
+		role = u.Role
+	}
+	signedValue := s.auth.CreateSession(userInfo.Email, role)
 	http.SetCookie(w, &http.Cookie{
 		Name:     "oci_helper_session",
 		Value:    signedValue,
 		Path:     "/",
 		HttpOnly: true,
-		Secure:   r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https",
+		Secure:   s.cfg.SecureCookies,
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   86400,
 	})
@@ -416,7 +446,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		// Return all config keys the frontend Settings page expects.
-		// Sensitive keys are masked — only first 4 + last 4 chars shown.
+		// Sensitive keys are masked — only first 2 + last 2 chars shown.
 		keys := []string{
 			"mfa_enabled", "telegram_token", "dingtalk_webhook",
 			"google_client_id", "google_client_secret",
@@ -430,7 +460,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		for _, k := range keys {
 			v, _ := s.store.GetConfig(k)
 			if secretKeys[k] && len(v) > 8 {
-				out[k] = v[:4] + "***" + v[len(v)-4:]
+				out[k] = v[:2] + "***" + v[len(v)-2:]
 			} else {
 				out[k] = v
 			}
@@ -537,6 +567,12 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, "instance_id required")
 		return
 	}
+
+	// Look up instance region from DB and set it on the client.
+	if instDB, err := s.store.GetInstanceByID(instanceID); err == nil && instDB != nil && instDB.Region != "" {
+		client.SetRegion(instDB.Region)
+	}
+
 	// Strip composite ID prefix (tenantID:ocid)
 	if i := strings.IndexByte(instanceID, ':'); i >= 0 {
 		instanceID = instanceID[i+1:]
@@ -789,11 +825,7 @@ func (s *Server) handleShell(w http.ResponseWriter, r *http.Request) {
 // --- telegram ---
 
 func (s *Server) audit(tenantID int64, action, detail string, r *http.Request) {
-	ip := r.RemoteAddr
-	// Only trust X-Forwarded-For from localhost or private network
-	if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" && isTrustedProxy(r.RemoteAddr) {
-		ip = strings.Split(fwd, ",")[0]
-	}
+	ip := extractIP(r)
 	s.store.AddAudit(&db.AuditLog{
 		TenantID: tenantID,
 		Action:   action,

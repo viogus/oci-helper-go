@@ -29,7 +29,7 @@ func (s *Server) handleStopVNC(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	client, _, ok := s.getTenantClient(req.TenantID, w)
+	client, _, ok := s.clientForInstance(req.TenantID, req.InstanceID, w)
 	if !ok {
 		return
 	}

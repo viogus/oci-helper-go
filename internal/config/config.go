@@ -5,7 +5,6 @@ package config
 import (
 	"crypto/rand"
 	"encoding/base64"
-	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -13,16 +12,17 @@ import (
 )
 
 type Config struct {
-	Port       string
-	Username   string
-	Password   string
-	MFA        bool
-	MFASecret  string
-	GoogleOAuth GoogleOAuthConfig
-	DBPath     string
-	KeysDir    string
-	LogLevel   string
-	LogFile    string
+	Port          string
+	Username      string
+	Password      string
+	MFA           bool
+	MFASecret     string
+	GoogleOAuth   GoogleOAuthConfig
+	DBPath        string
+	KeysDir       string
+	LogLevel      string
+	LogFile       string
+	SecureCookies bool
 }
 
 type GoogleOAuthConfig struct {
@@ -34,13 +34,14 @@ type GoogleOAuthConfig struct {
 
 func Load() *Config {
 	c := &Config{
-		Port:     envOr("PORT", "8818"),
-		Username: envOr("OCI_USERNAME", "admin"),
-		Password: envOr("OCI_PASSWORD", ""),
-		DBPath:   envOr("OCI_DB_PATH", "/app/oci-helper/oci-helper.db"),
-		KeysDir:  envOr("OCI_KEYS_DIR", "/app/oci-helper/keys"),
-		LogLevel: envOr("OCI_LOG_LEVEL", "info"),
-		LogFile:  envOr("OCI_LOG_FILE", "/app/oci-helper/oci-helper.log"),
+		Port:          envOr("PORT", "8818"),
+		Username:      envOr("OCI_USERNAME", "admin"),
+		Password:      envOr("OCI_PASSWORD", ""),
+		DBPath:        envOr("OCI_DB_PATH", "/app/oci-helper/oci-helper.db"),
+		KeysDir:       envOr("OCI_KEYS_DIR", "/app/oci-helper/keys"),
+		LogLevel:      envOr("OCI_LOG_LEVEL", "info"),
+		LogFile:       envOr("OCI_LOG_FILE", "/app/oci-helper/oci-helper.log"),
+		SecureCookies: envOr("OCI_SECURE_COOKIES", "true") == "true",
 	}
 
 	if c.Password == "" {
@@ -83,7 +84,7 @@ func envOr(k, fallback string) string {
 func randStr(n int) string {
 	b := make([]byte, n)
 	if _, err := rand.Read(b); err != nil {
-		return fmt.Sprintf("%x", os.Getpid())[:n]
+		log.Fatal("config: crypto/rand.Read failed: " + err.Error())
 	}
 	return base64.RawURLEncoding.EncodeToString(b)[:n]
 }

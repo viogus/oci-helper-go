@@ -803,9 +803,12 @@ func intervalForDuration(d time.Duration) (string, time.Duration) {
 		day    = 24 * time.Hour
 		seven  = 7 * day
 	)
+	const thirty = 30 * day
 	switch {
 	case d <= seven:
 		return "[1m]", time.Minute
+	case d <= thirty:
+		return "[5m]", 5 * time.Minute
 	default:
 		return "[1h]", time.Hour
 	}
@@ -1132,11 +1135,14 @@ func (c *Client) AddIngressRule(ctx context.Context, vcnID, protocol, port, sour
 		if len(parts) > 1 {
 			maxPort, _ = strconv.Atoi(parts[1])
 		}
-		newRule.TcpOptions = &core.TcpOptions{
-			DestinationPortRange: &core.PortRange{
-				Min: common.Int(minPort),
-				Max: common.Int(maxPort),
-			},
+		portRange := &core.PortRange{
+			Min: common.Int(minPort),
+			Max: common.Int(maxPort),
+		}
+		if protocol == "UDP" {
+			newRule.UdpOptions = &core.UdpOptions{DestinationPortRange: portRange}
+		} else {
+			newRule.TcpOptions = &core.TcpOptions{DestinationPortRange: portRange}
 		}
 	}
 	ingressRules = append(ingressRules, newRule)
@@ -1179,12 +1185,15 @@ func (c *Client) AddEgressRule(ctx context.Context, vcnID, protocol, port, dest 
 		if len(parts) > 1 {
 			maxPort, _ = strconv.Atoi(parts[1])
 		}
-		newRule.TcpOptions = &core.TcpOptions{
-			DestinationPortRange: &core.PortRange{
+			portRange := &core.PortRange{
 				Min: common.Int(minPort),
 				Max: common.Int(maxPort),
-			},
-		}
+			}
+			if protocol == "UDP" {
+				newRule.UdpOptions = &core.UdpOptions{DestinationPortRange: portRange}
+			} else {
+				newRule.TcpOptions = &core.TcpOptions{DestinationPortRange: portRange}
+			}
 	}
 	egressRules = append(egressRules, newRule)
 
@@ -1683,6 +1692,7 @@ func (c *Client) Disable500Mbps(ctx context.Context, instanceID string) error {
 // ChangeInstanceIP replaces the ephemeral public IP of an instance.
 func (c *Client) ChangeInstanceIP(ctx context.Context, instanceID string, cidrList []string) (string, error) {
 	defer withSubtreeInterceptor(&c.compute.Interceptor)()
+	defer withSubtreeInterceptor(&c.vcn.Interceptor)()
 	// Get current VNIC
 	attReq := core.ListVnicAttachmentsRequest{
 		CompartmentId: common.String(c.tenant.TenancyOCID),

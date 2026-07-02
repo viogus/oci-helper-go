@@ -10,7 +10,20 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
+// requireAdmin checks the session role and writes a 403 error if not admin.
+func (s *Server) requireAdmin(w http.ResponseWriter, r *http.Request) bool {
+	sess := s.auth.GetSession(r)
+	if sess == nil || sess.Role != "admin" {
+		jsonErrStatus(w, "admin access required", http.StatusForbidden)
+		return false
+	}
+	return true
+}
+
 func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdmin(w, r) {
+		return
+	}
 	switch r.Method {
 	case http.MethodGet:
 		list, err := s.store.ListUsers()
@@ -70,6 +83,9 @@ func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleUserByID(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdmin(w, r) {
+		return
+	}
 	idStr := strings.TrimPrefix(r.URL.Path, "/api/users/")
 	idStr = strings.TrimSuffix(idStr, "/")
 	parts := strings.SplitN(idStr, "/", 2)

@@ -25,22 +25,34 @@ func (s *Server) handleGlance(w http.ResponseWriter, r *http.Request) {
 	db := s.store.DB()
 
 	var usersCount int64
-	db.QueryRow("SELECT COUNT(*) FROM users").Scan(&usersCount)
+	if err := db.QueryRow("SELECT COUNT(*) FROM users").Scan(&usersCount); err != nil {
+		log.Printf("[glance] users count: %v", err)
+	}
 
 	var tasksCount int64
-	db.QueryRow("SELECT COUNT(*) FROM tasks").Scan(&tasksCount)
+	if err := db.QueryRow("SELECT COUNT(*) FROM tasks").Scan(&tasksCount); err != nil {
+		log.Printf("[glance] tasks count: %v", err)
+	}
 
 	var regionsCount int64
-	db.QueryRow("SELECT COUNT(DISTINCT region) FROM tenants").Scan(&regionsCount)
+	if err := db.QueryRow("SELECT COUNT(DISTINCT region) FROM tenants").Scan(&regionsCount); err != nil {
+		log.Printf("[glance] regions count: %v", err)
+	}
 
 	var tenantsCount int64
-	db.QueryRow("SELECT COUNT(*) FROM tenants").Scan(&tenantsCount)
+	if err := db.QueryRow("SELECT COUNT(*) FROM tenants").Scan(&tenantsCount); err != nil {
+		log.Printf("[glance] tenants count: %v", err)
+	}
 
 	var instancesCount int64
-	db.QueryRow("SELECT COUNT(*) FROM instances").Scan(&instancesCount)
+	if err := db.QueryRow("SELECT COUNT(*) FROM instances").Scan(&instancesCount); err != nil {
+		log.Printf("[glance] instances count: %v", err)
+	}
 
 	var runningCount int64
-	db.QueryRow("SELECT COUNT(*) FROM instances WHERE state = 'RUNNING'").Scan(&runningCount)
+	if err := db.QueryRow("SELECT COUNT(*) FROM instances WHERE state = 'RUNNING'").Scan(&runningCount); err != nil {
+		log.Printf("[glance] running count: %v", err)
+	}
 
 	// Add in-memory task count
 	memTasksMu.Lock()

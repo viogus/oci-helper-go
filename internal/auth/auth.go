@@ -27,6 +27,7 @@ import (
 
 type Session struct {
 	User      string    `json:"user"`
+	Role      string    `json:"role"`
 	CreatedAt time.Time `json:"createdAt"`
 	Version   int64     `json:"v"`
 }
@@ -41,13 +42,15 @@ type Service struct {
 	sessionVersion int64
 	mfaSecret      string
 	mfaEnabled     bool
+	secureCookies  bool
 }
 
-func New(username, password, mfaSecret string, mfaEnabled bool) *Service {
+func New(username, password, mfaSecret string, mfaEnabled bool, secureCookies bool) *Service {
 	s := &Service{
-		username:   username,
-		mfaSecret:  mfaSecret,
-		mfaEnabled: mfaEnabled,
+		username:      username,
+		mfaSecret:     mfaSecret,
+		mfaEnabled:    mfaEnabled,
+		secureCookies: secureCookies,
 	}
 	if password != "" {
 		hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
@@ -83,7 +86,7 @@ func (s *Service) Login(w http.ResponseWriter, r *http.Request) bool {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return false
 	}
-	sess := Session{User: user, CreatedAt: time.Now(), Version: s.sessionVersion}
+	sess := Session{User: user, Role: "admin", CreatedAt: time.Now(), Version: s.sessionVersion}
 	data, err := json.Marshal(sess)
 	if err != nil {
 		http.Error(w, "Internal error", http.StatusInternalServerError)
@@ -100,7 +103,7 @@ func (s *Service) Login(w http.ResponseWriter, r *http.Request) bool {
 		Value:    base64.RawURLEncoding.EncodeToString(encrypted),
 		Path:     "/",
 		HttpOnly: true,
-		Secure:   r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https",
+		Secure:   s.secureCookies,
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   int(sessionTTL.Seconds()),
 	}
@@ -108,9 +111,12 @@ func (s *Service) Login(w http.ResponseWriter, r *http.Request) bool {
 	return true
 }
 
-// CreateSession generates a signed session cookie value for the given user.
-func (s *Service) CreateSession(user string) string {
-	sess := Session{User: user, CreatedAt: time.Now(), Version: s.sessionVersion}
+// CreateSession generates a signed session cookie value for the given user and role.
+func (s *Service) CreateSession(user, role string) string {
+	if role == "" {
+		role = "user"
+	}
+	sess := Session{User: user, Role: role, CreatedAt: time.Now(), Version: s.sessionVersion}
 	data, err := json.Marshal(sess)
 	if err != nil {
 		return ""
@@ -133,38 +139,42 @@ func (s *Service) Logout(w http.ResponseWriter) {
 	})
 }
 
-func (s *Service) Authenticate(w http.ResponseWriter, r *http.Request) bool {
+// GetSession extracts and validates the session from the request cookie.
+// Returns nil if no valid session exists.
+func (s *Service) GetSession(r *http.Request) *Session {
 	cookie, err := r.Cookie(sessionCookie)
 	if err != nil {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
-		return false
+		return nil
 	}
 	encrypted, err := base64.RawURLEncoding.DecodeString(cookie.Value)
 	if err != nil {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
-		return false
+		return nil
 	}
 	signed, err := decryptSigned(encrypted, s.sessionKey)
 	if err != nil {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
-		return false
+		return nil
 	}
 	data, err := unsign(string(signed), s.sessionKey)
 	if err != nil {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
-		return false
+		return nil
 	}
 	var sess Session
 	if err := json.Unmarshal(data, &sess); err != nil {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
-		return false
+		return nil
 	}
 	if sess.Version != s.sessionVersion {
-		http.Error(w, "Session invalidated", http.StatusUnauthorized)
-		return false
+		return nil
 	}
 	if time.Since(sess.CreatedAt) >= sessionTTL {
-		http.Error(w, "Session expired", http.StatusUnauthorized)
+		return nil
+	}
+	return &sess
+}
+
+func (s *Service) Authenticate(w http.ResponseWriter, r *http.Request) bool {
+	sess := s.GetSession(r)
+	if sess == nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return false
 	}
 	return true
@@ -247,7 +257,9 @@ func decryptSigned(data, key []byte) ([]byte, error) {
 // GenerateMFA creates a new TOTP secret (base32)
 func GenerateMFA() string {
 	b := make([]byte, 20)
-	rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		panic("auth: crypto/rand.Read failed for MFA secret: " + err.Error())
+	}
 	return base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(b)
 }
 

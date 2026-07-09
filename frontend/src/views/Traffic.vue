@@ -165,7 +165,7 @@ async function onInstanceChange() {
   vnicOptions.value = []
   if (!selectedRegion.value || !selectedInstance.value) return
   try {
-    const res = await get('/traffic/fetchVnics', { tenant_id: tenantId.value, instance_id: selectedInstance.value })
+    const res = await get('/traffic/fetchVnics', { tenant_id: tenantId.value, instance_id: selectedInstance.value, region: selectedRegion.value })
     vnicOptions.value = (Array.isArray(res) ? res : [])
     if (vnicOptions.value.length === 1) selectedVnic.value = vnicOptions.value[0].value
   } catch {}
@@ -179,6 +179,7 @@ async function loadTraffic() {
   try {
     const res = await post('/traffic', {
       tenant_id: tenantId.value,
+      region: selectedRegion.value,
       vnic_id: selectedVnic.value,
       start_time: new Date(timeRange.value[0]).toISOString(),
       end_time: new Date(timeRange.value[1]).toISOString(),

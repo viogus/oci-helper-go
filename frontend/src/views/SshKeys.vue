@@ -27,6 +27,12 @@
       :empty-text="$t('sshKeys.notFound')"
     >
       <el-table-column prop="name" :label="$t('sshKeys.name')" min-width="140" />
+      <el-table-column :label="$t('sshKeys.tenant')" width="120">
+        <template #default="{ row }">
+          <span v-if="row.tenantName">{{ row.tenantName }}</span>
+          <el-tag v-else type="info" size="small">{{ $t('sshKeys.global') }}</el-tag>
+        </template>
+      </el-table-column>
       <el-table-column :label="$t('sshKeys.fingerprint')" min-width="200">
         <template #default="{ row }">
           <el-tooltip :content="row.fingerprint" placement="top" :show-after="300">

@@ -112,6 +112,7 @@ type SSHKey struct {
 	PrivateKey  string    `json:"privateKey,omitempty"`
 	Fingerprint string    `json:"fingerprint"`
 	TenantID    int64     `json:"tenantId,omitempty"`
+	TenantName  string    `json:"tenantName,omitempty"`
 	CreatedAt   time.Time `json:"createdAt"`
 }
 

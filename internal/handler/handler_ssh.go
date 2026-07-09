@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
@@ -34,6 +35,7 @@ func (s *Server) handleSSHKeys(w http.ResponseWriter, r *http.Request) {
 			TenantID  int64  `json:"tenant_id"`
 			Name      string `json:"name"`
 			PublicKey string `json:"public_key"`
+			KeyType   string `json:"key_type"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			jsonErr(w, "invalid body: "+err.Error())
@@ -80,28 +82,44 @@ func (s *Server) handleSSHKeyGenerate(w http.ResponseWriter, r *http.Request, re
 	TenantID int64  `json:"tenant_id"`
 	Name     string `json:"name"`
 	PublicKey string `json:"public_key"`
+	KeyType  string `json:"key_type"`
 }) {
-	privateKey, err := rsa.GenerateKey(rand.Reader, 4096)
-	if err != nil {
-		jsonErr(w, "generate key: "+err.Error())
-		return
+	var (
+		pubBytes     []byte
+		fingerprint  string
+		privPEMBytes []byte
+	)
+
+	switch req.KeyType {
+	case "ed25519":
+		pub, priv, err := ed25519Generate()
+		if err != nil {
+			jsonErr(w, "generate ed25519 key: "+err.Error())
+			return
+		}
+		privPEMBytes = priv
+		pubBytes = pub
+	default: // "rsa" or empty (backward compat)
+		pub, priv, err := rsaGenerate()
+		if err != nil {
+			jsonErr(w, "generate rsa key: "+err.Error())
+			return
+		}
+		privPEMBytes = priv
+		pubBytes = pub
 	}
 
-	privPEM := pem.EncodeToMemory(&pem.Block{
-		Type:  "RSA PRIVATE KEY",
-		Bytes: x509.MarshalPKCS1PrivateKey(privateKey),
-	})
-
-	pub, err := gossh.NewPublicKey(&privateKey.PublicKey)
+	// Parse public key for fingerprint
+	pk, _, _, _, err := gossh.ParseAuthorizedKey(pubBytes)
 	if err != nil {
-		jsonErr(w, "public key: "+err.Error())
+		jsonErr(w, "parse generated public key: "+err.Error())
 		return
 	}
-	pubBytes := gossh.MarshalAuthorizedKey(pub)
-	fingerprint := gossh.FingerprintSHA256(pub)
+	fingerprint = gossh.FingerprintSHA256(pk)
 
-	encryptedKey, err := encryptSSHPrivateKey(privPEM)
+	encryptedKey, err := encryptSSHPrivateKey(privPEMBytes)
 	if err != nil {
+		s.audit(req.TenantID, "ssh:key:generate:error", "encrypt failed: "+err.Error(), r)
 		jsonErr(w, "encrypt private key: "+err.Error())
 		return
 	}
@@ -116,6 +134,7 @@ func (s *Server) handleSSHKeyGenerate(w http.ResponseWriter, r *http.Request, re
 		jsonErr(w, "create ssh key: "+err.Error())
 		return
 	}
+	s.audit(req.TenantID, "ssh:key:generate", fingerprint, r)
 
 	jsonOK(w, map[string]interface{}{
 		"id":          key.ID,
@@ -125,10 +144,52 @@ func (s *Server) handleSSHKeyGenerate(w http.ResponseWriter, r *http.Request, re
 	})
 }
 
+// ed25519Generate creates an ED25519 keypair. Returns authorized key bytes and PEM-encoded private key.
+func ed25519Generate() (pub []byte, priv []byte, err error) {
+	pubKey, privKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return nil, nil, err
+	}
+	sshPub, err := gossh.NewPublicKey(pubKey)
+	if err != nil {
+		return nil, nil, err
+	}
+	pub = gossh.MarshalAuthorizedKey(sshPub)
+
+	privBytes, err := x509.MarshalPKCS8PrivateKey(privKey)
+	if err != nil {
+		return nil, nil, err
+	}
+	priv = pem.EncodeToMemory(&pem.Block{
+		Type:  "PRIVATE KEY",
+		Bytes: privBytes,
+	})
+	return pub, priv, nil
+}
+
+// rsaGenerate creates an RSA 4096 keypair. Returns authorized key bytes and PEM-encoded private key.
+func rsaGenerate() (pub []byte, priv []byte, err error) {
+	privateKey, err := rsa.GenerateKey(rand.Reader, 4096)
+	if err != nil {
+		return nil, nil, err
+	}
+	priv = pem.EncodeToMemory(&pem.Block{
+		Type:  "RSA PRIVATE KEY",
+		Bytes: x509.MarshalPKCS1PrivateKey(privateKey),
+	})
+	pubKey, err := gossh.NewPublicKey(&privateKey.PublicKey)
+	if err != nil {
+		return nil, nil, err
+	}
+	pub = gossh.MarshalAuthorizedKey(pubKey)
+	return pub, priv, nil
+}
+
 func (s *Server) handleSSHKeyByID(w http.ResponseWriter, r *http.Request) {
 	idStr := strings.TrimPrefix(r.URL.Path, "/api/ssh/keys/")
 	idStr = strings.TrimSuffix(idStr, "/")
 	if idStr == "" || idStr == "generate" {
+		http.NotFound(w, r)
 		return
 	}
 	id, err := strconv.ParseInt(idStr, 10, 64)

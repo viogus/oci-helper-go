@@ -19,8 +19,12 @@ const pollInterval = 5 * time.Second
 // Supports checkpoint-resume: interrupted tasks are reset to pending on restart
 // and resume from where they left off using saved progress in the payload.
 type Worker struct {
-	store    *db.Store
-	keysDir  string
+	store   *db.Store
+	keysDir string
+	// restarts tracks panic-restart count for exponential backoff.
+	// Only accessed from the worker goroutine (even after panic recovery,
+	// defer runs sequentially before go w.Run() spawns the next goroutine),
+	// so no mutex is needed.
 	restarts int
 	stop     chan struct{}
 }
@@ -157,6 +161,16 @@ func (w *Worker) runBatchStart(task *db.Task) {
 
 	// Resume from checkpoint
 	for i := payload.CompletedIndex; i < total; i++ {
+		// Check for shutdown signal before each instance action.
+		select {
+		case <-w.stop:
+			w.saveCheckpoint(task, &payload, i)
+			w.store.UpdateTaskStatus(task.ID, "pending", 0, "interrupted by shutdown")
+			log.Printf("[worker] batch_start %d interrupted by shutdown at index %d/%d", task.ID, i, total)
+			return
+		default:
+		}
+
 		instID := payload.InstanceIDs[i]
 		progress := (i * 100) / total
 		w.store.UpdateTaskStatus(task.ID, "running", progress, instID)
@@ -225,6 +239,16 @@ func (w *Worker) runBatchCreate(task *db.Task) {
 
 	// Resume from checkpoint
 	for i := payload.CompletedIndex; i < total; i++ {
+		// Check for shutdown signal before each instance action.
+		select {
+		case <-w.stop:
+			w.saveCheckpoint(task, &payload, i)
+			w.store.UpdateTaskStatus(task.ID, "pending", 0, "interrupted by shutdown")
+			log.Printf("[worker] batch_create %d interrupted by shutdown at index %d/%d", task.ID, i, total)
+			return
+		default:
+		}
+
 		progress := (i * 100) / total
 		displayName := fmt.Sprintf("%s-%s-%d", payload.DisplayNamePrefix, tenant.Name, i+1)
 		w.store.UpdateTaskStatus(task.ID, "running", progress, "creating "+displayName)

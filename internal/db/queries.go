@@ -477,7 +477,7 @@ func (s *Store) DeleteIpData(id int64) error {
 // ── SSH Keys ───────────────────────────────────────────────────────────
 
 func (s *Store) ListSSHKeys(tenantID int64) ([]SSHKey, error) {
-	rows, err := s.db.Query(`SELECT id, name, public_key, fingerprint, tenant_id, created_at FROM ssh_keys WHERE (tenant_id=? OR ?=0) ORDER BY id DESC`,
+	rows, err := s.db.Query(`SELECT k.id, k.name, k.public_key, k.fingerprint, COALESCE(k.tenant_id,0), COALESCE(t.name,''), k.created_at FROM ssh_keys k LEFT JOIN tenants t ON k.tenant_id=t.id WHERE (k.tenant_id=? OR ?=0) ORDER BY k.id DESC`,
 		tenantID, tenantID)
 	if err != nil {
 		return nil, err
@@ -486,7 +486,7 @@ func (s *Store) ListSSHKeys(tenantID int64) ([]SSHKey, error) {
 	var list []SSHKey
 	for rows.Next() {
 		var k SSHKey
-		if err := rows.Scan(&k.ID, &k.Name, &k.PublicKey, &k.Fingerprint, &k.TenantID, &k.CreatedAt); err != nil {
+		if err := rows.Scan(&k.ID, &k.Name, &k.PublicKey, &k.Fingerprint, &k.TenantID, &k.TenantName, &k.CreatedAt); err != nil {
 			return nil, err
 		}
 		list = append(list, k)

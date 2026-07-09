@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -338,8 +339,10 @@ func (s *Server) connectViaConsoleProxy(tenant *db.Tenant, inst *db.Instance, co
 	// Extract instance OCID from composite ID
 	instanceOCID := inst.OCID
 
+	ctx := context.Background()
+
 	log.Printf("[shell] creating console connection for %s...", inst.Name)
-	conn, err := client.CreateConsoleConnection(nil, instanceOCID, pubKeyStr)
+	conn, err := client.CreateConsoleConnection(ctx, instanceOCID, pubKeyStr)
 	if err != nil {
 		return nil, nil, fmt.Errorf("create console connection: %w", err)
 	}
@@ -348,13 +351,13 @@ func (s *Server) connectViaConsoleProxy(tenant *db.Tenant, inst *db.Instance, co
 
 	// Build a cleanup function that accumulates resources as we acquire them.
 	cleanup := func() {
-		if delErr := client.DeleteConsoleConnection(nil, connID); delErr != nil {
+		if delErr := client.DeleteConsoleConnection(context.Background(), connID); delErr != nil {
 			log.Printf("[shell] cleanup console connection %s: %v", connID, delErr)
 		}
 	}
 
 	log.Printf("[shell] waiting for console connection %s to become active...", connID)
-	activeConn, err := client.WaitForConsoleConnectionActive(nil, connID)
+	activeConn, err := client.WaitForConsoleConnectionActive(ctx, connID)
 	if err != nil {
 		cleanup()
 		return nil, nil, fmt.Errorf("console connection not ready: %w", err)

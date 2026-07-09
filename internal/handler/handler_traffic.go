@@ -3,6 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -19,6 +20,7 @@ func (s *Server) handleTraffic(w http.ResponseWriter, r *http.Request) {
 	}
 	var req struct {
 		TenantID   int64  `json:"tenant_id"`
+		Region     string `json:"region"`
 		InstanceID string `json:"instance_id"`
 		VnicID     string `json:"vnic_id"`
 		StartTime  string `json:"start_time"`
@@ -32,6 +34,13 @@ func (s *Server) handleTraffic(w http.ResponseWriter, r *http.Request) {
 	client, tenant, ok := s.getTenantClient(req.TenantID, w)
 	if !ok {
 		return
+	}
+	if req.Region != "" {
+		if !validRegion.MatchString(req.Region) {
+			jsonErr(w, "invalid region: "+req.Region)
+			return
+		}
+		client.SetRegion(req.Region)
 	}
 
 	startTime, err := time.Parse(time.RFC3339, req.StartTime)
@@ -149,6 +158,7 @@ func (s *Server) handleTrafficVnics(w http.ResponseWriter, r *http.Request) {
 
 	tenantID, _ := strconv.ParseInt(r.URL.Query().Get("tenant_id"), 10, 64)
 	instanceID := r.URL.Query().Get("instance_id")
+	region := r.URL.Query().Get("region")
 	if tenantID == 0 || instanceID == "" {
 		jsonErr(w, "tenant_id and instance_id required")
 		return
@@ -157,6 +167,13 @@ func (s *Server) handleTrafficVnics(w http.ResponseWriter, r *http.Request) {
 	client, tenant, ok := s.getTenantClient(tenantID, w)
 	if !ok {
 		return
+	}
+	if region != "" {
+		if !validRegion.MatchString(region) {
+			jsonErr(w, "invalid region: "+region)
+			return
+		}
+		client.SetRegion(region)
 	}
 
 	if i := strings.IndexByte(instanceID, ':'); i >= 0 {
@@ -241,3 +258,6 @@ func (s *Server) handleTrafficInstances(w http.ResponseWriter, r *http.Request) 
 // ── formatBytes helper exposed for handler reuse ────────────────────────
 
 func formatBytes(bytes float64) string { return oci.FormatBytes(bytes) }
+
+// validRegion matches OCI region identifiers (e.g. us-phoenix-1, eu-frankfurt-1).
+var validRegion = regexp.MustCompile(`^[a-z]{2,}-[a-z]+-\d+$`)

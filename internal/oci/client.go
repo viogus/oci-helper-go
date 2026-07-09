@@ -1115,7 +1115,7 @@ func (c *Client) GetVNICTtraffic(ctx context.Context, compartmentID, vnicID stri
 	log.Printf("[GetVNICTtraffic] vnic=%s compartment=%s start=%s end=%s range=%v", vnicID, compartmentID, startTime.Format(time.RFC3339), endTime.Format(time.RFC3339), endTime.Sub(startTime))
 
 	results := make(map[string][]float64)
-	metricNames := []string{"VnicBytesIn", "VnicBytesOut", "VnicPacketsIn", "VnicPacketsOut"}
+	metricNames := []string{"VnicFromNetworkBytes", "VnicToNetworkBytes", "VnicFromNetworkPackets", "VnicToNetworkPackets"}
 
 	totalDuration := endTime.Sub(startTime)
 	intervalStr, step := intervalForDuration(totalDuration)
@@ -1172,16 +1172,16 @@ func (c *Client) GetVNICTtraffic(ctx context.Context, compartmentID, vnicID stri
 		dp := TrafficDataPoint{
 			Timestamp: startTime.Add(time.Duration(i) * step).Format(time.RFC3339),
 		}
-		if vals := results["VnicBytesIn"]; i < len(vals) {
+		if vals := results["VnicFromNetworkBytes"]; i < len(vals) {
 			dp.BytesInPerSec = vals[i]
 		}
-		if vals := results["VnicBytesOut"]; i < len(vals) {
+		if vals := results["VnicToNetworkBytes"]; i < len(vals) {
 			dp.BytesOutPerSec = vals[i]
 		}
-		if vals := results["VnicPacketsIn"]; i < len(vals) {
+		if vals := results["VnicFromNetworkPackets"]; i < len(vals) {
 			dp.PacketsInPerSec = vals[i]
 		}
-		if vals := results["VnicPacketsOut"]; i < len(vals) {
+		if vals := results["VnicToNetworkPackets"]; i < len(vals) {
 			dp.PacketsOutPerSec = vals[i]
 		}
 		data = append(data, dp)
@@ -1221,8 +1221,8 @@ func (c *Client) FetchInstancesTraffic(ctx context.Context, compartmentID, regio
 				name  string
 				accum *float64
 			}{
-				{"VnicBytesIn", &totalIn},
-				{"VnicBytesOut", &totalOut},
+				{"VnicFromNetworkBytes", &totalIn},
+				{"VnicToNetworkBytes", &totalOut},
 			} {
 				req := monitoring.SummarizeMetricsDataRequest{
 					CompartmentId:          common.String(compartmentID),

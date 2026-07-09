@@ -54,13 +54,16 @@
       <el-table-column type="selection" width="50" />
       <el-table-column label="Name" min-width="200">
         <template #default="{ row }">
-          <el-button type="primary" link @click="openMetrics(row)">
+          <el-button type="primary" link @click.stop="openMetrics(row)">
             {{ row.name }}
           </el-button>
         </template>
       </el-table-column>
       <el-table-column :label="$t('instance.shape')" width="150">
         <template #default="{ row }">{{ row.shape }}</template>
+      </el-table-column>
+      <el-table-column :label="$t('instance.region')" width="130" align="center">
+        <template #default="{ row }">{{ row.region || '-' }}</template>
       </el-table-column>
       <el-table-column prop="ocpu" label="OCPU" width="80" align="center" />
       <el-table-column :label="$t('instance.memoryGB')" width="110" align="center">
@@ -77,13 +80,35 @@
       <el-table-column :label="$t('instance.tenantID')" width="90" align="center">
         <template #default="{ row }">{{ row.tenantId }}</template>
       </el-table-column>
+      <el-table-column label="500M" width="90" align="center">
+        <template #default="{ row }">
+          <el-switch
+            :model-value="netStatus[row.id]?.nlb_enabled || false"
+            :loading="netBusy[row.id] === '500m'"
+            :disabled="!!netBusy[row.id]"
+            :before-change="() => confirm500M(row)"
+            @click.stop
+          />
+        </template>
+      </el-table-column>
+      <el-table-column label="IPv6" width="90" align="center">
+        <template #default="{ row }">
+          <el-switch
+            :model-value="netStatus[row.id]?.ipv6_enabled || false"
+            :loading="netBusy[row.id] === 'ipv6'"
+            :disabled="!!netBusy[row.id]"
+            :before-change="() => confirmIPv6(row)"
+            @click.stop
+          />
+        </template>
+      </el-table-column>
       <el-table-column :label="$t('instance.actions')" width="140" fixed="right" align="center">
         <template #default="{ row }">
           <el-dropdown
             trigger="click"
             @command="(cmd) => handleDropdownAction(row, cmd)"
           >
-            <el-button type="primary" size="small">
+            <el-button type="primary" size="small" @click.stop>
               {{ $t('instance.actions') }}
               <el-icon><ArrowDown /></el-icon>
             </el-button>
@@ -123,9 +148,6 @@
                 <el-dropdown-item command="changeBootVolume">
                   Change Boot Volume
                 </el-dropdown-item>
-                <el-dropdown-item command="attachIPv6">
-                  Attach IPv6
-                </el-dropdown-item>
 
                 <el-dropdown-item command="updateName" divided>
                   Update Name
@@ -141,12 +163,6 @@
                 </el-dropdown-item>
                 <el-dropdown-item command="autoRescue">
                   Auto Rescue
-                </el-dropdown-item>
-                <el-dropdown-item command="enable500M">
-                  One-Click 500M
-                </el-dropdown-item>
-                <el-dropdown-item command="disable500M">
-                  Close 500M
                 </el-dropdown-item>
               </el-dropdown-menu>
             </template>
@@ -224,19 +240,6 @@
         <el-button @click="volumeDialogVisible = false">{{ $t('common.cancel') }}</el-button>
         <el-button type="primary" :loading="saving" @click="handleChangeBootVolume">
           {{ $t('common.save') }}
-        </el-button>
-      </template>
-    </el-dialog>
-
-    <!-- Attach IPv6 Dialog -->
-    <el-dialog v-model="attachIPv6Visible" :title="$t('instance.attachIPv6')" width="420px" :close-on-click-modal="false">
-      <p>
-        Attach an IPv6 address to <strong>{{ currentInstance?.name }}</strong>?
-      </p>
-      <template #footer>
-        <el-button @click="attachIPv6Visible = false">{{ $t('common.cancel') }}</el-button>
-        <el-button type="primary" :loading="saving" @click="handleAttachIPv6">
-          {{ $t('common.confirm') }}
         </el-button>
       </template>
     </el-dialog>
@@ -342,6 +345,7 @@
 
 <script setup>
 import { ref, reactive, onMounted } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowDown } from '@element-plus/icons-vue'
 import MetricsDialog from '../components/MetricsDialog.vue'
@@ -351,11 +355,12 @@ import {
   batchStart,
   changeShape,
   changeBootVolume,
-  attachIPv6,
   updateInstanceName,
   checkAlive
 } from '../api/instances.js'
 import { get, post } from '../api/index.js'
+
+const { t } = useI18n()
 
 // ---------------------------------------------------------------------------
 // State
@@ -374,12 +379,15 @@ const saving = ref(false)
 // Dialog visibility & forms
 const shapeDialogVisible = ref(false)
 const volumeDialogVisible = ref(false)
-const attachIPv6Visible = ref(false)
 const metricsVisible = ref(false)
 const checkAliveVisible = ref(false)
 const checkAliveResults = ref([])
 const checkAliveLoading = ref(false)
 const currentInstance = ref(null)
+
+// Per-instance network status (500M/IPv6) and in-flight toggle marker.
+const netStatus = reactive({})
+const netBusy = reactive({})
 
 const shapeForm = reactive({
   shape: '',
@@ -443,11 +451,110 @@ async function loadInstances() {
     const res = await listInstances(params)
     instances.value = res.data || []
     total.value = res.total || 0
+    loadNetworkStatus()
   } catch (e) {
     const msg = e.response?.data?.error || e.message
     ElMessage.error('Failed to load instances: ' + msg)
   } finally {
     loading.value = false
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Network status (500M / IPv6) — auto-fetched after each instance load,
+// grouped per tenant since network-status is tenant-scoped.
+// ---------------------------------------------------------------------------
+async function loadNetworkStatus() {
+  const rows = instances.value
+  if (!rows.length) return
+  const byTenant = {}
+  for (const row of rows) {
+    if (!netStatus[row.id]) {
+      netStatus[row.id] = { nlb_enabled: false, nlb_ip: '', ipv6_enabled: false, ipv6_addr: '' }
+    }
+    ;(byTenant[row.tenantId] ||= []).push(row.id)
+  }
+  for (const [tid, ids] of Object.entries(byTenant)) {
+    try {
+      const res = await post('/instances/network-status',
+        { tenant_id: Number(tid), instance_ids: ids },
+        { timeout: 120000 })
+      for (const [id, st] of Object.entries(res || {})) {
+        netStatus[id] = st
+      }
+    } catch (e) {
+      // Non-fatal: leave defaults (disabled) for this tenant's rows.
+      console.error('network-status failed for tenant', tid, e)
+    }
+  }
+}
+
+// before-change handler for the 500M switch: confirm, call API, return whether
+// the toggle should commit. Returns false on cancel or failure (switch reverts).
+async function confirm500M(row) {
+  const enabling = !netStatus[row.id]?.nlb_enabled
+  try {
+    await ElMessageBox.confirm(
+      enabling ? t('instance.confirm500MEnable') : t('instance.confirm500MDisable'),
+      t('instance.networkBoost'),
+      { type: 'warning' }
+    )
+  } catch {
+    return false // cancelled
+  }
+  netBusy[row.id] = '500m'
+  try {
+    if (enabling) {
+      const res = await post('/instances/one-click-500m',
+        { tenant_id: row.tenantId, instance_id: row.id }, { timeout: 360000 })
+      netStatus[row.id] = { ...netStatus[row.id], nlb_enabled: true, nlb_ip: res?.nlb_ip || '' }
+      ElMessage.success(t('instance.enabled500M') + (res?.nlb_ip ? ` (${res.nlb_ip})` : ''))
+    } else {
+      await post('/instances/one-click-close-500m',
+        { tenant_id: row.tenantId, instance_id: row.id }, { timeout: 180000 })
+      netStatus[row.id] = { ...netStatus[row.id], nlb_enabled: false, nlb_ip: '' }
+      ElMessage.success(t('instance.disabled500M'))
+    }
+    return true
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || '500M operation failed')
+    return false
+  } finally {
+    netBusy[row.id] = ''
+  }
+}
+
+// before-change handler for the IPv6 switch.
+async function confirmIPv6(row) {
+  const enabling = !netStatus[row.id]?.ipv6_enabled
+  try {
+    await ElMessageBox.confirm(
+      enabling ? t('instance.confirmIPv6Enable') : t('instance.confirmIPv6Disable'),
+      t('instance.networkBoost'),
+      { type: 'warning', dangerouslyUseHTMLString: false }
+    )
+  } catch {
+    return false
+  }
+  netBusy[row.id] = 'ipv6'
+  try {
+    if (enabling) {
+      const res = await post('/instances/attach-ipv6',
+        { tenant_id: row.tenantId, instance_id: row.id }, { timeout: 360000 })
+      netStatus[row.id] = { ...netStatus[row.id], ipv6_enabled: true, ipv6_addr: res?.ipv6 || '' }
+      ElMessage.success(t('instance.enabledIPv6') + (res?.ipv6 ? ` (${res.ipv6})` : ''))
+    } else {
+      await post('/instances/disable-ipv6',
+        { tenant_id: row.tenantId, instance_id: row.id }, { timeout: 180000 })
+      netStatus[row.id] = { ...netStatus[row.id], ipv6_enabled: false, ipv6_addr: '' }
+      ElMessage.success(t('instance.disabledIPv6'))
+    }
+    return true
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || 'IPv6 operation failed')
+    return false
+  } finally {
+    netBusy[row.id] = ''
   }
 }
 
@@ -512,9 +619,6 @@ function handleDropdownAction(row, command) {
       volumeForm.sizeGB = row.bootVolumeGB || 50
       volumeDialogVisible.value = true
       break
-    case 'attachIPv6':
-      attachIPv6Visible.value = true
-      break
     case 'updateName':
       nameForm.name = row.name || ''
       nameDialogVisible.value = true
@@ -532,12 +636,6 @@ function handleDropdownAction(row, command) {
       break
     case 'autoRescue':
       handleAutoRescue(row)
-      break
-    case 'enable500M':
-      handle500M(row, true)
-      break
-    case 'disable500M':
-      handle500M(row, false)
       break
   }
 }
@@ -608,23 +706,6 @@ async function handleChangeBootVolume() {
   } catch (e) {
     const msg = e.response?.data?.error || e.message
     ElMessage.error('Change boot volume failed: ' + msg)
-  } finally {
-    saving.value = false
-  }
-}
-
-async function handleAttachIPv6() {
-  saving.value = true
-  try {
-    await attachIPv6({
-      tenant_id: currentInstance.value.tenantId,
-      instance_id: currentInstance.value.id
-    })
-    ElMessage.success('IPv6 attachment request submitted')
-    attachIPv6Visible.value = false
-  } catch (e) {
-    const msg = e.response?.data?.error || e.message
-    ElMessage.error('Attach IPv6 failed: ' + msg)
   } finally {
     saving.value = false
   }
@@ -782,21 +863,6 @@ async function handleAutoRescue(row) {
     if (e !== 'cancel') {
       ElMessage.error(e.response?.data?.error || 'Auto rescue failed')
     }
-  }
-}
-
-async function handle500M(row, enable) {
-  try {
-    const endpoint = enable ? '/instances/one-click-500m' : '/instances/one-click-close-500m'
-    const label = enable ? 'Enable 500M' : 'Close 500M'
-    await post(endpoint, {
-      tenant_id: row.tenantId,
-      instance_id: row.id
-    })
-    ElMessage.success(`${label} submitted for "${row.name}"`)
-    await loadInstances()
-  } catch (e) {
-    ElMessage.error(e.response?.data?.error || '500M operation failed')
   }
 }
 

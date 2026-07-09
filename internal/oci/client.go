@@ -682,14 +682,305 @@ func (c *Client) GetInstanceVNICs(ctx context.Context, compartmentID, instanceID
 	return vnics, nil
 }
 
-func (c *Client) AssignIPv6(ctx context.Context, vnicID string) error {
-	req := core.CreateIpv6Request{
-		CreateIpv6Details: core.CreateIpv6Details{
-			VnicId: common.String(vnicID),
-		},
+// EnableIPv6 provisions IPv6 end-to-end for the instance's primary VNIC: it
+// ensures the VCN has an Oracle-allocated /56, carves a /64 for the subnet,
+// adds a ::/0 default route to the internet gateway, mirrors IPv4 (0.0.0.0/0)
+// ingress rules to IPv6 (::/0), then assigns an IPv6 address to the VNIC.
+// Every step is idempotent, so it is safe to call repeatedly.
+func (c *Client) EnableIPv6(ctx context.Context, instanceID string) (string, error) {
+	compartmentID := c.tenant.TenancyOCID
+	vnics, err := c.GetInstanceVNICs(ctx, compartmentID, instanceID)
+	if err != nil {
+		return "", fmt.Errorf("get vnics: %w", err)
 	}
-	_, err := c.vcn.CreateIpv6(ctx, req)
-	return err
+	if len(vnics) == 0 || vnics[0].Id == nil || vnics[0].SubnetId == nil {
+		return "", fmt.Errorf("instance has no usable VNIC")
+	}
+	vnic := vnics[0]
+	vnicID := *vnic.Id
+	subnetID := *vnic.SubnetId
+
+	// Already assigned → idempotent no-op.
+	if len(vnic.Ipv6Addresses) > 0 {
+		return vnic.Ipv6Addresses[0], nil
+	}
+
+	subnet, err := c.vcn.GetSubnet(ctx, core.GetSubnetRequest{SubnetId: common.String(subnetID)})
+	if err != nil {
+		return "", fmt.Errorf("get subnet: %w", err)
+	}
+	if subnet.VcnId == nil {
+		return "", fmt.Errorf("subnet missing VCN id")
+	}
+	vcnID := *subnet.VcnId
+
+	// 1. Ensure the VCN has an Oracle-allocated IPv6 /56.
+	vcnResp, err := c.vcn.GetVcn(ctx, core.GetVcnRequest{VcnId: common.String(vcnID)})
+	if err != nil {
+		return "", fmt.Errorf("get vcn: %w", err)
+	}
+	if len(vcnResp.Ipv6CidrBlocks) == 0 {
+		if _, err := c.vcn.AddIpv6VcnCidr(ctx, core.AddIpv6VcnCidrRequest{
+			VcnId: common.String(vcnID),
+			AddVcnIpv6CidrDetails: core.AddVcnIpv6CidrDetails{
+				IsOracleGuaAllocationEnabled: common.Bool(true),
+			},
+		}); err != nil {
+			return "", fmt.Errorf("add vcn ipv6 cidr: %w", err)
+		}
+		deadline := time.Now().Add(90 * time.Second)
+		for len(vcnResp.Ipv6CidrBlocks) == 0 && time.Now().Before(deadline) {
+			select {
+			case <-ctx.Done():
+				return "", ctx.Err()
+			case <-time.After(3 * time.Second):
+			}
+			if vcnResp, err = c.vcn.GetVcn(ctx, core.GetVcnRequest{VcnId: common.String(vcnID)}); err != nil {
+				return "", fmt.Errorf("poll vcn ipv6: %w", err)
+			}
+		}
+		if len(vcnResp.Ipv6CidrBlocks) == 0 {
+			return "", fmt.Errorf("VCN IPv6 CIDR not ready")
+		}
+	}
+	vcnIpv6 := vcnResp.Ipv6CidrBlocks[0]
+
+	// 2. Ensure the subnet has an IPv6 /64 carved from the VCN /56.
+	if subnet.Ipv6CidrBlock == nil || *subnet.Ipv6CidrBlock == "" {
+		subnetCidr, derr := deriveSubnetIpv6(vcnIpv6)
+		if derr != nil {
+			return "", derr
+		}
+		if _, err := c.vcn.AddIpv6SubnetCidr(ctx, core.AddIpv6SubnetCidrRequest{
+			SubnetId: common.String(subnetID),
+			AddSubnetIpv6CidrDetails: core.AddSubnetIpv6CidrDetails{
+				Ipv6CidrBlock: common.String(subnetCidr),
+			},
+		}); err != nil {
+			return "", fmt.Errorf("add subnet ipv6 cidr: %w", err)
+		}
+	}
+
+	// 3. Ensure a ::/0 default route to the VCN's internet gateway.
+	if err := c.ensureIPv6Route(ctx, vcnID, subnet.RouteTableId); err != nil {
+		return "", err
+	}
+
+	// 4. Mirror IPv4 ingress rules to IPv6 so the same ports are reachable.
+	if err := c.mirrorIngressToIPv6(ctx, subnet.SecurityListIds); err != nil {
+		return "", err
+	}
+
+	// 5. Assign the IPv6 address to the VNIC.
+	if _, err := c.vcn.CreateIpv6(ctx, core.CreateIpv6Request{
+		CreateIpv6Details: core.CreateIpv6Details{VnicId: common.String(vnicID)},
+	}); err != nil {
+		return "", fmt.Errorf("create ipv6: %w", err)
+	}
+
+	ipv6s, err := c.vcn.ListIpv6s(ctx, core.ListIpv6sRequest{VnicId: common.String(vnicID)})
+	if err == nil {
+		for _, ip := range ipv6s.Items {
+			if ip.IpAddress != nil && *ip.IpAddress != "" {
+				return *ip.IpAddress, nil
+			}
+		}
+	}
+	return "", nil
+}
+
+// DisableIPv6 removes IPv6 addresses from the instance's primary VNIC. Shared
+// VCN/subnet/route/security-list resources are left intact (they may be used
+// by other instances and can be reused if IPv6 is re-enabled).
+func (c *Client) DisableIPv6(ctx context.Context, instanceID string) error {
+	vnics, err := c.GetInstanceVNICs(ctx, c.tenant.TenancyOCID, instanceID)
+	if err != nil {
+		return fmt.Errorf("get vnics: %w", err)
+	}
+	if len(vnics) == 0 || vnics[0].Id == nil {
+		return nil
+	}
+	vnicID := *vnics[0].Id
+	ipv6s, err := c.vcn.ListIpv6s(ctx, core.ListIpv6sRequest{VnicId: common.String(vnicID)})
+	if err != nil {
+		return fmt.Errorf("list ipv6s: %w", err)
+	}
+	for _, ip := range ipv6s.Items {
+		if ip.Id == nil {
+			continue
+		}
+		if _, err := c.vcn.DeleteIpv6(ctx, core.DeleteIpv6Request{Ipv6Id: ip.Id}); err != nil {
+			return fmt.Errorf("delete ipv6: %w", err)
+		}
+	}
+	return nil
+}
+
+// deriveSubnetIpv6 carves a /64 (subnet 0) from a VCN IPv6 /56 block.
+func deriveSubnetIpv6(vcnCidr string) (string, error) {
+	_, ipnet, err := net.ParseCIDR(vcnCidr)
+	if err != nil {
+		return "", fmt.Errorf("parse vcn ipv6 cidr %q: %w", vcnCidr, err)
+	}
+	ip := ipnet.IP.Mask(net.CIDRMask(64, 128))
+	return ip.String() + "/64", nil
+}
+
+// ensureIPv6Route adds a ::/0 → internet-gateway rule to the route table if absent.
+func (c *Client) ensureIPv6Route(ctx context.Context, vcnID string, routeTableID *string) error {
+	if routeTableID == nil || *routeTableID == "" {
+		return fmt.Errorf("subnet has no route table")
+	}
+	igws, err := c.vcn.ListInternetGateways(ctx, core.ListInternetGatewaysRequest{
+		CompartmentId: common.String(c.tenant.TenancyOCID),
+		VcnId:         common.String(vcnID),
+	})
+	if err != nil {
+		return fmt.Errorf("list internet gateways: %w", err)
+	}
+	if len(igws.Items) == 0 || igws.Items[0].Id == nil {
+		return fmt.Errorf("no internet gateway in VCN")
+	}
+	igwID := *igws.Items[0].Id
+
+	rt, err := c.vcn.GetRouteTable(ctx, core.GetRouteTableRequest{RtId: routeTableID})
+	if err != nil {
+		return fmt.Errorf("get route table: %w", err)
+	}
+	for _, r := range rt.RouteRules {
+		if r.Destination != nil && *r.Destination == "::/0" {
+			return nil // already present
+		}
+	}
+	rules := append(rt.RouteRules, core.RouteRule{
+		Destination:     common.String("::/0"),
+		DestinationType: core.RouteRuleDestinationTypeCidrBlock,
+		NetworkEntityId: common.String(igwID),
+	})
+	if _, err := c.vcn.UpdateRouteTable(ctx, core.UpdateRouteTableRequest{
+		RtId:                    routeTableID,
+		UpdateRouteTableDetails: core.UpdateRouteTableDetails{RouteRules: rules},
+	}); err != nil {
+		return fmt.Errorf("update route table: %w", err)
+	}
+	return nil
+}
+
+// mirrorIngressToIPv6 copies each 0.0.0.0/0 ingress rule to a ::/0 equivalent,
+// skipping any that already exist, and applies the update per security list.
+func (c *Client) mirrorIngressToIPv6(ctx context.Context, securityListIDs []string) error {
+	for _, slID := range securityListIDs {
+		sl, err := c.vcn.GetSecurityList(ctx, core.GetSecurityListRequest{SecurityListId: common.String(slID)})
+		if err != nil {
+			return fmt.Errorf("get security list: %w", err)
+		}
+		rules := sl.IngressSecurityRules
+		existing := map[string]bool{}
+		for _, r := range rules {
+			if r.Source != nil && strings.Contains(*r.Source, ":") {
+				existing[ingressRuleKey(r)] = true
+			}
+		}
+		added := false
+		for _, r := range rules {
+			if r.Source == nil || *r.Source != "0.0.0.0/0" {
+				continue
+			}
+			v6 := r
+			v6.Source = common.String("::/0")
+			v6.SourceType = core.IngressSecurityRuleSourceTypeCidrBlock
+			if existing[ingressRuleKey(v6)] {
+				continue
+			}
+			rules = append(rules, v6)
+			added = true
+		}
+		if !added {
+			continue
+		}
+		if _, err := c.vcn.UpdateSecurityList(ctx, core.UpdateSecurityListRequest{
+			SecurityListId: common.String(slID),
+			UpdateSecurityListDetails: core.UpdateSecurityListDetails{
+				IngressSecurityRules: rules,
+				EgressSecurityRules:  sl.EgressSecurityRules,
+			},
+		}); err != nil {
+			return fmt.Errorf("update security list: %w", err)
+		}
+	}
+	return nil
+}
+
+// ingressRuleKey identifies an ingress rule by protocol, source and dest port range.
+func ingressRuleKey(r core.IngressSecurityRule) string {
+	proto, src, port := "", "", ""
+	if r.Protocol != nil {
+		proto = *r.Protocol
+	}
+	if r.Source != nil {
+		src = *r.Source
+	}
+	if r.TcpOptions != nil && r.TcpOptions.DestinationPortRange != nil {
+		pr := r.TcpOptions.DestinationPortRange
+		port = fmt.Sprintf("tcp:%d-%d", ptrInt(pr.Min), ptrInt(pr.Max))
+	} else if r.UdpOptions != nil && r.UdpOptions.DestinationPortRange != nil {
+		pr := r.UdpOptions.DestinationPortRange
+		port = fmt.Sprintf("udp:%d-%d", ptrInt(pr.Min), ptrInt(pr.Max))
+	}
+	return proto + "|" + src + "|" + port
+}
+
+func ptrInt(p *int) int {
+	if p == nil {
+		return 0
+	}
+	return *p
+}
+
+// NetworkStatus reports whether 500M (NLB) and IPv6 are enabled for an instance.
+type NetworkStatus struct {
+	NLBEnabled  bool   `json:"nlb_enabled"`
+	NLBIP       string `json:"nlb_ip"`
+	IPv6Enabled bool   `json:"ipv6_enabled"`
+	IPv6Addr    string `json:"ipv6_addr"`
+}
+
+// GetNetworkStatus returns 500M/IPv6 status per instance ID. The NLB set is
+// listed once and matched by freeform tag; IPv6 is read from each instance's
+// primary VNIC. VNIC lookups run sequentially to avoid racing the shared
+// request interceptor. Per-instance failures yield a zero (disabled) status.
+func (c *Client) GetNetworkStatus(ctx context.Context, instanceIDs []string) map[string]NetworkStatus {
+	compartmentID := c.tenant.TenancyOCID
+	out := make(map[string]NetworkStatus, len(instanceIDs))
+
+	nlbIP := map[string]string{}
+	if listResp, err := c.nlb.ListNetworkLoadBalancers(ctx, networkloadbalancer.ListNetworkLoadBalancersRequest{
+		CompartmentId: common.String(compartmentID),
+		Limit:         common.Int(100),
+	}); err == nil {
+		for i := range listResp.Items {
+			nlb := &listResp.Items[i]
+			if nlb.FreeformTags != nil {
+				if id := nlb.FreeformTags["oci-helper-instance-id"]; id != "" {
+					nlbIP[id] = nlbPublicIP(nlb.IpAddresses)
+				}
+			}
+		}
+	}
+
+	for _, id := range instanceIDs {
+		st := NetworkStatus{}
+		if ip, ok := nlbIP[id]; ok {
+			st.NLBEnabled = true
+			st.NLBIP = ip
+		}
+		if vnics, err := c.GetInstanceVNICs(ctx, compartmentID, id); err == nil && len(vnics) > 0 && len(vnics[0].Ipv6Addresses) > 0 {
+			st.IPv6Enabled = true
+			st.IPv6Addr = vnics[0].Ipv6Addresses[0]
+		}
+		out[id] = st
+	}
+	return out
 }
 
 // Metrics
@@ -1537,14 +1828,53 @@ func (c *Client) GetLimits(ctx context.Context, region, serviceName string) ([]L
 
 // Enable500Mbps creates a Network Load Balancer for the instance to achieve 500Mbps bandwidth.
 // Note: This requires the OCI network load balancer API which may need additional SDK imports.
-func (c *Client) Enable500Mbps(ctx context.Context, instanceID string) error {
+// findInstanceNLB returns the NLB tagged for the given instance, or nil if none exists.
+func (c *Client) findInstanceNLB(ctx context.Context, compartmentID, instanceID string) (*networkloadbalancer.NetworkLoadBalancerSummary, error) {
+	listResp, err := c.nlb.ListNetworkLoadBalancers(ctx, networkloadbalancer.ListNetworkLoadBalancersRequest{
+		CompartmentId: common.String(compartmentID),
+		Limit:         common.Int(100),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list NLBs: %w", err)
+	}
+	for i := range listResp.Items {
+		nlb := &listResp.Items[i]
+		if nlb.FreeformTags != nil && nlb.FreeformTags["oci-helper-instance-id"] == instanceID {
+			return nlb, nil
+		}
+	}
+	return nil, nil
+}
+
+// nlbPublicIP returns the first public IP of an NLB, falling back to the first address.
+func nlbPublicIP(addrs []networkloadbalancer.IpAddress) string {
+	for _, a := range addrs {
+		if a.IsPublic != nil && *a.IsPublic && a.IpAddress != nil {
+			return *a.IpAddress
+		}
+	}
+	if len(addrs) > 0 && addrs[0].IpAddress != nil {
+		return *addrs[0].IpAddress
+	}
+	return ""
+}
+
+func (c *Client) Enable500Mbps(ctx context.Context, instanceID string) (string, error) {
 	compartmentID := c.tenant.TenancyOCID
+
+	// Idempotent: if an NLB already exists for this instance, return its public IP.
+	if existing, err := c.findInstanceNLB(ctx, compartmentID, instanceID); err != nil {
+		return "", err
+	} else if existing != nil {
+		return nlbPublicIP(existing.IpAddresses), nil
+	}
+
 	vnics, err := c.GetInstanceVNICs(ctx, compartmentID, instanceID)
 	if err != nil {
-		return fmt.Errorf("get vnics: %w", err)
+		return "", fmt.Errorf("get vnics: %w", err)
 	}
 	if len(vnics) == 0 {
-		return fmt.Errorf("no VNIC found")
+		return "", fmt.Errorf("no VNIC found")
 	}
 	vnic := vnics[0]
 	privateIP := ""
@@ -1556,7 +1886,7 @@ func (c *Client) Enable500Mbps(ctx context.Context, instanceID string) error {
 		subnetID = *vnic.SubnetId
 	}
 	if privateIP == "" || subnetID == "" {
-		return fmt.Errorf("instance VNIC missing private IP or subnet ID")
+		return "", fmt.Errorf("instance VNIC missing private IP or subnet ID")
 	}
 
 	displayName := "nlb-" + instanceID
@@ -1581,7 +1911,8 @@ func (c *Client) Enable500Mbps(ctx context.Context, instanceID string) error {
 						Port:     common.Int(22),
 					},
 					Backends: []networkloadbalancer.Backend{
-						{IpAddress: common.String(privateIP), Port: common.Int(22), Name: common.String(instanceID)},
+						// Port 0 = pass-through all ports (full-bandwidth path, not just SSH).
+						{IpAddress: common.String(privateIP), Port: common.Int(0), Name: common.String(instanceID)},
 					},
 				},
 			},
@@ -1597,11 +1928,11 @@ func (c *Client) Enable500Mbps(ctx context.Context, instanceID string) error {
 	}
 	resp, err := c.nlb.CreateNetworkLoadBalancer(ctx, createReq)
 	if err != nil {
-		return fmt.Errorf("create NLB: %w", err)
+		return "", fmt.Errorf("create NLB: %w", err)
 	}
 	workReqID := resp.OpcWorkRequestId
 	if workReqID == nil || *workReqID == "" {
-		return fmt.Errorf("NLB created but no work request ID returned")
+		return "", fmt.Errorf("NLB created but no work request ID returned")
 	}
 	log.Printf("[Enable500Mbps] NLB work request: %s", *workReqID)
 
@@ -1610,7 +1941,7 @@ func (c *Client) Enable500Mbps(ctx context.Context, instanceID string) error {
 	for time.Now().Before(deadline) {
 		wr, err := c.nlb.GetWorkRequest(ctx, networkloadbalancer.GetWorkRequestRequest{WorkRequestId: workReqID})
 		if err != nil {
-			return fmt.Errorf("poll NLB work request: %w", err)
+			return "", fmt.Errorf("poll NLB work request: %w", err)
 		}
 		status := wr.Status
 		pct := float32(0)
@@ -1620,42 +1951,35 @@ func (c *Client) Enable500Mbps(ctx context.Context, instanceID string) error {
 		log.Printf("[Enable500Mbps] status=%s %.0f%%", status, float64(pct))
 		switch status {
 		case networkloadbalancer.OperationStatusSucceeded:
-			return nil
+			// Fetch the NLB's public IP to return to the caller.
+			if nlb, err := c.findInstanceNLB(ctx, compartmentID, instanceID); err == nil && nlb != nil {
+				return nlbPublicIP(nlb.IpAddresses), nil
+			}
+			return "", nil
 		case networkloadbalancer.OperationStatusFailed:
-			return fmt.Errorf("NLB creation failed")
+			return "", fmt.Errorf("NLB creation failed")
 		}
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return "", ctx.Err()
 		case <-time.After(pollInterval):
 		}
 	}
-	return fmt.Errorf("NLB creation timed out")
+	return "", fmt.Errorf("NLB creation timed out")
 }
 
 // Disable500Mbps deletes the NLB associated with the instance.
 func (c *Client) Disable500Mbps(ctx context.Context, instanceID string) error {
 	compartmentID := c.tenant.TenancyOCID
 
-	listReq := networkloadbalancer.ListNetworkLoadBalancersRequest{
-		CompartmentId: common.String(compartmentID),
-		Limit:         common.Int(100),
-	}
-	listResp, err := c.nlb.ListNetworkLoadBalancers(ctx, listReq)
+	nlb, err := c.findInstanceNLB(ctx, compartmentID, instanceID)
 	if err != nil {
-		return fmt.Errorf("list NLBs: %w", err)
+		return err
 	}
-
-	var nlbID *string
-	for _, nlb := range listResp.Items {
-		if nlb.FreeformTags != nil && nlb.FreeformTags["oci-helper-instance-id"] == instanceID {
-			nlbID = nlb.Id
-			break
-		}
+	if nlb == nil {
+		return nil // idempotent: nothing to delete
 	}
-	if nlbID == nil {
-		return fmt.Errorf("no NLB found for instance %s", instanceID)
-	}
+	nlbID := nlb.Id
 
 	delResp, err := c.nlb.DeleteNetworkLoadBalancer(ctx, networkloadbalancer.DeleteNetworkLoadBalancerRequest{
 		NetworkLoadBalancerId: nlbID,

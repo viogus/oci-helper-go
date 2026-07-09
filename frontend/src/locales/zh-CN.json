@@ -122,6 +122,15 @@
     "changeBootVolume": "更改引导卷配置",
     "bootVolumeSize": "容量 (GB)",
     "attachIPv6": "附加 IPv6",
+    "networkBoost": "网络加速",
+    "confirm500MEnable": "将为该实例创建一个免费的网络负载均衡器 (NLB)，以获得约 500Mbps 下行带宽。确认开启？",
+    "confirm500MDisable": "将删除该实例的网络负载均衡器 (NLB)，恢复默认带宽。确认关闭？",
+    "confirmIPv6Enable": "将为该实例启用 IPv6：为 VCN/子网分配 IPv6 网段、添加 ::/0 默认路由，并按现有 IPv4 入站规则镜像放行 IPv6 入站，然后分配 IPv6 地址。确认开启？",
+    "confirmIPv6Disable": "将移除该实例网卡上的 IPv6 地址（不改动 VCN/子网/路由）。确认关闭？",
+    "enabled500M": "500M 已开启",
+    "disabled500M": "500M 已关闭",
+    "enabledIPv6": "IPv6 已开启",
+    "disabledIPv6": "IPv6 已关闭",
     "aliveCheckResult": "存活检查结果",
     "instanceID": "实例 ID",
     "aliveState": "状态",
@@ -206,7 +215,7 @@
     "publicKey": "公钥",
     "generate": "生成",
     "copyKey": "复制公钥",
-    "keyWarning": "请立即保存私钥，它将不会再被显示。"
+    "keyWarning": "私钥已加密并安全存储在服务器上。"
   },
   "metrics": {
     "title": "实例监控",

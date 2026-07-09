@@ -122,6 +122,15 @@
     "changeBootVolume": "Change Boot Volume",
     "bootVolumeSize": "Size (GB)",
     "attachIPv6": "Attach IPv6",
+    "networkBoost": "Network Boost",
+    "confirm500MEnable": "This creates a free Network Load Balancer (NLB) for the instance to reach ~500Mbps downstream. Enable 500M?",
+    "confirm500MDisable": "This deletes the instance's Network Load Balancer (NLB) and restores default bandwidth. Disable 500M?",
+    "confirmIPv6Enable": "This enables IPv6 for the instance: assigns an IPv6 block to the VCN/subnet, adds a ::/0 default route, mirrors existing IPv4 ingress rules to IPv6, then assigns an IPv6 address. Enable IPv6?",
+    "confirmIPv6Disable": "This removes the IPv6 address from the instance's VNIC (VCN/subnet/route are left unchanged). Disable IPv6?",
+    "enabled500M": "500M enabled",
+    "disabled500M": "500M disabled",
+    "enabledIPv6": "IPv6 enabled",
+    "disabledIPv6": "IPv6 disabled",
     "aliveCheckResult": "Alive Check Result",
     "instanceID": "Instance ID",
     "aliveState": "Status",
@@ -206,7 +215,7 @@
     "publicKey": "Public Key",
     "generate": "Generate",
     "copyKey": "Copy Public Key",
-    "keyWarning": "Save your private key now. It will not be shown again."
+    "keyWarning": "Private key is encrypted and stored securely on the server."
   },
   "metrics": {
     "title": "Instance Metrics",

@@ -487,30 +487,45 @@ func (s *Server) handleAttachIPv6(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, "invalid body: "+err.Error())
 		return
 	}
-	client, tenant, ok := s.clientForInstance(req.TenantID, req.InstanceID, w)
+	client, _, ok := s.clientForInstance(req.TenantID, req.InstanceID, w)
+	if !ok {
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Minute)
+	defer cancel()
+	addr, err := client.EnableIPv6(ctx, req.InstanceID)
+	if err != nil {
+		jsonErr(w, "enable ipv6: "+err.Error())
+		return
+	}
+	s.audit(req.TenantID, "instance:attach-ipv6", req.InstanceID, r)
+	jsonOK(w, map[string]string{"status": "ok", "ipv6": addr})
+}
+
+func (s *Server) handleDisableIPv6(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		TenantID   int64  `json:"tenant_id"`
+		InstanceID string `json:"instance_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonErr(w, "invalid body: "+err.Error())
+		return
+	}
+	client, _, ok := s.clientForInstance(req.TenantID, req.InstanceID, w)
 	if !ok {
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
 	defer cancel()
-	vnics, err := client.GetInstanceVNICs(ctx, tenant.TenancyOCID, req.InstanceID)
-	if err != nil {
-		jsonErr(w, "list vnics: "+err.Error())
+	if err := client.DisableIPv6(ctx, req.InstanceID); err != nil {
+		jsonErr(w, "disable ipv6: "+err.Error())
 		return
 	}
-	if len(vnics) == 0 {
-		jsonErr(w, "no VNIC found for instance")
-		return
-	}
-	if vnics[0].Id == nil {
-		jsonErr(w, "VNIC has no id")
-		return
-	}
-	if err := client.AssignIPv6(ctx, *vnics[0].Id); err != nil {
-		jsonErr(w, "assign ipv6: "+err.Error())
-		return
-	}
-	s.audit(req.TenantID, "instance:attach-ipv6", req.InstanceID, r)
+	s.audit(req.TenantID, "instance:ipv6-disable", req.InstanceID, r)
 	jsonOK(w, map[string]string{"status": "ok"})
 }
 func (s *Server) handleUpdateInstanceName(w http.ResponseWriter, r *http.Request) {
@@ -713,12 +728,13 @@ func (s *Server) handleOneClick500M(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := client.Enable500Mbps(r.Context(), req.InstanceID); err != nil {
+	nlbIP, err := client.Enable500Mbps(r.Context(), req.InstanceID)
+	if err != nil {
 		jsonErr(w, "enable 500M: "+err.Error())
 		return
 	}
 	s.audit(req.TenantID, "instance:500m-enable", req.InstanceID, r)
-	jsonOK(w, map[string]string{"status": "ok"})
+	jsonOK(w, map[string]string{"status": "ok", "nlb_ip": nlbIP})
 }
 
 func (s *Server) handleOneClickClose500M(w http.ResponseWriter, r *http.Request) {
@@ -745,6 +761,47 @@ func (s *Server) handleOneClickClose500M(w http.ResponseWriter, r *http.Request)
 	s.audit(req.TenantID, "instance:500m-disable", req.InstanceID, r)
 	jsonOK(w, map[string]string{"status": "ok"})
 }
+func (s *Server) handleNetworkStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		TenantID    int64    `json:"tenant_id"`
+		InstanceIDs []string `json:"instance_ids"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonErr(w, "invalid body: "+err.Error())
+		return
+	}
+	client, _, ok := s.getTenantClient(req.TenantID, w)
+	if !ok {
+		return
+	}
+	// Group by region — a tenant's instances may span regions, and NLB/VNIC
+	// queries are region-scoped.
+	byRegion := map[string][]string{}
+	for _, id := range req.InstanceIDs {
+		region := ""
+		if inst, err := s.store.GetInstanceByID(fmt.Sprintf("%d:%s", req.TenantID, id)); err == nil && inst != nil {
+			region = inst.Region
+		}
+		byRegion[region] = append(byRegion[region], id)
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
+	defer cancel()
+	result := map[string]ociclient.NetworkStatus{}
+	for region, ids := range byRegion {
+		if region != "" {
+			client.SetRegion(region)
+		}
+		for k, v := range client.GetNetworkStatus(ctx, ids) {
+			result[k] = v
+		}
+	}
+	jsonOK(w, result)
+}
+
 func (s *Server) handleAutoRescue(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)

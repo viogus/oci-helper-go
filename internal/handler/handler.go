@@ -177,6 +177,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/instances/change-shape", s.withAuth(s.handleChangeShape))
 	s.mux.HandleFunc("/api/instances/change-boot-volume", s.withAuth(s.handleChangeBootVolume))
 	s.mux.HandleFunc("/api/instances/attach-ipv6", s.withAuth(s.handleAttachIPv6))
+	s.mux.HandleFunc("/api/instances/disable-ipv6", s.withAuth(s.handleDisableIPv6))
+	s.mux.HandleFunc("/api/instances/network-status", s.withAuth(s.handleNetworkStatus))
 	s.mux.HandleFunc("/api/instances/update-name", s.withAuth(s.handleUpdateInstanceName))
 	s.mux.HandleFunc("/api/instances/change-ip", s.withAuth(s.handleChangeIP))
 	s.mux.HandleFunc("/api/instances/check-alive", s.withAuth(s.handleCheckAlive))
@@ -259,6 +261,7 @@ func (s *Server) routes() {
 			log.Fatalf("embedded dist directory not found: %v", err)
 		}
 		fileFS := http.FS(staticFS)
+		fileServer := http.FileServer(fileFS)
 		s.mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 			// API paths that fell through — genuine 404.
 			if strings.HasPrefix(r.URL.Path, "/api/") {
@@ -267,7 +270,7 @@ func (s *Server) routes() {
 			}
 			// Set CSP on the HTML document (the SPA shell). CSP is a
 			// document-level policy; setting it on API responses has no effect.
-			w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://*.tile.openstreetmap.org; connect-src 'self' ws: wss:; font-src 'self' data:; frame-src 'self'")
+			w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://*.tile.openstreetmap.org; connect-src 'self' ws: wss:; font-src 'self' data:; frame-src 'self'; object-src 'none'; base-uri 'self'")
 			// Try to open the file; if it doesn't exist in the embedded FS,
 			// serve index.html for SPA client-side routing.
 			path := strings.TrimPrefix(r.URL.Path, "/")
@@ -280,7 +283,7 @@ func (s *Server) routes() {
 			} else {
 				f.Close()
 			}
-			http.FileServer(fileFS).ServeHTTP(w, r)
+			fileServer.ServeHTTP(w, r)
 		})
 }
 

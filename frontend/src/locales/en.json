@@ -70,9 +70,6 @@
     "defense": "Defense",
     "sshKeys": "SSH Keys"
   },
-  "common": {
-    "back": "Back"
-  },
   "login": {
     "username": "Username",
     "password": "Password",
@@ -177,6 +174,7 @@
     "days": "days"
   },
   "common": {
+    "back": "Back",
     "save": "Save",
     "cancel": "Cancel",
     "confirm": "Confirm",

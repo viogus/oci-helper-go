@@ -70,9 +70,6 @@
     "defense": "防御",
     "sshKeys": "SSH 密钥"
   },
-  "common": {
-    "back": "返回"
-  },
   "login": {
     "username": "用户名",
     "password": "密码",
@@ -177,6 +174,7 @@
     "days": "天"
   },
   "common": {
+    "back": "返回",
     "save": "保存",
     "cancel": "取消",
     "confirm": "确认",

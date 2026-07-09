@@ -474,6 +474,16 @@ func (s *Server) handleChangeBootVolume(w http.ResponseWriter, r *http.Request) 
 	s.audit(req.TenantID, "instance:change-boot-volume", req.InstanceID, r)
 	jsonOK(w, map[string]string{"status": "ok"})
 }
+// bareOCID strips a leading "tenantID:" prefix from a composite instance id,
+// returning the raw OCID that OCI APIs expect. Bare OCIDs pass through unchanged
+// (an OCID never contains a colon).
+func bareOCID(id string) string {
+	if i := strings.IndexByte(id, ':'); i >= 0 {
+		return id[i+1:]
+	}
+	return id
+}
+
 func (s *Server) handleAttachIPv6(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
@@ -493,7 +503,7 @@ func (s *Server) handleAttachIPv6(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Minute)
 	defer cancel()
-	addr, err := client.EnableIPv6(ctx, req.InstanceID)
+	addr, err := client.EnableIPv6(ctx, bareOCID(req.InstanceID))
 	if err != nil {
 		jsonErr(w, "enable ipv6: "+err.Error())
 		return
@@ -521,7 +531,7 @@ func (s *Server) handleDisableIPv6(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
 	defer cancel()
-	if err := client.DisableIPv6(ctx, req.InstanceID); err != nil {
+	if err := client.DisableIPv6(ctx, bareOCID(req.InstanceID)); err != nil {
 		jsonErr(w, "disable ipv6: "+err.Error())
 		return
 	}
@@ -728,7 +738,7 @@ func (s *Server) handleOneClick500M(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	nlbIP, err := client.Enable500Mbps(r.Context(), req.InstanceID)
+	nlbIP, err := client.Enable500Mbps(r.Context(), bareOCID(req.InstanceID))
 	if err != nil {
 		jsonErr(w, "enable 500M: "+err.Error())
 		return
@@ -754,7 +764,7 @@ func (s *Server) handleOneClickClose500M(w http.ResponseWriter, r *http.Request)
 	if !ok {
 		return
 	}
-	if err := client.Disable500Mbps(r.Context(), req.InstanceID); err != nil {
+	if err := client.Disable500Mbps(r.Context(), bareOCID(req.InstanceID)); err != nil {
 		jsonErr(w, "disable 500M: "+err.Error())
 		return
 	}
@@ -779,24 +789,28 @@ func (s *Server) handleNetworkStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Group by region — a tenant's instances may span regions, and NLB/VNIC
-	// queries are region-scoped.
+	// queries are region-scoped. OCI is queried by bare OCID; results are keyed
+	// back to the composite id the frontend uses.
+	ocidToID := map[string]string{}
 	byRegion := map[string][]string{}
 	for _, id := range req.InstanceIDs {
+		ocid := bareOCID(id)
+		ocidToID[ocid] = id
 		region := ""
-		if inst, err := s.store.GetInstanceByID(fmt.Sprintf("%d:%s", req.TenantID, id)); err == nil && inst != nil {
+		if inst, err := s.store.GetInstanceByID(id); err == nil && inst != nil {
 			region = inst.Region
 		}
-		byRegion[region] = append(byRegion[region], id)
+		byRegion[region] = append(byRegion[region], ocid)
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
 	defer cancel()
 	result := map[string]ociclient.NetworkStatus{}
-	for region, ids := range byRegion {
+	for region, ocids := range byRegion {
 		if region != "" {
 			client.SetRegion(region)
 		}
-		for k, v := range client.GetNetworkStatus(ctx, ids) {
-			result[k] = v
+		for ocid, st := range client.GetNetworkStatus(ctx, ocids) {
+			result[ocidToID[ocid]] = st
 		}
 	}
 	jsonOK(w, result)

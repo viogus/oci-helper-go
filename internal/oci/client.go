@@ -1241,7 +1241,7 @@ func (c *Client) FetchInstancesTraffic(ctx context.Context, compartmentID, regio
 				for _, item := range resp.Items {
 					for _, dp := range item.AggregatedDatapoints {
 						if dp.Value != nil {
-							*metric.accum += *dp.Value * step.Seconds()
+							*metric.accum += *dp.Value * step.Minutes()
 						}
 					}
 				}

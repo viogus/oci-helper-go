@@ -233,10 +233,11 @@ func (c *Client) LaunchInstance(ctx context.Context, region, ad, shape, imageID,
 	return err
 }
 
-func (c *Client) TerminateInstance(ctx context.Context, instanceID string, preserveBootVolume bool) error {
+func (c *Client) TerminateInstance(ctx context.Context, instanceID string, preserveBootVolume, preserveDataVolumes bool) error {
 	req := core.TerminateInstanceRequest{
-		InstanceId:         common.String(instanceID),
-		PreserveBootVolume: common.Bool(preserveBootVolume),
+		InstanceId:                      common.String(instanceID),
+		PreserveBootVolume:              common.Bool(preserveBootVolume),
+		PreserveDataVolumesCreatedAtLaunch: common.Bool(preserveDataVolumes),
 	}
 	_, err := c.compute.TerminateInstance(ctx, req)
 	return err
@@ -2403,46 +2404,70 @@ func (c *Client) Enable500Mbps(ctx context.Context, instanceID string) (string, 
 			},
 		},
 	}
-	resp, err := c.nlb.CreateNetworkLoadBalancer(ctx, createReq)
-	if err != nil {
-		return "", fmt.Errorf("create NLB: %w", err)
-	}
-	workReqID := resp.OpcWorkRequestId
-	if workReqID == nil || *workReqID == "" {
-		return "", fmt.Errorf("NLB created but no work request ID returned")
-	}
-	log.Printf("[Enable500Mbps] NLB work request: %s", *workReqID)
-
-	pollInterval := 5 * time.Second
-	deadline := time.Now().Add(5 * time.Minute)
-	for time.Now().Before(deadline) {
-		wr, err := c.nlb.GetWorkRequest(ctx, networkloadbalancer.GetWorkRequestRequest{WorkRequestId: workReqID})
-		if err != nil {
-			return "", fmt.Errorf("poll NLB work request: %w", err)
-		}
-		status := wr.Status
-		pct := float32(0)
-		if wr.PercentComplete != nil {
-			pct = *wr.PercentComplete
-		}
-		log.Printf("[Enable500Mbps] status=%s %.0f%%", status, float64(pct))
-		switch status {
-		case networkloadbalancer.OperationStatusSucceeded:
-			if nlb, err := c.findInstanceNLB(ctx, compartmentID, instanceID); err == nil && nlb != nil {
-				log.Printf("[Enable500Mbps] done — NLB IP: %s", nlbPublicIP(nlb.IpAddresses))
-				return nlbPublicIP(nlb.IpAddresses), nil
+	var lastErr error
+	for attempt := 1; attempt <= 3; attempt++ {
+		if attempt > 1 {
+			log.Printf("[Enable500Mbps] retry %d/3 after: %v", attempt, lastErr)
+			select {
+			case <-ctx.Done():
+				return "", ctx.Err()
+			case <-time.After(10 * time.Second):
 			}
-			return "", nil
-		case networkloadbalancer.OperationStatusFailed:
-			return "", fmt.Errorf("NLB creation failed")
 		}
-		select {
-		case <-ctx.Done():
-			return "", ctx.Err()
-		case <-time.After(pollInterval):
+
+		resp, err := c.nlb.CreateNetworkLoadBalancer(ctx, createReq)
+		if err != nil {
+			lastErr = fmt.Errorf("create NLB: %w", err)
+			continue
+		}
+		workReqID := resp.OpcWorkRequestId
+		if workReqID == nil || *workReqID == "" {
+			lastErr = fmt.Errorf("NLB created but no work request ID returned")
+			continue
+		}
+		log.Printf("[Enable500Mbps] NLB work request: %s", *workReqID)
+
+		pollInterval := 5 * time.Second
+		deadline := time.Now().Add(5 * time.Minute)
+		pollFailed := false
+		for time.Now().Before(deadline) {
+			wr, err := c.nlb.GetWorkRequest(ctx, networkloadbalancer.GetWorkRequestRequest{WorkRequestId: workReqID})
+			if err != nil {
+				lastErr = fmt.Errorf("poll NLB work request: %w", err)
+				pollFailed = true
+				break
+			}
+			status := wr.Status
+			pct := float32(0)
+			if wr.PercentComplete != nil {
+				pct = *wr.PercentComplete
+			}
+			log.Printf("[Enable500Mbps] status=%s %.0f%%", status, float64(pct))
+			switch status {
+			case networkloadbalancer.OperationStatusSucceeded:
+				if nlb, err := c.findInstanceNLB(ctx, compartmentID, instanceID); err == nil && nlb != nil {
+					log.Printf("[Enable500Mbps] done — NLB IP: %s", nlbPublicIP(nlb.IpAddresses))
+					return nlbPublicIP(nlb.IpAddresses), nil
+				}
+				return "", nil
+			case networkloadbalancer.OperationStatusFailed:
+				lastErr = fmt.Errorf("NLB creation failed")
+				pollFailed = true
+			}
+			if pollFailed {
+				break
+			}
+			select {
+			case <-ctx.Done():
+				return "", ctx.Err()
+			case <-time.After(pollInterval):
+			}
+		}
+		if !pollFailed {
+			lastErr = fmt.Errorf("NLB creation timed out")
 		}
 	}
-	return "", fmt.Errorf("NLB creation timed out")
+	return "", fmt.Errorf("create NLB after 3 retries: %w", lastErr)
 }
 
 // Disable500Mbps deletes the NLB and unbinds the VNIC from the NAT route table.

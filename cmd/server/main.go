@@ -70,11 +70,12 @@ func main() {
 	// create server
 	server := handler.New(cfg, store)
 	srv := &http.Server{
-		Addr:         ":" + cfg.Port,
-		Handler:      server.Handler(),
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 60 * time.Second,
-		IdleTimeout:  120 * time.Second,
+		Addr:              ":" + cfg.Port,
+		Handler:           server.Handler(),
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      60 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 
 	// graceful shutdown

@@ -158,6 +158,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/dingtalk/test", s.withAuth(s.handleDingTalkTest))
 	s.mux.HandleFunc("/api/update/check", s.withAuth(s.handleUpdateCheck))
 	s.mux.HandleFunc("/api/update/now", s.withAuth(s.handleUpdateNow))
+	s.mux.HandleFunc("/api/admin/blacklist/clear", s.withAuth(s.handleAdminBlacklistClear))
 	s.mux.HandleFunc("/api/notify/test", s.withAuth(s.handleNotifyTest))
 	// SSH keys
 	s.mux.HandleFunc("/api/ssh/keys", s.withAuth(s.handleSSHKeys))
@@ -228,6 +229,9 @@ func (s *Server) routes() {
 
 	// G9: tenant upload (BEFORE wildcard /api/tenants/)
 	s.mux.HandleFunc("/api/tenants/upload", s.withAuth(s.handleTenantUpload))
+
+	// G15: batch refresh plan type (BEFORE wildcard /api/tenants/)
+	s.mux.HandleFunc("/api/tenants/refresh-plan-type/batch", s.withAuth(s.handleRefreshPlanTypeBatch))
 
 	// G11: captcha send
 	s.mux.HandleFunc("/api/captcha/send", s.withAuth(s.handleCaptchaSend))
@@ -315,10 +319,10 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, "method not allowed")
 		return
 	}
-	// Check rate limit before proceeding
+	// Check persistent blacklist and rate limit before any auth processing.
 	ip := extractIP(r)
-	if !s.ratelimit.allow(ip) {
-		log.Printf("[login] rate limit exceeded for %s", maskIP(ip))
+	if s.ratelimit.isBlocked(ip) {
+		log.Printf("[login] blocked IP: %s", maskIP(ip))
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
@@ -343,6 +347,8 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if !s.auth.Login(w, r) {
+		// Record failed attempt; may trigger persistent blacklist.
+		s.ratelimit.allow(ip)
 		return
 	}
 	s.ratelimit.reset(ip)
@@ -962,4 +968,34 @@ func (s *Server) handleAIChatCacheClear(w http.ResponseWriter, r *http.Request) 
 	conversationCacheMu.Unlock()
 	s.audit(0, "ai:cache-clear", fmt.Sprintf("cleared %d conversations (session=%s)", cleared, sessionID), r)
 	jsonOK(w, map[string]interface{}{"status": "ok", "cleared": cleared})
+}
+
+// ── Admin: IP Blacklist ──────────────────────────────────────────────────
+
+func (s *Server) handleAdminBlacklistClear(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		IP string `json:"ip"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonErr(w, "invalid body: "+err.Error())
+		return
+	}
+	var removed bool
+	if req.IP == "" {
+		s.ratelimit.clearBlockedIP("")
+		s.audit(0, "blacklist:clear-all", "all blocked IPs cleared", r)
+		jsonOK(w, map[string]interface{}{"status": "ok", "cleared": "all"})
+		return
+	}
+	removed = s.ratelimit.clearBlockedIP(req.IP)
+	if removed {
+		s.audit(0, "blacklist:clear", req.IP, r)
+		jsonOK(w, map[string]interface{}{"status": "ok", "ip": req.IP})
+	} else {
+		jsonOK(w, map[string]interface{}{"status": "not_found", "ip": req.IP})
+	}
 }

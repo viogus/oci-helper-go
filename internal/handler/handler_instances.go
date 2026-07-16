@@ -89,16 +89,18 @@ func (s *Server) createInstance(w http.ResponseWriter, r *http.Request) {
 			CreateVnicDetails: &core.CreateVnicDetails{
 				SubnetId: common.String(req.SubnetID),
 			},
-			SourceDetails: core.InstanceSourceViaImageDetails{
-				ImageId: common.String(req.ImageID),
+			AgentConfig: &core.LaunchInstanceAgentConfigDetails{
+				IsMonitoringDisabled: common.Bool(true),
 			},
 		},
 	}
+	bootVolSize := int64(50)
 	if req.BootVolumeSizeGB != nil {
-		launchReq.LaunchInstanceDetails.SourceDetails = core.InstanceSourceViaImageDetails{
-			ImageId:           common.String(req.ImageID),
-			BootVolumeSizeInGBs: req.BootVolumeSizeGB,
-		}
+		bootVolSize = *req.BootVolumeSizeGB
+	}
+	launchReq.LaunchInstanceDetails.SourceDetails = core.InstanceSourceViaImageDetails{
+		ImageId:             common.String(req.ImageID),
+		BootVolumeSizeInGBs: common.Int64(bootVolSize),
 	}
 	if req.OCPUs != nil {
 		launchReq.LaunchInstanceDetails.ShapeConfig = &core.LaunchInstanceShapeConfigDetails{
@@ -192,11 +194,12 @@ func (s *Server) handleInstanceAction(w http.ResponseWriter, r *http.Request) {
 	_ = parts // instanceID already extracted above
 
 	var req struct {
-		Action              string `json:"action"`
-		TenantID            int64  `json:"tenantId"`
-		PreserveBootVolume  bool   `json:"preserveBootVolume"`
-		CaptchaCode         string `json:"captchaCode"`
-		CaptchaTarget       string `json:"captchaTarget"`
+		Action               string `json:"action"`
+		TenantID             int64  `json:"tenantId"`
+		PreserveBootVolume   bool   `json:"preserveBootVolume"`
+		PreserveDataVolumes  bool   `json:"preserveDataVolumes"`
+		CaptchaCode          string `json:"captchaCode"`
+		CaptchaTarget        string `json:"captchaTarget"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonErr(w, "invalid body: "+err.Error())
@@ -218,7 +221,7 @@ func (s *Server) handleInstanceAction(w http.ResponseWriter, r *http.Request) {
 			jsonErr(w, "invalid or expired captcha code")
 			return
 		}
-		if err := client.TerminateInstance(ctx, instanceID, req.PreserveBootVolume); err != nil {
+		if err := client.TerminateInstance(ctx, instanceID, req.PreserveBootVolume, req.PreserveDataVolumes); err != nil {
 			jsonErr(w, "terminate: "+err.Error())
 			return
 		}
@@ -258,6 +261,17 @@ func (s *Server) handleInstanceAction(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.store.UpdateInstanceState(instanceID, "STARTING")
+	case "stopChangeIp":
+		memTasksMu.Lock()
+		for id, t := range memTasks {
+			if t.InstanceID == instanceID && t.TaskType == "change_ip" {
+				close(t.Cancel)
+				delete(memTasks, id)
+			}
+		}
+		memTasksMu.Unlock()
+		jsonOK(w, map[string]string{"status": "ok"})
+		return
 	default:
 		jsonErr(w, "unknown action: "+req.Action+". use start|stop|reboot|softstop|softreset|terminate")
 		return
@@ -1269,11 +1283,39 @@ func buildCloudInit(password string) string {
 		"      OS=$(echo \"$OS\" | tr '[:upper:]' '[:lower:]')\n" +
 		"      sed -i 's/^#\\?PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config\n" +
 		"      sed -i 's/^#\\?PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config\n" +
+		"      if grep -q '^#\\?PrintMotd' /etc/ssh/sshd_config; then\n" +
+		"        sed -i 's/^#\\?PrintMotd.*/PrintMotd no/' /etc/ssh/sshd_config\n" +
+		"      else\n" +
+		"        echo 'PrintMotd no' >> /etc/ssh/sshd_config\n" +
+		"      fi\n" +
+		"      if grep -q '^#\\?PrintLastLog' /etc/ssh/sshd_config; then\n" +
+		"        sed -i 's/^#\\?PrintLastLog.*/PrintLastLog no/' /etc/ssh/sshd_config\n" +
+		"      else\n" +
+		"        echo 'PrintLastLog no' >> /etc/ssh/sshd_config\n" +
+		"      fi\n" +
+		"      case $OS in\n" +
+		"        ubuntu|debian)\n" +
+		"          if grep -q '^#\\?DenyUsers' /etc/ssh/sshd_config; then\n" +
+		"            sed -i 's/^#\\?DenyUsers.*/DenyUsers ubuntu/' /etc/ssh/sshd_config\n" +
+		"          else\n" +
+		"            echo 'DenyUsers ubuntu' >> /etc/ssh/sshd_config\n" +
+		"          fi\n" +
+		"          ;;\n" +
+		"        ol|rhel|centos|almalinux|rocky)\n" +
+		"          if grep -q '^#\\?DenyUsers' /etc/ssh/sshd_config; then\n" +
+		"            sed -i 's/^#\\?DenyUsers.*/DenyUsers opc/' /etc/ssh/sshd_config\n" +
+		"          else\n" +
+		"            echo 'DenyUsers opc' >> /etc/ssh/sshd_config\n" +
+		"          fi\n" +
+		"          ;;\n" +
+		"      esac\n" +
 		"      if command -v systemctl >/dev/null 2>&1; then\n" +
 		"        systemctl restart sshd 2>/dev/null || systemctl restart ssh 2>/dev/null || true\n" +
 		"      else\n" +
 		"        service sshd restart 2>/dev/null || service ssh restart 2>/dev/null || true\n" +
 		"      fi\n" +
 		"runcmd:\n" +
-		"  - [ bash, /tmp/setup_root_access.sh ]\n"
+		"  - [ bash, /tmp/setup_root_access.sh ]\n" +
+		"  - echo 'Welcome to oci-helper managed instance' > /etc/motd\n" +
+		"  - rm -f /tmp/setup_root_access.sh\n"
 }

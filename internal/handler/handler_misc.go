@@ -157,6 +157,8 @@ func (s *Server) handleTelegramWebhook(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
+	} else {
+		log.Printf("[warn] telegram_webhook_secret not configured — anyone can call the webhook")
 	}
 	var update telegram.Update
 	if err := json.NewDecoder(r.Body).Decode(&update); err != nil {
@@ -372,7 +374,11 @@ func (s *Server) handleDingTalkNotify(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	s.audit(0, "dingtalk:notify", req.Content, r)
+	detail := req.Content
+	if len(detail) > 200 {
+		detail = detail[:200]
+	}
+	s.audit(0, "dingtalk:notify", detail, r)
 	jsonOK(w, map[string]string{"status": "ok"})
 }
 

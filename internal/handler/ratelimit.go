@@ -14,21 +14,23 @@ type rateLimitEntry struct {
 }
 
 type loginRateLimiter struct {
-	mu       sync.Mutex
-	entries  map[string]*rateLimitEntry
-	window   time.Duration
-	maxHits  int
+	mu              sync.Mutex
+	entries         map[string]*rateLimitEntry
+	blockedIPs      map[string]time.Time
+	window          time.Duration
+	maxHits         int
 	cleanupInterval time.Duration
-	stopCh   chan struct{}
+	stopCh          chan struct{}
 }
 
 func newLoginRateLimiter() *loginRateLimiter {
 	rl := &loginRateLimiter{
-		entries:  make(map[string]*rateLimitEntry),
-		window:   15 * time.Minute,
-		maxHits:  5,
+		entries:         make(map[string]*rateLimitEntry),
+		blockedIPs:      make(map[string]time.Time),
+		window:          15 * time.Minute,
+		maxHits:         5,
 		cleanupInterval: 5 * time.Minute,
-		stopCh:   make(chan struct{}),
+		stopCh:          make(chan struct{}),
 	}
 	go rl.cleanupLoop()
 	return rl
@@ -45,13 +47,46 @@ func (rl *loginRateLimiter) allow(ip string) bool {
 		return true
 	}
 	entry.count++
-	return entry.count <= rl.maxHits
+	if entry.count > rl.maxHits {
+		rl.blockedIPs[ip] = now
+		return false
+	}
+	return true
 }
 
 func (rl *loginRateLimiter) reset(ip string) {
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
 	delete(rl.entries, ip)
+}
+
+func (rl *loginRateLimiter) isBlocked(ip string) bool {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+
+	// Check persistent blacklist first.
+	if _, blocked := rl.blockedIPs[ip]; blocked {
+		return true
+	}
+	// Check time-window rate limit.
+	entry, ok := rl.entries[ip]
+	if ok && time.Since(entry.start) <= rl.window && entry.count > rl.maxHits {
+		return true
+	}
+	return false
+}
+
+func (rl *loginRateLimiter) clearBlockedIP(ip string) bool {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+	if ip == "" {
+		// Clear all.
+		rl.blockedIPs = make(map[string]time.Time)
+		return true
+	}
+	_, exists := rl.blockedIPs[ip]
+	delete(rl.blockedIPs, ip)
+	return exists
 }
 
 func (rl *loginRateLimiter) cleanupLoop() {

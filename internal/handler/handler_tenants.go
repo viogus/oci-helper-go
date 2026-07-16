@@ -880,6 +880,69 @@ func (s *Server) handleRefreshPlanType(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleRefreshPlanTypeBatch accepts POST with {"tenant_ids": [1, 2, 3]} and
+// refreshes the subscription plan type for each tenant in the list.
+func (s *Server) handleRefreshPlanTypeBatch(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		TenantIDs []int64 `json:"tenant_ids"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonErr(w, "invalid body: "+err.Error())
+		return
+	}
+	if len(req.TenantIDs) == 0 {
+		jsonErr(w, "tenant_ids required")
+		return
+	}
+
+	type result struct {
+		TenantID int64  `json:"tenant_id"`
+		PlanType string `json:"plan_type"`
+		Error    string `json:"error"`
+	}
+	results := make([]result, 0, len(req.TenantIDs))
+
+	for _, tenantID := range req.TenantIDs {
+		res := result{TenantID: tenantID}
+		t, _ := s.store.GetTenant(tenantID)
+		if t == nil {
+			res.Error = "tenant not found"
+			results = append(results, res)
+			continue
+		}
+		client, err := s.clientFor(t)
+		if err != nil {
+			res.Error = "oci client: " + err.Error()
+			results = append(results, res)
+			continue
+		}
+		sub, err := client.GetSubscriptionInfo(r.Context())
+		if err != nil {
+			res.Error = "subscription: " + err.Error()
+			results = append(results, res)
+			continue
+		}
+		if sub != nil {
+			res.PlanType = string(sub.PlanType)
+			if err := s.store.SetConfig(fmt.Sprintf("tenant_plan_type_%d", tenantID), res.PlanType); err != nil {
+				log.Printf("[refresh-plan-type-batch] save plan type for tenant %d: %v", tenantID, err)
+			}
+		}
+		configKey := fmt.Sprintf("tenant_plan_refresh_%d", tenantID)
+		if err := s.store.SetConfig(configKey, time.Now().Format(time.RFC3339)); err != nil {
+			log.Printf("[refresh-plan-type-batch] save refresh time for tenant %d: %v", tenantID, err)
+		}
+		s.audit(tenantID, "tenant:refresh-plan-type", "", r)
+		results = append(results, res)
+	}
+
+	jsonOK(w, map[string]interface{}{"results": results})
+}
+
 // --- helpers ---
 
 func safeStr(s *string) string {

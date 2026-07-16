@@ -79,7 +79,7 @@ func clientForTenant(t *db.Tenant, keysDir string) (*ociclient.Client, error) {
 			return nil, fmt.Errorf("key file path escapes keys directory: %s", t.KeyFile)
 		}
 		if _, err := os.Stat(keyPath); err != nil {
-			log.Printf("[clientFor] key file stat error: %v", err)
+			return nil, fmt.Errorf("key file not found: %s", keyPath)
 		}
 	}
 

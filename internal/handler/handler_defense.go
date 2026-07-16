@@ -11,6 +11,8 @@ import (
 	"github.com/viogus/oci-helper-go/internal/db"
 )
 
+const defenseOriginalRulesPrefix = "defense_original_rules_"
+
 func (s *Server) handleDefenseEnable(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
@@ -83,8 +85,13 @@ func (s *Server) handleDefenseEnable(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Save the original rules so disable can restore them exactly.
-	origJSON, _ := json.Marshal(sl.IngressSecurityRules)
-	s.store.SetConfig("defense_original_rules", string(origJSON))
+	// Only save the first time — a second enable call sees already-filtered
+	// rules and would overwrite the true originals.
+	origKey := defenseOriginalRulesPrefix + req.VcnID
+	if origStr, _ := s.store.GetConfig(origKey); origStr == "" {
+		origJSON, _ := json.Marshal(sl.IngressSecurityRules)
+		s.store.SetConfig(origKey, string(origJSON))
+	}
 
 	s.store.SetConfig("defense_enabled", "true")
 	s.store.SetConfig("defense_tenant", strconv.FormatInt(req.TenantID, 10))
@@ -137,16 +144,28 @@ func (s *Server) handleDefenseDisable(w http.ResponseWriter, r *http.Request) {
 	// Restore: load the original rules saved during enable.
 	// If none saved (legacy), fall back to adding an allow-all rule.
 	var restoredRules []core.IngressSecurityRule
-	if origStr, err := s.store.GetConfig("defense_original_rules"); err == nil && origStr != "" {
+	if origStr, err := s.store.GetConfig(defenseOriginalRulesPrefix + req.VcnID); err == nil && origStr != "" {
 		if err := json.Unmarshal([]byte(origStr), &restoredRules); err != nil {
 			restoredRules = nil
 		}
 	}
 	if restoredRules == nil {
-		restoredRules = append(sl.IngressSecurityRules, core.IngressSecurityRule{
-			Protocol: common.String("all"),
-			Source:   common.String("0.0.0.0/0"),
-		})
+		// Check if an allow-all rule already exists before appending.
+		hasAllowAll := false
+		for _, r := range sl.IngressSecurityRules {
+			if r.Protocol != nil && *r.Protocol == "all" &&
+				r.Source != nil && *r.Source == "0.0.0.0/0" {
+				hasAllowAll = true
+				break
+			}
+		}
+		restoredRules = sl.IngressSecurityRules
+		if !hasAllowAll {
+			restoredRules = append(restoredRules, core.IngressSecurityRule{
+				Protocol: common.String("all"),
+				Source:   common.String("0.0.0.0/0"),
+			})
+		}
 	}
 
 	updateReq := core.UpdateSecurityListRequest{
@@ -163,7 +182,7 @@ func (s *Server) handleDefenseDisable(w http.ResponseWriter, r *http.Request) {
 
 	s.store.SetConfig("defense_enabled", "false")
 	s.store.SetConfig("defense_cidrs", "")
-	s.store.SetConfig("defense_original_rules", "")
+	s.store.SetConfig(defenseOriginalRulesPrefix+req.VcnID, "")
 	s.audit(req.TenantID, "defense:disable", req.VcnID, r)
 	jsonOK(w, map[string]string{"status": "ok"})
 }

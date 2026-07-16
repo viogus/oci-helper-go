@@ -119,6 +119,8 @@ func NewClient(t *db.Tenant) (*Client, error) {
 // Client per region — avoids re-reading the key file and re-creating all SDK
 // clients.
 func (c *Client) SetRegion(region string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.compute.SetRegion(region)
 	c.vcn.SetRegion(region)
 	c.identity.SetRegion(region)
@@ -210,8 +212,11 @@ func (c *Client) LaunchInstance(ctx context.Context, region, ad, shape, imageID,
 	return err
 }
 
-func (c *Client) TerminateInstance(ctx context.Context, instanceID string) error {
-	req := core.TerminateInstanceRequest{InstanceId: common.String(instanceID)}
+func (c *Client) TerminateInstance(ctx context.Context, instanceID string, preserveBootVolume bool) error {
+	req := core.TerminateInstanceRequest{
+		InstanceId:         common.String(instanceID),
+		PreserveBootVolume: common.Bool(preserveBootVolume),
+	}
 	_, err := c.compute.TerminateInstance(ctx, req)
 	return err
 }
@@ -455,16 +460,26 @@ func (c *Client) ListImages(ctx context.Context, compartmentID, os string) ([]co
 
 func (c *Client) ListVnicAttachments(ctx context.Context, compartmentID, instanceID string) ([]core.VnicAttachment, error) {
 	defer c.withSubtreeInterceptor(&c.compute.Interceptor)()
-	req := core.ListVnicAttachmentsRequest{
-		CompartmentId: common.String(compartmentID),
-		InstanceId:    common.String(instanceID),
-		Limit:         common.Int(50),
+	var all []core.VnicAttachment
+	page := common.String("")
+	for {
+		req := core.ListVnicAttachmentsRequest{
+			CompartmentId: common.String(compartmentID),
+			InstanceId:    common.String(instanceID),
+			Limit:         common.Int(50),
+			Page:          page,
+		}
+		resp, err := c.compute.ListVnicAttachments(ctx, req)
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, resp.Items...)
+		if resp.OpcNextPage == nil || *resp.OpcNextPage == "" {
+			break
+		}
+		page = resp.OpcNextPage
 	}
-	resp, err := c.compute.ListVnicAttachments(ctx, req)
-	if err != nil {
-		return nil, err
-	}
-	return resp.Items, nil
+	return all, nil
 }
 
 func (c *Client) GetVnic(ctx context.Context, vnicID string) (*core.Vnic, error) {
@@ -575,16 +590,26 @@ func (c *Client) UpdateBootVolume(ctx context.Context, id string, sizeInGBs int6
 
 func (c *Client) ListBootVolumeAttachments(ctx context.Context, compartmentID, instanceID string) ([]core.BootVolumeAttachment, error) {
 	defer c.withSubtreeInterceptor(&c.compute.Interceptor)()
-	req := core.ListBootVolumeAttachmentsRequest{
-		CompartmentId: common.String(compartmentID),
-		InstanceId:    common.String(instanceID),
-		Limit:         common.Int(50),
+	var all []core.BootVolumeAttachment
+	page := common.String("")
+	for {
+		req := core.ListBootVolumeAttachmentsRequest{
+			CompartmentId: common.String(compartmentID),
+			InstanceId:    common.String(instanceID),
+			Limit:         common.Int(50),
+			Page:          page,
+		}
+		resp, err := c.compute.ListBootVolumeAttachments(ctx, req)
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, resp.Items...)
+		if resp.OpcNextPage == nil || *resp.OpcNextPage == "" {
+			break
+		}
+		page = resp.OpcNextPage
 	}
-	resp, err := c.compute.ListBootVolumeAttachments(ctx, req)
-	if err != nil {
-		return nil, err
-	}
-	return resp.Items, nil
+	return all, nil
 }
 
 func (c *Client) AttachBootVolume(ctx context.Context, bootVolumeID, instanceID string) (*core.BootVolumeAttachment, error) {
@@ -645,6 +670,18 @@ func (c *Client) UpdateInstanceDisplayName(ctx context.Context, instanceID, disp
 	return err
 }
 
+func (c *Client) UpdateInstanceFreeformTags(ctx context.Context, instanceID string, tags map[string]string) error {
+	details := core.UpdateInstanceDetails{
+		FreeformTags: tags,
+	}
+	req := core.UpdateInstanceRequest{
+		InstanceId:            common.String(instanceID),
+		UpdateInstanceDetails: details,
+	}
+	_, err := c.compute.UpdateInstance(ctx, req)
+	return err
+}
+
 func (c *Client) GetBootVolumeAttachment(ctx context.Context, compartmentID, instanceID string) (*core.BootVolumeAttachment, error) {
 	defer c.withSubtreeInterceptor(&c.compute.Interceptor)()
 	req := core.ListBootVolumeAttachmentsRequest{
@@ -675,9 +712,13 @@ func (c *Client) GetInstanceVNICs(ctx context.Context, compartmentID, instanceID
 		}
 		vnic, err := c.GetVnic(ctx, *att.VnicId)
 		if err != nil {
-			return nil, err
+			log.Printf("[warn] get vnic %s: %v", *att.VnicId, err)
+			continue
 		}
 		vnics = append(vnics, *vnic)
+	}
+	if len(vnics) == 0 && len(attachments) > 0 {
+		return nil, fmt.Errorf("failed to fetch any VNICs for instance %s (%d attachments)", instanceID, len(attachments))
 	}
 	return vnics, nil
 }
@@ -747,7 +788,19 @@ func (c *Client) EnableIPv6(ctx context.Context, instanceID string) (string, err
 
 	// 2. Ensure the subnet has an IPv6 /64 carved from the VCN /56.
 	if subnet.Ipv6CidrBlock == nil || *subnet.Ipv6CidrBlock == "" {
-		subnetCidr, derr := deriveSubnetIpv6(vcnIpv6)
+		// Collect already-used IPv6 CIDRs across all subnets in the VCN.
+		var usedCIDRs []string
+		existingSubnets, err := c.ListSubnets(ctx, compartmentID, vcnID)
+		if err != nil {
+			log.Printf("[warn] list subnets for VCN %s: %v", vcnID, err)
+		} else {
+			for _, s := range existingSubnets {
+				if s.Ipv6CidrBlock != nil && *s.Ipv6CidrBlock != "" {
+					usedCIDRs = append(usedCIDRs, *s.Ipv6CidrBlock)
+				}
+			}
+		}
+		subnetCidr, derr := deriveSubnetIpv6(vcnIpv6, usedCIDRs)
 		if derr != nil {
 			return "", derr
 		}
@@ -821,14 +874,35 @@ func (c *Client) DisableIPv6(ctx context.Context, instanceID string) error {
 	return nil
 }
 
-// deriveSubnetIpv6 carves a /64 (subnet 0) from a VCN IPv6 /56 block.
-func deriveSubnetIpv6(vcnCidr string) (string, error) {
+// deriveSubnetIpv6 carves a /64 from a VCN IPv6 /56 block, skipping
+// already-used subnets. The VCN /56 has 256 /64 subnets (0-255).
+func deriveSubnetIpv6(vcnCidr string, usedCIDRs []string) (string, error) {
 	_, ipnet, err := net.ParseCIDR(vcnCidr)
 	if err != nil {
 		return "", fmt.Errorf("parse vcn ipv6 cidr %q: %w", vcnCidr, err)
 	}
-	ip := ipnet.IP.Mask(net.CIDRMask(64, 128))
-	return ip.String() + "/64", nil
+	used := make(map[string]bool, len(usedCIDRs))
+	for _, cidr := range usedCIDRs {
+		used[cidr] = true
+	}
+	ip := ipnet.IP.To16()
+	if ip == nil {
+		return "", fmt.Errorf("vcn ipv6 cidr %q is not a valid IPv6 address", vcnCidr)
+	}
+	// A /56 leaves the top 56 bits fixed. Subnet bits are bits 56-63 (the 8 bits
+	// between /56 and /64). Iterate through all 256 possible subnets.
+	mask := net.CIDRMask(56, 128)
+	baseIP := ip.Mask(mask)
+	for i := 0; i < 256; i++ {
+		candidate := make(net.IP, len(baseIP))
+		copy(candidate, baseIP)
+		candidate[7] = byte(i) // bits 56-63 live in byte 7 (0-indexed).
+		cidr := candidate.String() + "/64"
+		if !used[cidr] {
+			return cidr, nil
+		}
+	}
+	return "", fmt.Errorf("all 256 /64 subnets in VCN /56 %s are already in use", vcnCidr)
 }
 
 // ensureIPv6Route adds a ::/0 → internet-gateway rule to the route table if absent.
@@ -1490,7 +1564,10 @@ func (c *Client) AddIngressRule(ctx context.Context, vcnID, protocol, port, sour
 			newRule.TcpOptions = &core.TcpOptions{DestinationPortRange: portRange}
 		}
 	}
-	ingressRules = append(ingressRules, newRule)
+	// Dedup: skip if identical rule already exists.
+	if !hasIngressRule(ingressRules, newRule) {
+		ingressRules = append(ingressRules, newRule)
+	}
 
 	updateReq := core.UpdateSecurityListRequest{
 		SecurityListId: sl.Id,
@@ -1501,6 +1578,108 @@ func (c *Client) AddIngressRule(ctx context.Context, vcnID, protocol, port, sour
 	}
 	_, err = c.vcn.UpdateSecurityList(ctx, updateReq)
 	return err
+}
+
+// hasIngressRule checks whether an equivalent ingress rule already exists.
+func hasIngressRule(rules []core.IngressSecurityRule, rule core.IngressSecurityRule) bool {
+	for _, r := range rules {
+		if !strPtrEq(r.Protocol, rule.Protocol) {
+			continue
+		}
+		if !strPtrEq(r.Source, rule.Source) {
+			continue
+		}
+		if !tcpOptionsEq(r.TcpOptions, rule.TcpOptions) {
+			continue
+		}
+		if !udpOptionsEq(r.UdpOptions, rule.UdpOptions) {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+// hasEgressRule checks whether an equivalent egress rule already exists.
+func hasEgressRule(rules []core.EgressSecurityRule, rule core.EgressSecurityRule) bool {
+	for _, r := range rules {
+		if !strPtrEq(r.Protocol, rule.Protocol) {
+			continue
+		}
+		if !strPtrEq(r.Destination, rule.Destination) {
+			continue
+		}
+		if !tcpOptionsEq(r.TcpOptions, rule.TcpOptions) {
+			continue
+		}
+		if !udpOptionsEq(r.UdpOptions, rule.UdpOptions) {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+func strPtrEq(a, b *string) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	return *a == *b
+}
+
+func tcpOptionsEq(a, b *core.TcpOptions) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	if (a.DestinationPortRange == nil) != (b.DestinationPortRange == nil) {
+		return false
+	}
+	if a.DestinationPortRange != nil {
+		if !intPtrEq(a.DestinationPortRange.Min, b.DestinationPortRange.Min) {
+			return false
+		}
+		if !intPtrEq(a.DestinationPortRange.Max, b.DestinationPortRange.Max) {
+			return false
+		}
+	}
+	return true
+}
+
+func udpOptionsEq(a, b *core.UdpOptions) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	if (a.DestinationPortRange == nil) != (b.DestinationPortRange == nil) {
+		return false
+	}
+	if a.DestinationPortRange != nil {
+		if !intPtrEq(a.DestinationPortRange.Min, b.DestinationPortRange.Min) {
+			return false
+		}
+		if !intPtrEq(a.DestinationPortRange.Max, b.DestinationPortRange.Max) {
+			return false
+		}
+	}
+	return true
+}
+
+func intPtrEq(a, b *int) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	return *a == *b
 }
 
 func (c *Client) AddEgressRule(ctx context.Context, vcnID, protocol, port, dest string) error {
@@ -1540,7 +1719,10 @@ func (c *Client) AddEgressRule(ctx context.Context, vcnID, protocol, port, dest 
 				newRule.TcpOptions = &core.TcpOptions{DestinationPortRange: portRange}
 			}
 	}
-	egressRules = append(egressRules, newRule)
+	// Dedup: skip if identical rule already exists.
+	if !hasEgressRule(egressRules, newRule) {
+		egressRules = append(egressRules, newRule)
+	}
 
 	updateReq := core.UpdateSecurityListRequest{
 		SecurityListId: sl.Id,
@@ -1708,10 +1890,20 @@ func (c *Client) ReleaseAllPorts(ctx context.Context, vcnID string) error {
 	}
 	for _, sl := range resp.Items {
 		ingressRules := sl.IngressSecurityRules
-		ingressRules = append(ingressRules, core.IngressSecurityRule{
-			Protocol: common.String("all"),
-			Source:   common.String("0.0.0.0/0"),
-		})
+		hasAllowAll := false
+		for _, r := range ingressRules {
+			if r.Protocol != nil && *r.Protocol == "all" &&
+				r.Source != nil && *r.Source == "0.0.0.0/0" {
+				hasAllowAll = true
+				break
+			}
+		}
+		if !hasAllowAll {
+			ingressRules = append(ingressRules, core.IngressSecurityRule{
+				Protocol: common.String("all"),
+				Source:   common.String("0.0.0.0/0"),
+			})
+		}
 		updateReq := core.UpdateSecurityListRequest{
 			SecurityListId: sl.Id,
 			UpdateSecurityListDetails: core.UpdateSecurityListDetails{
@@ -2268,8 +2460,43 @@ func (c *Client) ChangeInstanceIP(ctx context.Context, instanceID string, cidrLi
 		return "", fmt.Errorf("no primary private IP found for VNIC")
 	}
 
-	// Delete old public IP
-	// Find the public IP OCID by listing (paginated to handle large tenancies).
+	// Create new public IP first (preserve old IP in case CIDR filter rejects).
+	createReq := core.CreatePublicIpRequest{
+		CreatePublicIpDetails: core.CreatePublicIpDetails{
+			CompartmentId: common.String(c.tenant.TenancyOCID),
+			Lifetime:      core.CreatePublicIpDetailsLifetimeEphemeral,
+			PrivateIpId:   privateIPID,
+		},
+	}
+	createResp, err := c.vcn.CreatePublicIp(ctx, createReq)
+	if err != nil {
+		return "", fmt.Errorf("create new IP: %w", err)
+	}
+
+	newIP := ""
+	if createResp.PublicIp.IpAddress != nil {
+		newIP = *createResp.PublicIp.IpAddress
+	}
+
+	// Check CIDR filter before deleting the old IP.
+	if len(cidrList) > 0 {
+		matched := false
+		for _, cidr := range cidrList {
+			if ipInCIDR(newIP, cidr) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			// CIDR mismatch: delete the unwanted new IP and return error.
+			if createResp.PublicIp.Id != nil {
+				c.vcn.DeletePublicIp(ctx, core.DeletePublicIpRequest{PublicIpId: createResp.PublicIp.Id})
+			}
+			return "", fmt.Errorf("new IP %s not in desired CIDR ranges: %v", newIP, cidrList)
+		}
+	}
+
+	// CIDR OK (or no filter): now safe to delete the old public IP.
 	var oldIPID string
 	var page *string
 	for {
@@ -2297,45 +2524,9 @@ func (c *Client) ChangeInstanceIP(ctx context.Context, instanceID string, cidrLi
 		}
 		page = pipResp.OpcNextPage
 	}
-	if oldIPID == "" {
-		return "", fmt.Errorf("public IP not found in tenancy")
-	}
-
-	// Delete the old public IP
-	delReq := core.DeletePublicIpRequest{PublicIpId: common.String(oldIPID)}
-	if _, err := c.vcn.DeletePublicIp(ctx, delReq); err != nil {
-		return "", fmt.Errorf("delete old IP: %w", err)
-	}
-
-	// Create new public IP
-	createReq := core.CreatePublicIpRequest{
-		CreatePublicIpDetails: core.CreatePublicIpDetails{
-			CompartmentId: common.String(c.tenant.TenancyOCID),
-			Lifetime:      core.CreatePublicIpDetailsLifetimeEphemeral,
-			PrivateIpId:   privateIPID,
-		},
-	}
-	createResp, err := c.vcn.CreatePublicIp(ctx, createReq)
-	if err != nil {
-		return "", fmt.Errorf("create new IP: %w", err)
-	}
-
-	newIP := ""
-	if createResp.PublicIp.IpAddress != nil {
-		newIP = *createResp.PublicIp.IpAddress
-	}
-
-	// Check CIDR filter if specified
-	if len(cidrList) > 0 {
-		matched := false
-		for _, cidr := range cidrList {
-			if ipInCIDR(newIP, cidr) {
-				matched = true
-				break
-			}
-		}
-		if !matched {
-			return "", fmt.Errorf("new IP %s not in desired CIDR ranges: %v", newIP, cidrList)
+	if oldIPID != "" {
+		if _, err := c.vcn.DeletePublicIp(ctx, core.DeletePublicIpRequest{PublicIpId: common.String(oldIPID)}); err != nil {
+			log.Printf("[ChangeInstanceIP] delete old IP %s: %v", oldIP, err)
 		}
 	}
 

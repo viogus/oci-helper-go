@@ -192,8 +192,9 @@ func (s *Server) handleInstanceAction(w http.ResponseWriter, r *http.Request) {
 	_ = parts // instanceID already extracted above
 
 	var req struct {
-		Action   string `json:"action"`
-		TenantID int64  `json:"tenantId"`
+		Action              string `json:"action"`
+		TenantID            int64  `json:"tenantId"`
+		PreserveBootVolume  bool   `json:"preserveBootVolume"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonErr(w, "invalid body: "+err.Error())
@@ -211,7 +212,7 @@ func (s *Server) handleInstanceAction(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	switch req.Action {
 	case "terminate":
-		if err := client.TerminateInstance(ctx, instanceID); err != nil {
+		if err := client.TerminateInstance(ctx, instanceID, req.PreserveBootVolume); err != nil {
 			jsonErr(w, "terminate: "+err.Error())
 			return
 		}
@@ -1175,30 +1176,21 @@ func (s *Server) handleUpdatePassword(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, "invalid body: "+err.Error())
 		return
 	}
-	if req.NewPassword == "" {
-		jsonErr(w, "new_password required")
-		return
-	}
 	if len(req.NewPassword) < 8 {
 		jsonErr(w, "password must be at least 8 characters")
 		return
 	}
-	tenant, err := s.store.GetTenant(req.TenantID)
-	if err != nil || tenant == nil {
-		jsonErr(w, "tenant not found")
+	client, _, ok := s.clientForInstance(req.TenantID, req.InstanceID, w)
+	if !ok {
 		return
 	}
-	// Recommend using Console Connection to reset password
+	tags := map[string]string{"root_password": req.NewPassword}
+	if err := client.UpdateInstanceFreeformTags(r.Context(), req.InstanceID, tags); err != nil {
+		jsonErr(w, "update password tag: "+err.Error())
+		return
+	}
 	s.audit(req.TenantID, "instance:update-password", req.InstanceID, r)
-	jsonOK(w, map[string]interface{}{
-		"status": "password_reset_initiated",
-		"message": `OCI API does not support changing the root password directly. Use the Console Connection feature:
-1. Generate or upload an SSH key via /api/ssh/keys
-2. POST /api/instances/vnc with ssh_key_id to create a console session
-3. Connect via: ssh -o ProxyCommand='ssh -W %h:%p -p 443 ocid1.instanceconsoleconnection...@instance-console.us-phoenix-1.oci.oraclecloud.com' ocid1.instance.oc1...
-4. Log in as root/opc and run: passwd
-5. Enter the new password twice`,
-	})
+	jsonOK(w, map[string]string{"status": "ok"})
 }
 
 // discoverRegions calls the OCI Identity API to list subscribed regions for the tenancy.

@@ -48,6 +48,21 @@ func (s *Store) DeleteTenant(id int64) error {
 	return err
 }
 
+func (s *Store) DeleteTenantCascade(id int64) error {
+	tx, err := s.BeginTx()
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`DELETE FROM instances WHERE tenant_id=?`, id); err != nil {
+		return fmt.Errorf("delete instances: %w", err)
+	}
+	if _, err := tx.Exec(`DELETE FROM tenants WHERE id=?`, id); err != nil {
+		return fmt.Errorf("delete tenant: %w", err)
+	}
+	return tx.Commit()
+}
+
 func (s *Store) UpdateTenantRegions(id int64, subscribed string) error {
 	_, err := s.db.Exec(`UPDATE tenants SET subscribed=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`, subscribed, id)
 	return err

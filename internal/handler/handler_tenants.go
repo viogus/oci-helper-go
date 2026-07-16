@@ -66,6 +66,10 @@ func (s *Server) handleTenants(w http.ResponseWriter, r *http.Request) {
 			jsonErr(w, "invalid body: "+err.Error())
 			return
 		}
+		if t.Name == "" || t.TenancyOCID == "" || t.Region == "" || t.KeyFile == "" {
+			jsonErr(w, "name, tenancyOcid, region, and keyFile are required")
+			return
+		}
 		if err := s.store.CreateTenant(&t); err != nil {
 			jsonErr(w, "create tenant: "+err.Error())
 			return
@@ -184,8 +188,10 @@ func (s *Server) handleTenantByID(w http.ResponseWriter, r *http.Request) {
 		}
 		jsonOK(w, t)
 	case http.MethodDelete:
-		s.store.DeleteInstancesByTenant(id)
-		s.store.DeleteTenant(id)
+			if err := s.store.DeleteTenantCascade(id); err != nil {
+				jsonErr(w, "delete tenant: "+err.Error())
+				return
+			}
 		s.audit(id, "tenant:delete", fmt.Sprintf("id=%d", id), r)
 		jsonOK(w, map[string]string{"status": "ok"})
 	default:

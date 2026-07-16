@@ -2,8 +2,10 @@ package handler
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -12,7 +14,6 @@ import (
 
 	"github.com/oracle/oci-go-sdk/v65/common"
 	"github.com/oracle/oci-go-sdk/v65/core"
-	"log"
 
 	"github.com/viogus/oci-helper-go/internal/db"
 	ociclient "github.com/viogus/oci-helper-go/internal/oci"
@@ -59,6 +60,8 @@ func (s *Server) createInstance(w http.ResponseWriter, r *http.Request) {
 		OCPUs               *float32 `json:"ocpus"`
 			Region              string   `json:"region"`
 		MemoryGB            *float32 `json:"memoryGB"`
+		SSHKeyID            int64   `json:"sshKeyId"`
+		RootPassword        string  `json:"rootPassword"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonErr(w, "invalid body: "+err.Error())
@@ -107,6 +110,35 @@ func (s *Server) createInstance(w http.ResponseWriter, r *http.Request) {
 			launchReq.LaunchInstanceDetails.ShapeConfig = &core.LaunchInstanceShapeConfigDetails{}
 		}
 		launchReq.LaunchInstanceDetails.ShapeConfig.MemoryInGBs = req.MemoryGB
+	}
+
+	// SSH key and root password metadata (cloud-init).
+	metadata := map[string]string{}
+	if req.SSHKeyID > 0 || req.RootPassword != "" {
+		sshKeys, _ := s.store.ListSSHKeys(req.TenantID)
+		if req.SSHKeyID > 0 && len(sshKeys) > 0 {
+			for _, k := range sshKeys {
+				if k.ID == req.SSHKeyID && k.PublicKey != "" {
+					metadata["ssh_authorized_keys"] = k.PublicKey
+					break
+				}
+			}
+		}
+		if req.RootPassword != "" {
+			script := buildCloudInit(req.RootPassword)
+			metadata["user_data"] = base64.StdEncoding.EncodeToString([]byte(script))
+		}
+		if len(metadata) > 0 {
+			launchReq.LaunchInstanceDetails.Metadata = metadata
+		}
+	}
+
+	// Persist root password as freeform tag so it can be retrieved later.
+	if req.RootPassword != "" {
+		if launchReq.LaunchInstanceDetails.FreeformTags == nil {
+			launchReq.LaunchInstanceDetails.FreeformTags = map[string]string{}
+		}
+		launchReq.LaunchInstanceDetails.FreeformTags["root_password"] = req.RootPassword
 	}
 
 	inst, err := client.LaunchInstanceWithRequest(r.Context(), launchReq)
@@ -1211,4 +1243,39 @@ func updateTenantRegions(store *db.Store, tenantID int64, regions []string) {
 	if err := store.UpdateTenantRegions(tenantID, string(data)); err != nil {
 		log.Printf("[regions] update tenant %d regions: %v", tenantID, err)
 	}
+}
+
+// buildCloudInit returns a cloud-init script that sets the root password
+// and enables SSH password authentication. Mirrors Java's getPwdShell().
+func buildCloudInit(password string) string {
+	// Escape backslash and dollar signs for safe YAML embedding.
+	safePwd := strings.ReplaceAll(password, `\`, `\\`)
+	safePwd = strings.ReplaceAll(safePwd, `$`, `\$`)
+	return "#cloud-config\n" +
+		"ssh_pwauth: yes\n" +
+		"chpasswd:\n" +
+		"  list: |\n" +
+		"    root:" + safePwd + "\n" +
+		"  expire: false\n" +
+		"write_files:\n" +
+		"  - path: /tmp/setup_root_access.sh\n" +
+		"    permissions: '0700'\n" +
+		"    content: |\n" +
+		"      #!/bin/bash\n" +
+		"      if [ -f /etc/os-release ]; then\n" +
+		"        . /etc/os-release\n" +
+		"        OS=$ID\n" +
+		"      else\n" +
+		"        exit 1\n" +
+		"      fi\n" +
+		"      OS=$(echo \"$OS\" | tr '[:upper:]' '[:lower:]')\n" +
+		"      sed -i 's/^#\\?PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config\n" +
+		"      sed -i 's/^#\\?PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config\n" +
+		"      if command -v systemctl >/dev/null 2>&1; then\n" +
+		"        systemctl restart sshd 2>/dev/null || systemctl restart ssh 2>/dev/null || true\n" +
+		"      else\n" +
+		"        service sshd restart 2>/dev/null || service ssh restart 2>/dev/null || true\n" +
+		"      fi\n" +
+		"runcmd:\n" +
+		"  - [ bash, /tmp/setup_root_access.sh ]\n"
 }

@@ -766,8 +766,8 @@ func (c *Client) EnableIPv6(ctx context.Context, instanceID string) (string, err
 		return "", err
 	}
 
-	// 4. Mirror IPv4 ingress rules to IPv6 so the same ports are reachable.
-	if err := c.mirrorIngressToIPv6(ctx, subnet.SecurityListIds); err != nil {
+	// 4. Mirror IPv4 ingress and egress rules to IPv6 so the same ports are reachable.
+	if err := c.mirrorToIPv6(ctx, subnet.SecurityListIds); err != nil {
 		return "", err
 	}
 
@@ -866,50 +866,76 @@ func (c *Client) ensureIPv6Route(ctx context.Context, vcnID string, routeTableID
 	return nil
 }
 
-// mirrorIngressToIPv6 copies each 0.0.0.0/0 ingress rule to a ::/0 equivalent,
-// skipping any that already exist, and applies the update per security list.
-func (c *Client) mirrorIngressToIPv6(ctx context.Context, securityListIDs []string) error {
-	for _, slID := range securityListIDs {
-		sl, err := c.vcn.GetSecurityList(ctx, core.GetSecurityListRequest{SecurityListId: common.String(slID)})
-		if err != nil {
-			return fmt.Errorf("get security list: %w", err)
-		}
-		rules := sl.IngressSecurityRules
-		existing := map[string]bool{}
-		for _, r := range rules {
-			if r.Source != nil && strings.Contains(*r.Source, ":") {
-				existing[ingressRuleKey(r)] = true
+	// mirrorToIPv6 copies each 0.0.0.0/0 ingress and egress rule to a ::/0
+	// equivalent, skipping duplicates. Applies the update per security list.
+	func (c *Client) mirrorToIPv6(ctx context.Context, securityListIDs []string) error {
+		for _, slID := range securityListIDs {
+			sl, err := c.vcn.GetSecurityList(ctx, core.GetSecurityListRequest{SecurityListId: common.String(slID)})
+			if err != nil {
+				return fmt.Errorf("get security list: %w", err)
 			}
-		}
-		added := false
-		for _, r := range rules {
-			if r.Source == nil || *r.Source != "0.0.0.0/0" {
+
+			// --- Ingress: mirror 0.0.0.0/0 → ::/0 ---
+			ingressRules := sl.IngressSecurityRules
+			ingressExisting := map[string]bool{}
+			for _, r := range ingressRules {
+				if r.Source != nil && strings.Contains(*r.Source, ":") {
+					ingressExisting[ingressRuleKey(r)] = true
+				}
+			}
+			ingressAdded := false
+			for _, r := range ingressRules {
+				if r.Source == nil || *r.Source != "0.0.0.0/0" {
+					continue
+				}
+				v6 := r
+				v6.Source = common.String("::/0")
+				v6.SourceType = core.IngressSecurityRuleSourceTypeCidrBlock
+				if ingressExisting[ingressRuleKey(v6)] {
+					continue
+				}
+				ingressRules = append(ingressRules, v6)
+				ingressAdded = true
+			}
+
+			// --- Egress: mirror 0.0.0.0/0 → ::/0 ---
+			egressRules := sl.EgressSecurityRules
+			egressExisting := map[string]bool{}
+			for _, r := range egressRules {
+				if r.Destination != nil && strings.Contains(*r.Destination, ":") {
+					egressExisting[egressRuleKey(r)] = true
+				}
+			}
+			egressAdded := false
+			for _, r := range egressRules {
+				if r.Destination == nil || *r.Destination != "0.0.0.0/0" {
+					continue
+				}
+				v6 := r
+				v6.Destination = common.String("::/0")
+				v6.DestinationType = core.EgressSecurityRuleDestinationTypeCidrBlock
+				if egressExisting[egressRuleKey(v6)] {
+					continue
+				}
+				egressRules = append(egressRules, v6)
+				egressAdded = true
+			}
+
+			if !ingressAdded && !egressAdded {
 				continue
 			}
-			v6 := r
-			v6.Source = common.String("::/0")
-			v6.SourceType = core.IngressSecurityRuleSourceTypeCidrBlock
-			if existing[ingressRuleKey(v6)] {
-				continue
+			if _, err := c.vcn.UpdateSecurityList(ctx, core.UpdateSecurityListRequest{
+				SecurityListId: common.String(slID),
+				UpdateSecurityListDetails: core.UpdateSecurityListDetails{
+					IngressSecurityRules: ingressRules,
+					EgressSecurityRules:  egressRules,
+				},
+			}); err != nil {
+				return fmt.Errorf("update security list: %w", err)
 			}
-			rules = append(rules, v6)
-			added = true
 		}
-		if !added {
-			continue
-		}
-		if _, err := c.vcn.UpdateSecurityList(ctx, core.UpdateSecurityListRequest{
-			SecurityListId: common.String(slID),
-			UpdateSecurityListDetails: core.UpdateSecurityListDetails{
-				IngressSecurityRules: rules,
-				EgressSecurityRules:  sl.EgressSecurityRules,
-			},
-		}); err != nil {
-			return fmt.Errorf("update security list: %w", err)
-		}
+		return nil
 	}
-	return nil
-}
 
 // ingressRuleKey identifies an ingress rule by protocol, source and dest port range.
 func ingressRuleKey(r core.IngressSecurityRule) string {
@@ -928,6 +954,25 @@ func ingressRuleKey(r core.IngressSecurityRule) string {
 		port = fmt.Sprintf("udp:%d-%d", ptrInt(pr.Min), ptrInt(pr.Max))
 	}
 	return proto + "|" + src + "|" + port
+}
+
+// egressRuleKey identifies an egress rule by protocol, destination and dest port range.
+func egressRuleKey(r core.EgressSecurityRule) string {
+	proto, dst, port := "", "", ""
+	if r.Protocol != nil {
+		proto = *r.Protocol
+	}
+	if r.Destination != nil {
+		dst = *r.Destination
+	}
+	if r.TcpOptions != nil && r.TcpOptions.DestinationPortRange != nil {
+		pr := r.TcpOptions.DestinationPortRange
+		port = fmt.Sprintf("tcp:%d-%d", ptrInt(pr.Min), ptrInt(pr.Max))
+	} else if r.UdpOptions != nil && r.UdpOptions.DestinationPortRange != nil {
+		pr := r.UdpOptions.DestinationPortRange
+		port = fmt.Sprintf("udp:%d-%d", ptrInt(pr.Min), ptrInt(pr.Max))
+	}
+	return proto + "|" + dst + "|" + port
 }
 
 func ptrInt(p *int) int {

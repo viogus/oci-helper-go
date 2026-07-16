@@ -70,6 +70,7 @@ func (s *Store) UpsertInstance(inst *Instance) error {
 		   name=excluded.name, shape=excluded.shape, ocpu=excluded.ocpu, memory_gb=excluded.memory_gb,
 		   boot_volume_gb=excluded.boot_volume_gb, public_ip=excluded.public_ip, private_ip=excluded.private_ip,
 		   state=excluded.state, availability_domain=excluded.availability_domain, fault_domain=excluded.fault_domain,
+		   image_id=excluded.image_id, subnet_id=excluded.subnet_id,
 		   region=excluded.region, synced_at=CURRENT_TIMESTAMP`,
 		inst.ID, inst.TenantID, inst.Name, inst.OCID, inst.Shape, inst.OCPU, inst.MemoryGB, inst.BootVolumeGB, inst.PublicIP, inst.PrivateIP, inst.State, inst.AvailabilityDomain, inst.FaultDomain, inst.ImageID, inst.SubnetID, inst.Region)
 	return err
@@ -234,6 +235,7 @@ func (s *Store) UpsertInstanceImportTx(tx *sql.Tx, id string, tenantID int64, na
 		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
 		 ON CONFLICT(id) DO UPDATE SET
 		   name=excluded.name, shape=excluded.shape, ocpu=excluded.ocpu, memory_gb=excluded.memory_gb,
+		   boot_volume_gb=excluded.boot_volume_gb,
 		   state=excluded.state, public_ip=excluded.public_ip, private_ip=excluded.private_ip,
 		   region=excluded.region, synced_at=CURRENT_TIMESTAMP`,
 		id, tenantID, name, ocid, shape, ocpu, memoryGB, bootVolumeGB, publicIP, privateIP, state, region)

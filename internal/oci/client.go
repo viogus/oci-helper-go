@@ -772,12 +772,17 @@ func (c *Client) EnableIPv6(ctx context.Context, instanceID string) (string, err
 	}
 
 	// 5. Assign the IPv6 address to the VNIC.
-	if _, err := c.vcn.CreateIpv6(ctx, core.CreateIpv6Request{
+	createResp, err := c.vcn.CreateIpv6(ctx, core.CreateIpv6Request{
 		CreateIpv6Details: core.CreateIpv6Details{VnicId: common.String(vnicID)},
-	}); err != nil {
+	})
+	if err != nil {
 		return "", fmt.Errorf("create ipv6: %w", err)
 	}
+	if createResp.IpAddress != nil && *createResp.IpAddress != "" {
+		return *createResp.IpAddress, nil
+	}
 
+	// Rare propagation delay: fall back to listing.
 	ipv6s, err := c.vcn.ListIpv6s(ctx, core.ListIpv6sRequest{VnicId: common.String(vnicID)})
 	if err == nil {
 		for _, ip := range ipv6s.Items {
@@ -786,7 +791,7 @@ func (c *Client) EnableIPv6(ctx context.Context, instanceID string) (string, err
 			}
 		}
 	}
-	return "", nil
+	return "", fmt.Errorf("IPv6 address not available after assignment")
 }
 
 // DisableIPv6 removes IPv6 addresses from the instance's primary VNIC. Shared

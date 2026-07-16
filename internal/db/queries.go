@@ -244,16 +244,18 @@ func (s *Store) CreateTenantImportTx(tx *sql.Tx, name, userOCID, tenancyOCID, re
 }
 
 // UpsertInstanceImportTx upserts an instance within a transaction.
-func (s *Store) UpsertInstanceImportTx(tx *sql.Tx, id string, tenantID int64, name, ocid, shape, state, publicIP, privateIP, region string, ocpu, memoryGB float64, bootVolumeGB int64) error {
+func (s *Store) UpsertInstanceImportTx(tx *sql.Tx, id string, tenantID int64, name, ocid, shape, state, publicIP, privateIP, region, availabilityDomain, faultDomain, imageID, subnetID string, ocpu, memoryGB float64, bootVolumeGB int64) error {
 	_, err := tx.Exec(
-		`INSERT INTO instances (id, tenant_id, name, ocid, shape, ocpu, memory_gb, boot_volume_gb, public_ip, private_ip, state, region, synced_at)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
+		`INSERT INTO instances (id, tenant_id, name, ocid, shape, ocpu, memory_gb, boot_volume_gb, public_ip, private_ip, state, availability_domain, fault_domain, image_id, subnet_id, region, synced_at)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
 		 ON CONFLICT(id) DO UPDATE SET
 		   name=excluded.name, shape=excluded.shape, ocpu=excluded.ocpu, memory_gb=excluded.memory_gb,
 		   boot_volume_gb=excluded.boot_volume_gb,
-		   state=excluded.state, public_ip=excluded.public_ip, private_ip=excluded.private_ip,
+		   state=excluded.state, availability_domain=excluded.availability_domain, fault_domain=excluded.fault_domain,
+		   image_id=excluded.image_id, subnet_id=excluded.subnet_id,
+		   public_ip=excluded.public_ip, private_ip=excluded.private_ip,
 		   region=excluded.region, synced_at=CURRENT_TIMESTAMP`,
-		id, tenantID, name, ocid, shape, ocpu, memoryGB, bootVolumeGB, publicIP, privateIP, state, region)
+		id, tenantID, name, ocid, shape, ocpu, memoryGB, bootVolumeGB, publicIP, privateIP, state, availabilityDomain, faultDomain, imageID, subnetID, region)
 	return err
 }
 

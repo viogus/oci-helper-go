@@ -270,30 +270,50 @@ func (c *Client) withSubtreeInterceptor(interceptor *common.RequestInterceptor) 
 }
 
 func (c *Client) ListVCNs(ctx context.Context, compartmentID string) ([]core.Vcn, error) {
-	req := core.ListVcnsRequest{
-		CompartmentId: common.String(compartmentID),
-		Limit:         common.Int(1000),
-	}
 	defer c.withSubtreeInterceptor(&c.vcn.Interceptor)()
-	resp, err := c.vcn.ListVcns(ctx, req)
-	if err != nil {
-		return nil, err
+	var all []core.Vcn
+	page := common.String("")
+	for {
+		req := core.ListVcnsRequest{
+			CompartmentId: common.String(compartmentID),
+			Limit:         common.Int(1000),
+			Page:          page,
+		}
+		resp, err := c.vcn.ListVcns(ctx, req)
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, resp.Items...)
+		if resp.OpcNextPage == nil || *resp.OpcNextPage == "" {
+			break
+		}
+		page = resp.OpcNextPage
 	}
-	return resp.Items, nil
+	return all, nil
 }
 
 func (c *Client) ListSubnets(ctx context.Context, compartmentID, vcnID string) ([]core.Subnet, error) {
-	req := core.ListSubnetsRequest{
-		CompartmentId: common.String(compartmentID),
-		VcnId:         common.String(vcnID),
-		Limit:         common.Int(1000),
-	}
 	defer c.withSubtreeInterceptor(&c.vcn.Interceptor)()
-	resp, err := c.vcn.ListSubnets(ctx, req)
-	if err != nil {
-		return nil, err
+	var all []core.Subnet
+	page := common.String("")
+	for {
+		req := core.ListSubnetsRequest{
+			CompartmentId: common.String(compartmentID),
+			VcnId:         common.String(vcnID),
+			Limit:         common.Int(1000),
+			Page:          page,
+		}
+		resp, err := c.vcn.ListSubnets(ctx, req)
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, resp.Items...)
+		if resp.OpcNextPage == nil || *resp.OpcNextPage == "" {
+			break
+		}
+		page = resp.OpcNextPage
 	}
-	return resp.Items, nil
+	return all, nil
 }
 
 // ValidateCredentials checks that the OCI credentials are valid by making a
@@ -470,18 +490,28 @@ func (c *Client) GetTenancy(ctx context.Context) (*identity.Tenancy, error) {
 
 func (c *Client) ListImages(ctx context.Context, compartmentID, os string) ([]core.Image, error) {
 	defer c.withSubtreeInterceptor(&c.compute.Interceptor)()
-	req := core.ListImagesRequest{
-		CompartmentId:   common.String(compartmentID),
-		OperatingSystem: common.String(os),
-		Limit:           common.Int(100),
-		SortBy:          core.ListImagesSortByTimecreated,
-		SortOrder:       core.ListImagesSortOrderDesc,
+	var all []core.Image
+	page := common.String("")
+	for {
+		req := core.ListImagesRequest{
+			CompartmentId:   common.String(compartmentID),
+			OperatingSystem: common.String(os),
+			Limit:           common.Int(100),
+			SortBy:          core.ListImagesSortByTimecreated,
+			SortOrder:       core.ListImagesSortOrderDesc,
+			Page:            page,
+		}
+		resp, err := c.compute.ListImages(ctx, req)
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, resp.Items...)
+		if resp.OpcNextPage == nil || *resp.OpcNextPage == "" {
+			break
+		}
+		page = resp.OpcNextPage
 	}
-	resp, err := c.compute.ListImages(ctx, req)
-	if err != nil {
-		return nil, err
-	}
-	return resp.Items, nil
+	return all, nil
 }
 
 // VNIC
@@ -523,16 +553,26 @@ func (c *Client) GetVnic(ctx context.Context, vnicID string) (*core.Vnic, error)
 
 func (c *Client) ListPublicIPs(ctx context.Context, compartmentID string) ([]core.PublicIp, error) {
 	defer c.withSubtreeInterceptor(&c.vcn.Interceptor)()
-	req := core.ListPublicIpsRequest{
-		CompartmentId: common.String(compartmentID),
-		Scope:         core.ListPublicIpsScopeRegion,
-		Limit:         common.Int(1000),
+	var all []core.PublicIp
+	page := common.String("")
+	for {
+		req := core.ListPublicIpsRequest{
+			CompartmentId: common.String(compartmentID),
+			Scope:         core.ListPublicIpsScopeRegion,
+			Limit:         common.Int(1000),
+			Page:          page,
+		}
+		resp, err := c.vcn.ListPublicIps(ctx, req)
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, resp.Items...)
+		if resp.OpcNextPage == nil || *resp.OpcNextPage == "" {
+			break
+		}
+		page = resp.OpcNextPage
 	}
-	resp, err := c.vcn.ListPublicIps(ctx, req)
-	if err != nil {
-		return nil, err
-	}
-	return resp.Items, nil
+	return all, nil
 }
 
 func (c *Client) CreatePublicIP(ctx context.Context, details core.CreatePublicIpDetails) (*core.PublicIp, error) {
@@ -561,31 +601,51 @@ func (c *Client) GetPublicIP(ctx context.Context, publicIPID string) (*core.Publ
 
 func (c *Client) ListShapes(ctx context.Context, compartmentID, imageID string) ([]core.Shape, error) {
 	defer c.withSubtreeInterceptor(&c.compute.Interceptor)()
-	req := core.ListShapesRequest{
-		CompartmentId: common.String(compartmentID),
-		ImageId:       common.String(imageID),
-		Limit:         common.Int(1000),
+	var all []core.Shape
+	page := common.String("")
+	for {
+		req := core.ListShapesRequest{
+			CompartmentId: common.String(compartmentID),
+			ImageId:       common.String(imageID),
+			Limit:         common.Int(1000),
+			Page:          page,
+		}
+		resp, err := c.compute.ListShapes(ctx, req)
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, resp.Items...)
+		if resp.OpcNextPage == nil || *resp.OpcNextPage == "" {
+			break
+		}
+		page = resp.OpcNextPage
 	}
-	resp, err := c.compute.ListShapes(ctx, req)
-	if err != nil {
-		return nil, err
-	}
-	return resp.Items, nil
+	return all, nil
 }
 
 // Boot Volumes
 
 func (c *Client) ListBootVolumes(ctx context.Context, compartmentID string) ([]core.BootVolume, error) {
 	defer c.withSubtreeInterceptor(&c.bootVolume.Interceptor)()
-	req := core.ListBootVolumesRequest{
-		CompartmentId: common.String(compartmentID),
-		Limit:         common.Int(1000),
+	var all []core.BootVolume
+	page := common.String("")
+	for {
+		req := core.ListBootVolumesRequest{
+			CompartmentId: common.String(compartmentID),
+			Limit:         common.Int(1000),
+			Page:          page,
+		}
+		resp, err := c.bootVolume.ListBootVolumes(ctx, req)
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, resp.Items...)
+		if resp.OpcNextPage == nil || *resp.OpcNextPage == "" {
+			break
+		}
+		page = resp.OpcNextPage
 	}
-	resp, err := c.bootVolume.ListBootVolumes(ctx, req)
-	if err != nil {
-		return nil, err
-	}
-	return resp.Items, nil
+	return all, nil
 }
 
 func (c *Client) GetBootVolume(ctx context.Context, id string) (*core.BootVolume, error) {
@@ -1932,11 +1992,28 @@ func (c *Client) ReleaseAllPorts(ctx context.Context, vcnID string) error {
 				Source:   common.String("0.0.0.0/0"),
 			})
 		}
+
+		egressRules := sl.EgressSecurityRules
+		hasEgressAllowAll := false
+		for _, r := range egressRules {
+			if r.Protocol != nil && *r.Protocol == "all" &&
+				r.Destination != nil && *r.Destination == "0.0.0.0/0" {
+				hasEgressAllowAll = true
+				break
+			}
+		}
+		if !hasEgressAllowAll {
+			egressRules = append(egressRules, core.EgressSecurityRule{
+				Protocol:    common.String("all"),
+				Destination: common.String("0.0.0.0/0"),
+			})
+		}
+
 		updateReq := core.UpdateSecurityListRequest{
 			SecurityListId: sl.Id,
 			UpdateSecurityListDetails: core.UpdateSecurityListDetails{
 				IngressSecurityRules: ingressRules,
-				EgressSecurityRules:  sl.EgressSecurityRules,
+				EgressSecurityRules:  egressRules,
 			},
 		}
 		if _, err := c.vcn.UpdateSecurityList(ctx, updateReq); err != nil {
@@ -2305,7 +2382,8 @@ func (c *Client) Enable500Mbps(ctx context.Context, instanceID string) (string, 
 			FreeformTags:                map[string]string{"oci-helper-instance-id": instanceID},
 			BackendSets: map[string]networkloadbalancer.BackendSetDetails{
 				bsName: {
-					Policy: networkloadbalancer.NetworkLoadBalancingPolicyFiveTuple,
+					Policy:     networkloadbalancer.NetworkLoadBalancingPolicyFiveTuple,
+					IsFailOpen: common.Bool(true),
 					HealthChecker: &networkloadbalancer.HealthChecker{
 						Protocol: networkloadbalancer.HealthCheckProtocolsTcp,
 						Port:     common.Int(22),

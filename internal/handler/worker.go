@@ -55,7 +55,8 @@ func (w *Worker) Shutdown() {
 
 // newClient delegates to the package-level clientForTenant with the worker's keysDir.
 func (w *Worker) newClient(t *db.Tenant) (*ociclient.Client, error) {
-	return clientForTenant(t, w.keysDir)
+	proxyURL, _ := w.store.GetConfig(fmt.Sprintf("tenant_proxy_%d", t.ID))
+	return clientForTenant(t, w.keysDir, proxyURL)
 }
 
 // Run starts the worker loop. Picks one pending task per poll interval (5s).

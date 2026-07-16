@@ -66,7 +66,7 @@ func (s *Server) Shutdown() {
 // clientForTenant resolves the tenant's key file path (may be relative filename)
 // to an absolute path under keysDir before creating the OCI client.
 // Shared by Server.clientFor and Worker.newClient.
-func clientForTenant(t *db.Tenant, keysDir string) (*ociclient.Client, error) {
+func clientForTenant(t *db.Tenant, keysDir, proxyURL string) (*ociclient.Client, error) {
 	keyPath := t.KeyFile
 	if keyPath != "" && !filepath.IsAbs(keyPath) {
 		keyPath = filepath.Join(keysDir, keyPath)
@@ -85,12 +85,13 @@ func clientForTenant(t *db.Tenant, keysDir string) (*ociclient.Client, error) {
 
 	resolved := *t
 	resolved.KeyFile = keyPath
-	return ociclient.NewClient(&resolved)
+	return ociclient.NewClient(&resolved, proxyURL)
 }
 
 // clientFor delegates to clientForTenant with the server's configured KeysDir.
 func (s *Server) clientFor(t *db.Tenant) (*ociclient.Client, error) {
-	return clientForTenant(t, s.cfg.KeysDir)
+	proxyURL, _ := s.store.GetConfig(fmt.Sprintf("tenant_proxy_%d", t.ID))
+	return clientForTenant(t, s.cfg.KeysDir, proxyURL)
 }
 
 // getTenantClient fetches the tenant and creates an OCI client for it.

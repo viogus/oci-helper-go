@@ -70,6 +70,22 @@ func (s *Server) handleTenants(w http.ResponseWriter, r *http.Request) {
 			jsonErr(w, "name, tenancyOcid, region, and keyFile are required")
 			return
 		}
+		// Validate OCI connectivity before saving
+		tCopy := t
+		keyPath := t.KeyFile
+		if !filepath.IsAbs(keyPath) {
+			keyPath = filepath.Join(s.cfg.KeysDir, keyPath)
+		}
+		tCopy.KeyFile = keyPath
+		client, err := ociclient.NewClient(&tCopy, "")
+		if err != nil {
+			jsonErr(w, "oci client: "+err.Error())
+			return
+		}
+		if err := client.ValidateCredentials(r.Context(), t.TenancyOCID); err != nil {
+			jsonErr(w, "OCI connectivity check failed: "+err.Error())
+			return
+		}
 		if err := s.store.CreateTenant(&t); err != nil {
 			jsonErr(w, "create tenant: "+err.Error())
 			return
@@ -791,6 +807,19 @@ func (s *Server) handleTenantUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Validate OCI connectivity before saving
+	tCopy := *tenant
+	tCopy.KeyFile = keyPath
+	client, err := ociclient.NewClient(&tCopy, "")
+	if err != nil {
+		jsonErr(w, "oci client: "+err.Error())
+		return
+	}
+	if err := client.ValidateCredentials(r.Context(), tenant.TenancyOCID); err != nil {
+		jsonErr(w, "OCI connectivity check failed: "+err.Error())
+		return
+	}
+
 	if err := s.store.CreateTenant(tenant); err != nil {
 		jsonErr(w, "create tenant: "+err.Error())
 		return
@@ -818,14 +847,37 @@ func (s *Server) handleRefreshPlanType(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, "tenant not found")
 		return
 	}
-	// Store current timestamp as last refresh
+
+	// Call OCI OSP Gateway to get the actual subscription plan type.
+	planType := ""
+	client, err := s.clientFor(t)
+	if err != nil {
+		log.Printf("[refresh-plan-type] client for tenant %d: %v", req.TenantID, err)
+	} else {
+		sub, err := client.GetSubscriptionInfo(r.Context())
+		if err != nil {
+			log.Printf("[refresh-plan-type] subscription for tenant %d: %v", req.TenantID, err)
+		} else if sub != nil {
+			planType = string(sub.PlanType)
+		}
+	}
+
+	// Store plan type and refresh timestamp.
+	if planType != "" {
+		if err := s.store.SetConfig(fmt.Sprintf("tenant_plan_type_%d", req.TenantID), planType); err != nil {
+			log.Printf("[refresh-plan-type] save plan type for tenant %d: %v", req.TenantID, err)
+		}
+	}
 	configKey := fmt.Sprintf("tenant_plan_refresh_%d", req.TenantID)
 	if err := s.store.SetConfig(configKey, time.Now().Format(time.RFC3339)); err != nil {
 		jsonErr(w, "save refresh time: "+err.Error())
 		return
 	}
 	s.audit(req.TenantID, "tenant:refresh-plan-type", "", r)
-	jsonOK(w, map[string]string{"status": "ok", "message": "plan type refresh queued"})
+	jsonOK(w, map[string]string{
+		"status":   "ok",
+		"planType": planType,
+	})
 }
 
 // --- helpers ---

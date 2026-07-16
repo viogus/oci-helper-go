@@ -562,6 +562,26 @@ func (s *Server) handleCaptchaSend(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]string{"status": "ok", "message": "captcha sent"})
 }
 
+// verifyCaptcha checks the in-memory captcha store for a matching code.
+// Returns true and deletes the entry on success; returns false if missing,
+// expired, or mismatched.
+func verifyCaptcha(target, code string) bool {
+	captchaStoreMu.Lock()
+	defer captchaStoreMu.Unlock()
+
+	entry, ok := captchaStore[target]
+	if !ok {
+		return false
+	}
+	// Always delete the entry after one attempt (single-use).
+	delete(captchaStore, target)
+
+	if time.Now().After(entry.ExpiresAt) {
+		return false
+	}
+	return entry.Code == code
+}
+
 // ── Glance Cities (IP geolocation map data) ───────────────────────────────
 
 // glanceCity is a single map marker for the dashboard world map.

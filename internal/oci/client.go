@@ -8,6 +8,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -42,7 +43,7 @@ type Client struct {
 	mu sync.Mutex // guards interceptor mutations on all sub-clients
 }
 
-func NewClient(t *db.Tenant) (*Client, error) {
+func NewClient(t *db.Tenant, proxyURL string) (*Client, error) {
 	pemData, err := os.ReadFile(t.KeyFile)
 	if err != nil {
 		return nil, fmt.Errorf("read key file %s: %w", t.KeyFile, err)
@@ -95,6 +96,26 @@ func NewClient(t *db.Tenant) (*Client, error) {
 	sub, err := ospgateway.NewSubscriptionServiceClientWithConfigurationProvider(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("ospgateway client: %w", err)
+	}
+
+	// Apply proxy transport to all sub-clients if a proxy URL is configured.
+	if proxyURL != "" {
+		parsed, parseErr := url.Parse(proxyURL)
+		if parseErr != nil {
+			return nil, fmt.Errorf("parse proxy URL %q: %w", proxyURL, parseErr)
+		}
+		proxyHTTPClient := &http.Client{
+			Transport: &http.Transport{Proxy: http.ProxyURL(parsed)},
+		}
+		compute.HTTPClient = proxyHTTPClient
+		vcn.HTTPClient = proxyHTTPClient
+		id.HTTPClient = proxyHTTPClient
+		bv.HTTPClient = proxyHTTPClient
+		mon.HTTPClient = proxyHTTPClient
+		lim.HTTPClient = proxyHTTPClient
+		nlb.HTTPClient = proxyHTTPClient
+		usage.HTTPClient = proxyHTTPClient
+		sub.HTTPClient = proxyHTTPClient
 	}
 
 	return &Client{
@@ -273,6 +294,13 @@ func (c *Client) ListSubnets(ctx context.Context, compartmentID, vcnID string) (
 		return nil, err
 	}
 	return resp.Items, nil
+}
+
+// ValidateCredentials checks that the OCI credentials are valid by making a
+// lightweight API call (ListAvailabilityDomains) before saving the tenant.
+func (c *Client) ValidateCredentials(ctx context.Context, compartmentID string) error {
+	_, err := c.ListAvailabilityDomains(ctx, compartmentID)
+	return err
 }
 
 func (c *Client) ListAvailabilityDomains(ctx context.Context, compartmentID string) ([]identity.AvailabilityDomain, error) {

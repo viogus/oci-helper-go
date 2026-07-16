@@ -195,6 +195,8 @@ func (s *Server) handleInstanceAction(w http.ResponseWriter, r *http.Request) {
 		Action              string `json:"action"`
 		TenantID            int64  `json:"tenantId"`
 		PreserveBootVolume  bool   `json:"preserveBootVolume"`
+		CaptchaCode         string `json:"captchaCode"`
+		CaptchaTarget       string `json:"captchaTarget"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonErr(w, "invalid body: "+err.Error())
@@ -212,6 +214,10 @@ func (s *Server) handleInstanceAction(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	switch req.Action {
 	case "terminate":
+		if req.CaptchaCode != "" && !verifyCaptcha(req.CaptchaTarget, req.CaptchaCode) {
+			jsonErr(w, "invalid or expired captcha code")
+			return
+		}
 		if err := client.TerminateInstance(ctx, instanceID, req.PreserveBootVolume); err != nil {
 			jsonErr(w, "terminate: "+err.Error())
 			return

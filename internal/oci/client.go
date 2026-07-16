@@ -1876,8 +1876,8 @@ func (c *Client) GetLimits(ctx context.Context, region, serviceName string) ([]L
 
 // --- One-Click 500Mbps ---
 
-// Enable500Mbps creates a Network Load Balancer for the instance to achieve 500Mbps bandwidth.
-// Note: This requires the OCI network load balancer API which may need additional SDK imports.
+// Enable500Mbps sets up a Network Load Balancer with NAT Gateway routing
+// to bypass the 50Mbps bandwidth cap on free-tier AMD instances.
 // findInstanceNLB returns the NLB tagged for the given instance, or nil if none exists.
 func (c *Client) findInstanceNLB(ctx context.Context, compartmentID, instanceID string) (*networkloadbalancer.NetworkLoadBalancerSummary, error) {
 	listResp, err := c.nlb.ListNetworkLoadBalancers(ctx, networkloadbalancer.ListNetworkLoadBalancersRequest{
@@ -1909,6 +1909,92 @@ func nlbPublicIP(addrs []networkloadbalancer.IpAddress) string {
 	return ""
 }
 
+// ensureNatGateway finds or creates a NAT gateway in the VCN.
+func (c *Client) ensureNatGateway(ctx context.Context, compartmentID, vcnID string) (*core.NatGateway, error) {
+	listResp, err := c.vcn.ListNatGateways(ctx, core.ListNatGatewaysRequest{
+		CompartmentId: common.String(compartmentID),
+		VcnId:         common.String(vcnID),
+		LifecycleState: core.NatGatewayLifecycleStateAvailable,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list nat gateways: %w", err)
+	}
+	if len(listResp.Items) > 0 {
+		log.Printf("[Enable500Mbps] reusing existing NAT gateway: %s", *listResp.Items[0].DisplayName)
+		return &listResp.Items[0], nil
+	}
+
+	createResp, err := c.vcn.CreateNatGateway(ctx, core.CreateNatGatewayRequest{
+		CreateNatGatewayDetails: core.CreateNatGatewayDetails{
+			CompartmentId: common.String(compartmentID),
+			VcnId:         common.String(vcnID),
+			DisplayName:   common.String("nat-gateway"),
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("create nat gateway: %w", err)
+	}
+	ngwID := *createResp.NatGateway.Id
+
+	// Poll until available.
+	deadline := time.Now().Add(3 * time.Minute)
+	for time.Now().Before(deadline) {
+		getResp, err := c.vcn.GetNatGateway(ctx, core.GetNatGatewayRequest{NatGatewayId: common.String(ngwID)})
+		if err != nil {
+			return nil, fmt.Errorf("poll nat gateway: %w", err)
+		}
+		if getResp.LifecycleState == core.NatGatewayLifecycleStateAvailable {
+			log.Printf("[Enable500Mbps] NAT gateway created: %s", ngwID)
+			return &getResp.NatGateway, nil
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(5 * time.Second):
+		}
+	}
+	return nil, fmt.Errorf("NAT gateway creation timed out")
+}
+
+// ensureNatRouteTable finds or creates a route table with 0.0.0.0/0 → NAT Gateway.
+func (c *Client) ensureNatRouteTable(ctx context.Context, compartmentID, vcnID, natGWID string) (*core.RouteTable, error) {
+	listResp, err := c.vcn.ListRouteTables(ctx, core.ListRouteTablesRequest{
+		CompartmentId: common.String(compartmentID),
+		VcnId:         common.String(vcnID),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list route tables: %w", err)
+	}
+	for _, rt := range listResp.Items {
+		for _, rule := range rt.RouteRules {
+			if rule.NetworkEntityId != nil && *rule.NetworkEntityId == natGWID &&
+				rule.Destination != nil && *rule.Destination == "0.0.0.0/0" {
+				log.Printf("[Enable500Mbps] reusing existing NAT route table: %s", *rt.DisplayName)
+				return &rt, nil
+			}
+		}
+	}
+
+	// Create a new route table with 0.0.0.0/0 → NAT Gateway.
+	createResp, err := c.vcn.CreateRouteTable(ctx, core.CreateRouteTableRequest{
+		CreateRouteTableDetails: core.CreateRouteTableDetails{
+			CompartmentId: common.String(compartmentID),
+			VcnId:         common.String(vcnID),
+			DisplayName:   common.String("nat-route-table"),
+			RouteRules: []core.RouteRule{{
+				Destination:     common.String("0.0.0.0/0"),
+				DestinationType: core.RouteRuleDestinationTypeCidrBlock,
+				NetworkEntityId: common.String(natGWID),
+			}},
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("create route table: %w", err)
+	}
+	log.Printf("[Enable500Mbps] NAT route table created: %s", *createResp.RouteTable.Id)
+	return &createResp.RouteTable, nil
+}
+
 func (c *Client) Enable500Mbps(ctx context.Context, instanceID string) (string, error) {
 	compartmentID := c.tenant.TenancyOCID
 
@@ -1935,10 +2021,54 @@ func (c *Client) Enable500Mbps(ctx context.Context, instanceID string) (string, 
 	if vnic.SubnetId != nil {
 		subnetID = *vnic.SubnetId
 	}
-	if privateIP == "" || subnetID == "" {
-		return "", fmt.Errorf("instance VNIC missing private IP or subnet ID")
+	vnicID := ""
+	if vnic.Id != nil {
+		vnicID = *vnic.Id
+	}
+	if privateIP == "" || subnetID == "" || vnicID == "" {
+		return "", fmt.Errorf("instance VNIC missing private IP, subnet ID, or VNIC ID")
 	}
 
+	// Get subnet to find VCN ID.
+	subnet, err := c.vcn.GetSubnet(ctx, core.GetSubnetRequest{SubnetId: common.String(subnetID)})
+	if err != nil {
+		return "", fmt.Errorf("get subnet: %w", err)
+	}
+	if subnet.VcnId == nil {
+		return "", fmt.Errorf("subnet missing VCN ID")
+	}
+	vcnID := *subnet.VcnId
+
+	// 1. Create or find NAT Gateway.
+	natGW, err := c.ensureNatGateway(ctx, compartmentID, vcnID)
+	if err != nil {
+		return "", fmt.Errorf("nat gateway: %w", err)
+	}
+	natGWID := *natGW.Id
+
+	// 2. Ensure route table has 0.0.0.0/0 → NAT Gateway.
+	rt, err := c.ensureNatRouteTable(ctx, compartmentID, vcnID, natGWID)
+	if err != nil {
+		return "", fmt.Errorf("nat route table: %w", err)
+	}
+	rtID := *rt.Id
+
+	// 3. Bind VNIC to NAT route table and skip source/dest check.
+	if _, err := c.vcn.UpdateVnic(ctx, core.UpdateVnicRequest{
+		VnicId: common.String(vnicID),
+		UpdateVnicDetails: core.UpdateVnicDetails{
+			SkipSourceDestCheck: common.Bool(true),
+			RouteTableId:        common.String(rtID),
+		},
+	}); err != nil {
+		return "", fmt.Errorf("update vnic: %w", err)
+	}
+	log.Printf("[Enable500Mbps] VNIC %s bound to NAT route table %s", vnicID, rtID)
+
+	// 4. Release all-ports security to ensure NLB traffic is not blocked.
+	_ = c.ReleaseAllPorts(ctx, vcnID)
+
+	// 5. Create the Network Load Balancer.
 	displayName := "nlb-" + instanceID
 	if len(displayName) > 100 {
 		displayName = displayName[:100]
@@ -1961,7 +2091,6 @@ func (c *Client) Enable500Mbps(ctx context.Context, instanceID string) (string, 
 						Port:     common.Int(22),
 					},
 					Backends: []networkloadbalancer.Backend{
-						// Port 0 = pass-through all ports (full-bandwidth path, not just SSH).
 						{IpAddress: common.String(privateIP), Port: common.Int(0), Name: common.String(instanceID)},
 					},
 				},
@@ -2001,8 +2130,8 @@ func (c *Client) Enable500Mbps(ctx context.Context, instanceID string) (string, 
 		log.Printf("[Enable500Mbps] status=%s %.0f%%", status, float64(pct))
 		switch status {
 		case networkloadbalancer.OperationStatusSucceeded:
-			// Fetch the NLB's public IP to return to the caller.
 			if nlb, err := c.findInstanceNLB(ctx, compartmentID, instanceID); err == nil && nlb != nil {
+				log.Printf("[Enable500Mbps] done — NLB IP: %s", nlbPublicIP(nlb.IpAddresses))
 				return nlbPublicIP(nlb.IpAddresses), nil
 			}
 			return "", nil
@@ -2018,9 +2147,25 @@ func (c *Client) Enable500Mbps(ctx context.Context, instanceID string) (string, 
 	return "", fmt.Errorf("NLB creation timed out")
 }
 
-// Disable500Mbps deletes the NLB associated with the instance.
+// Disable500Mbps deletes the NLB and unbinds the VNIC from the NAT route table.
 func (c *Client) Disable500Mbps(ctx context.Context, instanceID string) error {
 	compartmentID := c.tenant.TenancyOCID
+
+	// Unbind VNIC from NAT route table if bound.
+	vnics, err := c.GetInstanceVNICs(ctx, compartmentID, instanceID)
+	if err == nil && len(vnics) > 0 && vnics[0].Id != nil && vnics[0].RouteTableId != nil && *vnics[0].RouteTableId != "" {
+		if _, err := c.vcn.UpdateVnic(ctx, core.UpdateVnicRequest{
+			VnicId: common.String(*vnics[0].Id),
+			UpdateVnicDetails: core.UpdateVnicDetails{
+				SkipSourceDestCheck: common.Bool(false),
+				RouteTableId:        common.String(""),
+			},
+		}); err != nil {
+			log.Printf("[Disable500Mbps] unbind VNIC from NAT route table: %v", err)
+		} else {
+			log.Printf("[Disable500Mbps] VNIC %s unbound from NAT route table", *vnics[0].Id)
+		}
+	}
 
 	nlb, err := c.findInstanceNLB(ctx, compartmentID, instanceID)
 	if err != nil {

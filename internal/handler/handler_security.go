@@ -1,10 +1,14 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
+
+	ociclient "github.com/viogus/oci-helper-go/internal/oci"
 )
 
 func (s *Server) handleSecurityRules(w http.ResponseWriter, r *http.Request) {
@@ -74,7 +78,7 @@ func (s *Server) handleSecurityRules(w http.ResponseWriter, r *http.Request) {
 		}
 		s.audit(req.TenantID, "security-rule:remove", strconv.Itoa(len(req.RuleIDs)), r)
 		jsonOK(w, map[string]string{"status": "ok"})
-	case "release":
+	case "release": // alias for release_by_vcn, both call ReleaseAllPorts
 		if err := client.ReleaseAllPorts(r.Context(), req.VcnID); err != nil {
 			jsonErr(w, "release ports: "+err.Error())
 			return
@@ -125,13 +129,45 @@ func (s *Server) handleSecurityRuleRelease(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	added := 0
+	var addedPorts []string
 	for _, port := range req.Ports {
 		if err := client.AddIngressRule(r.Context(), req.VcnID, "TCP", port, "0.0.0.0/0"); err != nil {
+			// Rollback previously added rules on partial failure.
+			if added > 0 {
+				if rbErr := rollbackIngressRules(client, r.Context(), req.VcnID, addedPorts); rbErr != nil {
+					log.Printf("[security] rollback failed after partial batch-release: %v (original: %v)", rbErr, err)
+				}
+			}
 			jsonErr(w, fmt.Sprintf("add ingress rule port %s: %v", port, err))
 			return
 		}
+		addedPorts = append(addedPorts, port)
 		added++
 	}
 	s.audit(req.TenantID, "security-rule:batch-release", req.VcnID, r)
 	jsonOK(w, map[string]interface{}{"status": "ok", "rules_added": added})
+}
+
+// rollbackIngressRules removes TCP ingress rules from 0.0.0.0/0 for given ports.
+// Used to undo partial batch-release failures.
+func rollbackIngressRules(client *ociclient.Client, ctx context.Context, vcnID string, ports []string) error {
+	rules, _, err := client.ListSecurityRules(ctx, vcnID, "", 1, 100)
+	if err != nil {
+		return fmt.Errorf("list rules for rollback: %w", err)
+	}
+	var idsToRemove []string
+	for _, rule := range rules {
+		if rule.Type == "ingress" && rule.Source == "0.0.0.0/0" && rule.Protocol == "TCP" {
+			for _, port := range ports {
+				if rule.Port == port || rule.Port == port+"-"+port {
+					idsToRemove = append(idsToRemove, rule.ID)
+					break
+				}
+			}
+		}
+	}
+	if len(idsToRemove) == 0 {
+		return nil
+	}
+	return client.RemoveSecurityRules(ctx, vcnID, idsToRemove)
 }

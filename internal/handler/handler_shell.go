@@ -9,6 +9,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -63,6 +64,10 @@ var shellUpgrader = websocket.Upgrader{
 		origin := r.Header.Get("Origin")
 		if origin == "" {
 			return true // same-origin requests, curl, wscat
+		}
+		// Parse origin as URL to extract host:port (scheme breaks net.SplitHostPort)
+		if u, err := url.Parse(origin); err == nil && u.Host != "" {
+			origin = u.Host
 		}
 		// Allow same host (including port differences for dev)
 		host := r.Host
@@ -218,6 +223,7 @@ func (s *Server) handleShellWS(w http.ResponseWriter, r *http.Request) {
 	// ── Bidirectional I/O bridge ──────────────────────────────────────
 	var wg sync.WaitGroup
 	done := make(chan struct{})
+	var closeDone sync.Once
 
 	// stdout + stderr → WebSocket
 	wg.Add(1)
@@ -235,7 +241,7 @@ func (s *Server) handleShellWS(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			if readErr != nil {
-				close(done)
+				closeDone.Do(func() { close(done) })
 				return
 			}
 		}
@@ -249,7 +255,7 @@ func (s *Server) handleShellWS(w http.ResponseWriter, r *http.Request) {
 		for {
 			_, raw, readErr := wsConn.ReadMessage()
 			if readErr != nil {
-				close(done)
+				closeDone.Do(func() { close(done) })
 				return
 			}
 			var msg wsMessage
@@ -281,6 +287,7 @@ func (s *Server) handleShellWS(w http.ResponseWriter, r *http.Request) {
 
 	// Graceful shutdown
 	session.Close()
+	wsConn.Close() // unblocks ReadMessage in goroutine 2
 	wg.Wait()
 
 	s.audit(tenantID, "shell:disconnect", inst.Name, r)

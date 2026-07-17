@@ -117,7 +117,10 @@ func (s *Server) createInstance(w http.ResponseWriter, r *http.Request) {
 	// SSH key and root password metadata (cloud-init).
 	metadata := map[string]string{}
 	if req.SSHKeyID > 0 || req.RootPassword != "" {
-		sshKeys, _ := s.store.ListSSHKeys(req.TenantID)
+		sshKeys, listErr := s.store.ListSSHKeys(req.TenantID)
+		if listErr != nil {
+			log.Printf("[createInstance] list ssh keys: %v", listErr)
+		}
 		if req.SSHKeyID > 0 && len(sshKeys) > 0 {
 			for _, k := range sshKeys {
 				if k.ID == req.SSHKeyID && k.PublicKey != "" {
@@ -153,7 +156,7 @@ func (s *Server) createInstance(w http.ResponseWriter, r *http.Request) {
 	if region == "" {
 		region = t.Region
 	}
-	s.store.UpsertInstance(&db.Instance{
+	dbInst := &db.Instance{
 		ID:       fmt.Sprintf("%d:%s", req.TenantID, strOr(inst.Id, "")),
 		TenantID: req.TenantID,
 		Name:     strOr(inst.DisplayName, ""),
@@ -161,7 +164,10 @@ func (s *Server) createInstance(w http.ResponseWriter, r *http.Request) {
 		Shape:    strOr(inst.Shape, ""),
 		State:    string(inst.LifecycleState),
 		Region:   region,
-	})
+	}
+	if err := s.store.UpsertInstance(dbInst); err != nil {
+		log.Printf("[createInstance] upsert instance: %v", err)
+	}
 	s.audit(req.TenantID, "instance:create", strOr(inst.DisplayName, ""), r)
 	jsonOK(w, map[string]string{"status": "ok", "instanceId": strOr(inst.Id, "")})
 }
@@ -221,41 +227,41 @@ func (s *Server) handleInstanceAction(w http.ResponseWriter, r *http.Request) {
 			jsonErr(w, "invalid or expired captcha code")
 			return
 		}
-		if err := client.TerminateInstance(ctx, instanceID, req.PreserveBootVolume, req.PreserveDataVolumes); err != nil {
+		if err := client.TerminateInstance(ctx, bareOCID(instanceID), req.PreserveBootVolume, req.PreserveDataVolumes); err != nil {
 			jsonErr(w, "terminate: "+err.Error())
 			return
 		}
 		s.store.UpdateInstanceState(instanceID, "TERMINATING")
 	case "start":
-		_, err := client.InstanceAction(ctx, instanceID, core.InstanceActionActionStart)
+		_, err := client.InstanceAction(ctx, bareOCID(instanceID), core.InstanceActionActionStart)
 		if err != nil {
 			jsonErr(w, "start: "+err.Error())
 			return
 		}
 		s.store.UpdateInstanceState(instanceID, "STARTING")
 	case "stop":
-		_, err := client.InstanceAction(ctx, instanceID, core.InstanceActionActionStop)
+		_, err := client.InstanceAction(ctx, bareOCID(instanceID), core.InstanceActionActionStop)
 		if err != nil {
 			jsonErr(w, "stop: "+err.Error())
 			return
 		}
 		s.store.UpdateInstanceState(instanceID, "STOPPING")
 	case "reboot":
-		_, err := client.InstanceAction(ctx, instanceID, core.InstanceActionActionReset)
+		_, err := client.InstanceAction(ctx, bareOCID(instanceID), core.InstanceActionActionReset)
 		if err != nil {
 			jsonErr(w, "reboot: "+err.Error())
 			return
 		}
 		s.store.UpdateInstanceState(instanceID, "STARTING")
 	case "softstop":
-		_, err := client.InstanceAction(ctx, instanceID, core.InstanceActionActionSoftstop)
+		_, err := client.InstanceAction(ctx, bareOCID(instanceID), core.InstanceActionActionSoftstop)
 		if err != nil {
 			jsonErr(w, "softstop: "+err.Error())
 			return
 		}
 		s.store.UpdateInstanceState(instanceID, "STOPPING")
 	case "softreset":
-		_, err := client.InstanceAction(ctx, instanceID, core.InstanceActionActionSoftreset)
+		_, err := client.InstanceAction(ctx, bareOCID(instanceID), core.InstanceActionActionSoftreset)
 		if err != nil {
 			jsonErr(w, "softreset: "+err.Error())
 			return
@@ -358,7 +364,7 @@ func (s *Server) handleSync(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Best-effort VNIC sync for public IP / private IP / subnet
-	s.syncVNICs(r.Context(), tenantID, regions)
+	s.syncVNICs(context.Background(), tenantID, regions)
 
 	s.audit(tenantID, "sync", fmt.Sprintf("synced %d instances across %d regions", totalCount, len(regions)), r)
 	jsonOK(w, map[string]interface{}{"count": totalCount, "regions": len(regions)})
@@ -484,7 +490,7 @@ func (s *Server) handleChangeShape(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
 	defer cancel()
-	if err := client.UpdateInstance(ctx, req.InstanceID, req.Shape, req.Ocpus, req.MemoryGB); err != nil {
+	if err := client.UpdateInstance(ctx, bareOCID(req.InstanceID), req.Shape, req.Ocpus, req.MemoryGB); err != nil {
 		jsonErr(w, "update instance: "+err.Error())
 		return
 	}
@@ -511,7 +517,7 @@ func (s *Server) handleChangeBootVolume(w http.ResponseWriter, r *http.Request) 
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
 	defer cancel()
-	attachment, err := client.GetBootVolumeAttachment(ctx, tenant.TenancyOCID, req.InstanceID)
+	attachment, err := client.GetBootVolumeAttachment(ctx, tenant.TenancyOCID, bareOCID(req.InstanceID))
 	if err != nil {
 		jsonErr(w, "get boot volume: "+err.Error())
 		return
@@ -611,7 +617,7 @@ func (s *Server) handleUpdateInstanceName(w http.ResponseWriter, r *http.Request
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
 	defer cancel()
-	if err := client.UpdateInstanceDisplayName(ctx, req.InstanceID, req.Name); err != nil {
+	if err := client.UpdateInstanceDisplayName(ctx, bareOCID(req.InstanceID), req.Name); err != nil {
 		jsonErr(w, "update name: "+err.Error())
 		return
 	}
@@ -637,7 +643,7 @@ func (s *Server) handleChangeIP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Try to change IP once (synchronous)
-	newIP, err := client.ChangeInstanceIP(r.Context(), req.InstanceID, req.CidrList)
+	newIP, err := client.ChangeInstanceIP(r.Context(), bareOCID(req.InstanceID), req.CidrList)
 	if err != nil {
 		jsonErr(w, "change ip: "+err.Error())
 		return
@@ -896,71 +902,68 @@ func (s *Server) handleAutoRescue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Minute)
-	defer cancel()
-
-	type step struct {
-		Action string `json:"action"`
-		Alive  bool   `json:"alive"`
-		Error  string `json:"error,omitempty"`
-	}
-	var steps []step
-	finalAlive := false
-
-	addStep := func(action string) bool {
-		alive := checkTCPPort(inst.PublicIP, 22, 5*time.Second)
-		steps = append(steps, step{Action: action, Alive: alive})
-		return alive
-	}
-
-	// Step 1: TCP check (no action)
-	if addStep("tcp_check") {
-		finalAlive = true
-		jsonOK(w, map[string]interface{}{"steps": steps, "final_alive": finalAlive})
+	// Quick TCP check — if already alive, respond immediately.
+	if checkTCPPort(inst.PublicIP, 22, 5*time.Second) {
+		jsonOK(w, map[string]interface{}{"status": "ok", "alive": true})
 		return
 	}
 
-	// Step 2: SOFTRESET
-	if _, err := client.InstanceAction(ctx, req.InstanceID, core.InstanceActionActionSoftreset); err != nil {
-		steps = append(steps, step{Action: "softreset", Alive: false, Error: err.Error()})
-	} else {
-		time.Sleep(30 * time.Second)
-		if addStep("softreset") {
-			finalAlive = true
-			s.audit(req.TenantID, "instance:auto-rescue:softreset", req.InstanceID, r)
-			jsonOK(w, map[string]interface{}{"steps": steps, "final_alive": finalAlive})
-			return
-		}
-	}
+	// Run rescue steps in background goroutine to avoid blocking HTTP handler.
+	ocid := bareOCID(req.InstanceID)
+	instanceID := req.InstanceID
+	publicIP := inst.PublicIP
 
-	// Step 3: RESET
-	if _, err := client.InstanceAction(ctx, req.InstanceID, core.InstanceActionActionReset); err != nil {
-		steps = append(steps, step{Action: "reset", Alive: false, Error: err.Error()})
-	} else {
-		time.Sleep(60 * time.Second)
-		if addStep("reset") {
-			finalAlive = true
-			s.audit(req.TenantID, "instance:auto-rescue:reset", req.InstanceID, r)
-			jsonOK(w, map[string]interface{}{"steps": steps, "final_alive": finalAlive})
-			return
-		}
-	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
 
-	// Step 4: STOP then START
-	if _, err := client.InstanceAction(ctx, req.InstanceID, core.InstanceActionActionStop); err != nil {
-		steps = append(steps, step{Action: "stop", Alive: false, Error: err.Error()})
-	} else {
-		time.Sleep(30 * time.Second)
-		if _, err := client.InstanceAction(ctx, req.InstanceID, core.InstanceActionActionStart); err != nil {
-			steps = append(steps, step{Action: "start", Alive: false, Error: err.Error()})
+		checkAlive := func() bool {
+			return checkTCPPort(publicIP, 22, 5*time.Second)
+		}
+
+		// Step 2: SOFTRESET
+		if _, err := client.InstanceAction(ctx, ocid, core.InstanceActionActionSoftreset); err != nil {
+			log.Printf("[autoRescue] softreset %s: %v", instanceID, err)
+		} else {
+			time.Sleep(30 * time.Second)
+			if checkAlive() {
+				log.Printf("[autoRescue] %s recovered via softreset", instanceID)
+				log.Printf("[autoRescue] %s recovered via softreset", instanceID)
+				return
+			}
+		}
+
+		// Step 3: RESET
+		if _, err := client.InstanceAction(ctx, ocid, core.InstanceActionActionReset); err != nil {
+			log.Printf("[autoRescue] reset %s: %v", instanceID, err)
 		} else {
 			time.Sleep(60 * time.Second)
-			finalAlive = addStep("stop_start")
+			if checkAlive() {
+				log.Printf("[autoRescue] %s recovered via reset", instanceID)
+				log.Printf("[autoRescue] %s recovered via reset", instanceID)
+				return
+			}
 		}
-	}
 
-	s.audit(req.TenantID, "instance:auto-rescue", req.InstanceID, r)
-	jsonOK(w, map[string]interface{}{"steps": steps, "final_alive": finalAlive})
+		// Step 4: STOP then START
+		if _, err := client.InstanceAction(ctx, ocid, core.InstanceActionActionStop); err != nil {
+			log.Printf("[autoRescue] stop %s: %v", instanceID, err)
+		} else {
+			time.Sleep(30 * time.Second)
+			if _, err := client.InstanceAction(ctx, ocid, core.InstanceActionActionStart); err != nil {
+				log.Printf("[autoRescue] start %s: %v", instanceID, err)
+			} else {
+				time.Sleep(60 * time.Second)
+				alive := checkAlive()
+				log.Printf("[autoRescue] %s stop+start done, alive=%v", instanceID, alive)
+			}
+		}
+
+		log.Printf("[autoRescue] %s rescue sequence complete", instanceID)
+	}()
+
+	s.audit(req.TenantID, "instance:auto-rescue:started", req.InstanceID, r)
+	jsonOK(w, map[string]interface{}{"status": "running", "instance_id": req.InstanceID})
 }
 // ── G6: Direct Instance Config Update ───────────────────────────────────
 
@@ -987,12 +990,12 @@ func (s *Server) handleInstanceConfigUpdate(w http.ResponseWriter, r *http.Reque
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
 	defer cancel()
-	if err := client.UpdateInstance(ctx, req.InstanceID, req.Shape, req.Ocpus, req.MemoryGB); err != nil {
+	if err := client.UpdateInstance(ctx, bareOCID(req.InstanceID), req.Shape, req.Ocpus, req.MemoryGB); err != nil {
 		jsonErr(w, "update instance: "+err.Error())
 		return
 	}
 	if req.DisplayName != "" {
-		if err := client.UpdateInstanceDisplayName(ctx, req.InstanceID, req.DisplayName); err != nil {
+		if err := client.UpdateInstanceDisplayName(ctx, bareOCID(req.InstanceID), req.DisplayName); err != nil {
 			jsonErr(w, "update display name: "+err.Error())
 			return
 		}
@@ -1021,7 +1024,7 @@ func (s *Server) handleUpdateShape(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
 	defer cancel()
-	if err := client.UpdateInstance(ctx, req.InstanceID, req.Shape, 0, 0); err != nil {
+	if err := client.UpdateInstance(ctx, bareOCID(req.InstanceID), req.Shape, 0, 0); err != nil {
 		jsonErr(w, "update shape: "+err.Error())
 		return
 	}
@@ -1070,13 +1073,15 @@ func (s *Server) handleStartVNC(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, "SSH key not found")
 		return
 	}
-	conn, err := client.CreateConsoleConnection(r.Context(), req.InstanceID, pubKey)
+	conn, err := client.CreateConsoleConnection(r.Context(), bareOCID(req.InstanceID), pubKey)
 	if err != nil {
 		jsonErr(w, "create console connection: "+err.Error())
 		return
 	}
-	// Start polling in background for connection to become active
+	// Start polling in background for connection to become active.
+	// Track goroutine exit via log; 2-min timeout bounds any leak.
 	go func() {
+		defer log.Printf("[vnc] polling goroutine exited for conn=%s", strOr(conn.Id, ""))
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
 		activeConn, err := client.WaitForConsoleConnectionActive(ctx, *conn.Id)
@@ -1118,13 +1123,13 @@ func (s *Server) handleInstanceConfigInfo(w http.ResponseWriter, r *http.Request
 	}
 	ctx := r.Context()
 	// Get instance details
-	inst, err := client.GetInstance(ctx, req.InstanceID)
+	inst, err := client.GetInstance(ctx, bareOCID(req.InstanceID))
 	if err != nil {
 		jsonErr(w, "get instance: "+err.Error())
 		return
 	}
 	// Get VNIC info
-	vnics, vnicErr := client.GetInstanceVNICs(ctx, tenant.TenancyOCID, req.InstanceID)
+	vnics, vnicErr := client.GetInstanceVNICs(ctx, tenant.TenancyOCID, bareOCID(req.InstanceID))
 	if vnicErr != nil {
 		log.Printf("[configInfo] get VNICs for %s: %v", req.InstanceID, vnicErr)
 	}
@@ -1140,7 +1145,7 @@ func (s *Server) handleInstanceConfigInfo(w http.ResponseWriter, r *http.Request
 		}
 	}
 	// Get boot volume info
-	attachments, bvErr := client.ListBootVolumeAttachments(ctx, tenant.TenancyOCID, req.InstanceID)
+	attachments, bvErr := client.ListBootVolumeAttachments(ctx, tenant.TenancyOCID, bareOCID(req.InstanceID))
 	if bvErr != nil {
 		log.Printf("[configInfo] get boot volumes for %s: %v", req.InstanceID, bvErr)
 	}
@@ -1204,8 +1209,15 @@ func (s *Server) handleUpdatePassword(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	tags := map[string]string{"root_password": req.NewPassword}
-	if err := client.UpdateInstanceFreeformTags(r.Context(), req.InstanceID, tags); err != nil {
+	existing, err := client.GetInstance(r.Context(), bareOCID(req.InstanceID))
+	tags := map[string]string{}
+	if err == nil && existing != nil && existing.FreeformTags != nil {
+		for k, v := range existing.FreeformTags {
+			tags[k] = v
+		}
+	}
+	tags["root_password"] = req.NewPassword
+	if err := client.UpdateInstanceFreeformTags(r.Context(), bareOCID(req.InstanceID), tags); err != nil {
 		jsonErr(w, "update password tag: "+err.Error())
 		return
 	}

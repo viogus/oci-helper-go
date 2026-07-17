@@ -201,6 +201,9 @@ func (s *Server) handleSSHKeyByID(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	if !s.requireAdmin(w, r) {
+		return
+	}
 	if err := s.store.DeleteSSHKey(id); err != nil {
 		jsonErr(w, "delete ssh key: "+err.Error())
 		return

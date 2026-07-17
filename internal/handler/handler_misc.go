@@ -2,15 +2,17 @@ package handler
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"log"
+	"math/big"
 	"net/http"
-	"time"
 	"os"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/viogus/oci-helper-go/internal/db"
 	"github.com/viogus/oci-helper-go/internal/dingtalk"
@@ -158,7 +160,7 @@ func (s *Server) handleTelegramWebhook(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	} else {
-		log.Printf("[warn] telegram_webhook_secret not configured — anyone can call the webhook")
+		log.Printf("[SECURITY WARN] telegram_webhook_secret not configured — anyone can call the webhook")
 	}
 	var update telegram.Update
 	if err := json.NewDecoder(r.Body).Decode(&update); err != nil {
@@ -294,10 +296,35 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 		logFile = os.Getenv("OCI_LOG_FILE")
 	}
 	if logFile != "" {
+		fi, err := os.Stat(logFile)
+		if err == nil && fi.Size() > 10*1024*1024 {
+			f, err := os.Open(logFile)
+			if err == nil {
+				defer f.Close()
+				readSize := int64(1024 * 1024)
+				if readSize > fi.Size() {
+					readSize = fi.Size()
+				}
+				f.Seek(-readSize, 2)
+				buf := make([]byte, readSize)
+				n, _ := f.Read(buf)
+				lines := strings.Split(string(buf[:n]), "\n")
+				start := 0
+				if len(lines) > tail {
+					start = len(lines) - tail
+				}
+				jsonOK(w, map[string]interface{}{
+					"lines":     lines[start:],
+					"tail":      tail,
+					"file":      logFile,
+					"truncated": true,
+				})
+				return
+			}
+		}
 		data, err := os.ReadFile(logFile)
 		if err == nil {
 			lines := strings.Split(string(data), "\n")
-			// Return last N lines
 			start := 0
 			if len(lines) > tail {
 				start = len(lines) - tail
@@ -518,7 +545,14 @@ func (s *Server) handleCaptchaSend(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Generate 6-digit code
-	code := fmt.Sprintf("%06d", time.Now().UnixNano()%1000000)
+	var codeNum int64
+	n, err := rand.Int(rand.Reader, big.NewInt(1000000))
+	if err != nil {
+		codeNum = time.Now().UnixNano() % 1000000
+	} else {
+		codeNum = n.Int64()
+	}
+	code := fmt.Sprintf("%06d", codeNum)
 
 	// Store in memory with 5-minute TTL
 	captchaStoreMu.Lock()

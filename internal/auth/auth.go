@@ -162,7 +162,7 @@ func (s *Service) GetSession(r *http.Request) *Session {
 	if err := json.Unmarshal(data, &sess); err != nil {
 		return nil
 	}
-	if sess.Version != s.sessionVersion {
+	if sess.Version != atomic.LoadInt64(&s.sessionVersion) {
 		return nil
 	}
 	if time.Since(sess.CreatedAt) >= sessionTTL {

@@ -91,7 +91,11 @@ func (s *Server) handleBackup(w http.ResponseWriter, r *http.Request) {
 		data.Config = append(data.Config, dbConfig{Key: c.Key, Value: c.Value})
 	}
 
-	plain, _ := json.Marshal(data)
+	plain, err := json.Marshal(data)
+	if err != nil {
+		jsonErr(w, "marshal backup: "+err.Error())
+		return
+	}
 	encrypted, err := encrypt(plain, req.Password)
 	if err != nil {
 		jsonErr(w, "encrypt: "+err.Error())

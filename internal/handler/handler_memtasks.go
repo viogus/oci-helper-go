@@ -179,6 +179,8 @@ func (s *Server) runChangeIPLoop(task *memTask) {
 		select {
 		case <-task.Cancel:
 			return
+		case <-s.stopping:
+			return
 		case <-ticker.C:
 			memTasksMu.Lock()
 			if task.Paused {
@@ -190,7 +192,11 @@ func (s *Server) runChangeIPLoop(task *memTask) {
 
 			tenant, err := s.store.GetTenant(task.TenantID)
 			if err != nil || tenant == nil {
-				continue
+				log.Printf("[mem-task] change-ip: tenant %d not found, removing task %s", task.TenantID, task.ID)
+				memTasksMu.Lock()
+				delete(memTasks, task.ID)
+				memTasksMu.Unlock()
+				return
 			}
 			client, err := s.clientFor(tenant)
 			if err != nil {
@@ -217,6 +223,8 @@ func (s *Server) runUpdateCfgLoop(task *memTask) {
 		select {
 		case <-task.Cancel:
 			return
+		case <-s.stopping:
+			return
 		case <-ticker.C:
 			memTasksMu.Lock()
 			if task.Paused {
@@ -228,18 +236,36 @@ func (s *Server) runUpdateCfgLoop(task *memTask) {
 
 			tenant, err := s.store.GetTenant(task.TenantID)
 			if err != nil || tenant == nil {
-				continue
+				log.Printf("[mem-task] update-cfg: tenant %d not found, removing task %s", task.TenantID, task.ID)
+				memTasksMu.Lock()
+				delete(memTasks, task.ID)
+				memTasksMu.Unlock()
+				return
 			}
 			client, err := s.clientFor(tenant)
 			if err != nil {
 				continue
 			}
 			var ocpu, mem float32
+			var parseFail bool
 			if task.Ocpus != "" {
-				fmt.Sscanf(task.Ocpus, "%f", &ocpu)
+				o, err := strconv.ParseFloat(task.Ocpus, 32)
+				if err != nil || o <= 0 {
+					parseFail = true
+				} else {
+					ocpu = float32(o)
+				}
 			}
 			if task.Memory != "" {
-				fmt.Sscanf(task.Memory, "%f", &mem)
+				m, err := strconv.ParseFloat(task.Memory, 32)
+				if err != nil || m <= 0 {
+					parseFail = true
+				} else {
+					mem = float32(m)
+				}
+			}
+			if parseFail {
+				continue
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 			err = client.UpdateInstance(ctx, task.InstanceID, task.Shape, ocpu, mem)

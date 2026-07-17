@@ -89,15 +89,24 @@ func (s *Server) handleCreateTasks(w http.ResponseWriter, r *http.Request) {
 			action := parts[1]
 			switch action {
 			case "stop":
-				s.store.UpdateTaskStatus(taskID, "cancelled", 0, "stopped by user")
+				if err := s.store.UpdateTaskStatus(taskID, "cancelled", 0, "stopped by user"); err != nil {
+					jsonErr(w, "update task: "+err.Error())
+					return
+				}
 				s.audit(0, "create-tasks:stop", strconv.FormatInt(taskID, 10), r)
 				jsonOK(w, map[string]string{"status": "ok"})
 			case "pause":
-				s.store.UpdateTaskStatus(taskID, "paused", 0, "paused by user")
+				if err := s.store.UpdateTaskStatus(taskID, "paused", 0, "paused by user"); err != nil {
+					jsonErr(w, "update task: "+err.Error())
+					return
+				}
 				s.audit(0, "create-tasks:pause", strconv.FormatInt(taskID, 10), r)
 				jsonOK(w, map[string]string{"status": "ok"})
 			case "resume":
-				s.store.UpdateTaskStatus(taskID, "pending", 0, "resumed by user")
+				if err := s.store.UpdateTaskStatus(taskID, "pending", 0, "resumed by user"); err != nil {
+					jsonErr(w, "update task: "+err.Error())
+					return
+				}
 				s.audit(0, "create-tasks:resume", strconv.FormatInt(taskID, 10), r)
 				jsonOK(w, map[string]string{"status": "ok"})
 			default:
@@ -192,25 +201,37 @@ func (s *Server) handleCreateTasks(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			for _, id := range req.TaskIDs {
-				s.store.UpdateTaskStatus(id, "cancelled", 0, "stopped by user")
+				if err := s.store.UpdateTaskStatus(id, "cancelled", 0, "stopped by user"); err != nil {
+						jsonErr(w, "update task "+strconv.FormatInt(id, 10)+": "+err.Error())
+						return
+					}
 			}
 			s.audit(0, "create-tasks:stop", strconv.FormatInt(req.TaskIDs[0], 10), r)
 			jsonOK(w, map[string]string{"status": "ok"})
 		case "pause":
 			for _, id := range req.TaskIDs {
-				s.store.UpdateTaskStatus(id, "paused", 0, "paused by user")
+				if err := s.store.UpdateTaskStatus(id, "paused", 0, "paused by user"); err != nil {
+						jsonErr(w, "update task "+strconv.FormatInt(id, 10)+": "+err.Error())
+						return
+					}
 			}
 			s.audit(0, "create-tasks:pause", strconv.Itoa(len(req.TaskIDs)), r)
 			jsonOK(w, map[string]string{"status": "ok"})
 		case "resume":
 			for _, id := range req.TaskIDs {
-				s.store.UpdateTaskStatus(id, "pending", 0, "resumed by user")
+				if err := s.store.UpdateTaskStatus(id, "pending", 0, "resumed by user"); err != nil {
+						jsonErr(w, "update task "+strconv.FormatInt(id, 10)+": "+err.Error())
+						return
+					}
 			}
 			s.audit(0, "create-tasks:resume", strconv.Itoa(len(req.TaskIDs)), r)
 			jsonOK(w, map[string]string{"status": "ok"})
 		case "delete":
 			for _, id := range req.TaskIDs {
-				s.store.UpdateTaskStatus(id, "cancelled", 0, "deleted by user")
+				if err := s.store.UpdateTaskStatus(id, "cancelled", 0, "deleted by user"); err != nil {
+						jsonErr(w, "update task "+strconv.FormatInt(id, 10)+": "+err.Error())
+						return
+					}
 			}
 			s.audit(0, "create-tasks:delete", strconv.Itoa(len(req.TaskIDs)), r)
 			jsonOK(w, map[string]string{"status": "ok"})

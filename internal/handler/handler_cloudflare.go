@@ -3,6 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -22,7 +23,11 @@ func (s *Server) handleCloudflare(w http.ResponseWriter, r *http.Request) {
 	token := s.resolveCFToken(r)
 	if token == "" {
 		// Try the default cloudflare_token config
-		token, _ = s.store.GetConfig("cloudflare_token")
+		var cfErr error
+		token, cfErr = s.store.GetConfig("cloudflare_token")
+		if cfErr != nil {
+			log.Printf("[cloudflare] GetConfig cloudflare_token error: %v", cfErr)
+		}
 		if token == "" {
 			jsonErr(w, "cloudflare not configured — set token or create a CF config")
 			return

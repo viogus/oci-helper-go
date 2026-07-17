@@ -84,9 +84,15 @@ func main() {
 		signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 		<-sig
 		log.Println("shutting down...")
-		server.Shutdown() // stop background worker first
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
+		done := make(chan struct{})
+		go func() { server.Shutdown(); close(done) }()
+		select {
+		case <-done:
+		case <-ctx.Done():
+			log.Println("background worker shutdown timed out")
+		}
 		if err := srv.Shutdown(ctx); err != nil {
 			log.Printf("shutdown: %v", err)
 		}

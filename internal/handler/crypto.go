@@ -42,6 +42,8 @@ func getSSHEncryptionKey() []byte {
 // encryptSSHPrivateKey encrypts plaintext with AES-256-GCM.
 // Returns base64-encoded salt(16) + nonce(12) + ciphertext||tag, or an error.
 // On any crypto failure, returns ("", error) — never falls back to plaintext.
+// Note: salt(16) is prepended for format compatibility with password-based
+// KDF tools, even though the key is used directly. Not used in key derivation.
 func encryptSSHPrivateKey(plaintext []byte) (string, error) {
 	key := getSSHEncryptionKey()
 	salt := make([]byte, 16)

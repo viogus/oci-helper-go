@@ -80,7 +80,11 @@ func (s *Server) handleBootVolumeByID(w http.ResponseWriter, r *http.Request) {
 			jsonErr(w, "instanceId required")
 			return
 		}
-		att, err := client.AttachBootVolume(r.Context(), bootVolumeID, req.InstanceID)
+		instanceID := req.InstanceID
+		if parts := strings.SplitN(instanceID, ":", 2); len(parts) == 2 {
+			instanceID = parts[1]
+		}
+		att, err := client.AttachBootVolume(r.Context(), bootVolumeID, instanceID)
 		if err != nil {
 			jsonErr(w, "attach: "+err.Error())
 			return

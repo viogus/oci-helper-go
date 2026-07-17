@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"strings"
 )
 
 // exported so sqlite.go can access it
@@ -177,30 +178,27 @@ func (s *Store) runMigrations() error {
 		return fmt.Errorf("read schema_version: %w", err)
 	}
 
-	// run pending migrations — each version wrapped in a transaction
-	// so a partial failure does not leave the DB in an unrecoverable state.
+	// run pending migrations.
+	// SQLite DDL auto-commits, so transactions add no safety. Instead,
+	// "duplicate column" errors from ALTER TABLE ADD COLUMN are caught
+	// and skipped — handles crash recovery where DDL partially applied.
 	for _, m := range migrations {
 		if m.Version <= currentVersion {
 			continue
 		}
 		log.Printf("[migrate] v%d: %s", m.Version, m.Name)
 
-		tx, err := s.db.Begin()
-		if err != nil {
-			return fmt.Errorf("begin migration v%d: %w", m.Version, err)
-		}
 		for _, ddl := range m.SQL {
-			if _, err := tx.Exec(ddl); err != nil {
-				tx.Rollback()
+			if _, err := s.db.Exec(ddl); err != nil {
+				if strings.Contains(err.Error(), "duplicate column") {
+					log.Printf("[migrate] v%d: skipping already-applied DDL: %s", m.Version, ddl)
+					continue
+				}
 				return fmt.Errorf("migration v%d %s: %w", m.Version, m.Name, err)
 			}
 		}
-		if _, err := tx.Exec(`INSERT INTO schema_version (version, name) VALUES (?, ?)`, m.Version, m.Name); err != nil {
-			tx.Rollback()
+		if _, err := s.db.Exec(`INSERT INTO schema_version (version, name) VALUES (?, ?)`, m.Version, m.Name); err != nil {
 			return fmt.Errorf("record migration v%d: %w", m.Version, err)
-		}
-		if err := tx.Commit(); err != nil {
-			return fmt.Errorf("commit migration v%d: %w", m.Version, err)
 		}
 	}
 	return nil

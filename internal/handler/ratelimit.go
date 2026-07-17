@@ -102,6 +102,11 @@ func (rl *loginRateLimiter) cleanupLoop() {
 					delete(rl.entries, ip)
 				}
 			}
+			for ip, blockedAt := range rl.blockedIPs {
+				if now.Sub(blockedAt) > rl.window {
+					delete(rl.blockedIPs, ip)
+				}
+			}
 			rl.mu.Unlock()
 		case <-rl.stopCh:
 			return

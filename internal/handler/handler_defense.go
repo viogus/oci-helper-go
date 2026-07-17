@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -41,7 +42,7 @@ func (s *Server) handleDefenseEnable(w http.ResponseWriter, r *http.Request) {
 	slReq := core.ListSecurityListsRequest{
 		CompartmentId: common.String(tenant.TenancyOCID),
 		VcnId:         common.String(req.VcnID),
-		Limit:         common.Int(1),
+		Limit:         common.Int(100),
 	}
 	slResp, err := vcn.ListSecurityLists(r.Context(), slReq)
 	if err != nil {
@@ -53,9 +54,9 @@ func (s *Server) handleDefenseEnable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sl := slResp.Items[0]
+	for _, sl := range slResp.Items {
 
-	// Filter OUT any ingress rule that ALLOWS traffic from blacklisted CIDRs.
+		// Filter OUT any ingress rule that ALLOWS traffic from blacklisted CIDRs.
 	// OCI security lists use ALLOW semantics only, so to block an IP we
 	// remove all existing rules that permit traffic from that source.
 	var filteredRules []core.IngressSecurityRule
@@ -84,19 +85,21 @@ func (s *Server) handleDefenseEnable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Save the original rules so disable can restore them exactly.
-	// Only save the first time — a second enable call sees already-filtered
-	// rules and would overwrite the true originals.
-	origKey := defenseOriginalRulesPrefix + req.VcnID
-	if origStr, _ := s.store.GetConfig(origKey); origStr == "" {
-		origJSON, _ := json.Marshal(sl.IngressSecurityRules)
-		s.store.SetConfig(origKey, string(origJSON))
+		// Save the original rules so disable can restore them exactly.
+		// Only save the first time — a second enable call sees already-filtered
+		// rules and would overwrite the true originals.
+		origKey := defenseOriginalRulesPrefix + req.VcnID + "_" + *sl.Id
+		if origStr, _ := s.store.GetConfig(origKey); origStr == "" {
+			origJSON, _ := json.Marshal(sl.IngressSecurityRules)
+			s.store.SetConfig(origKey, string(origJSON))
+		}
 	}
 
-	s.store.SetConfig("defense_enabled", "true")
-	s.store.SetConfig("defense_tenant", strconv.FormatInt(req.TenantID, 10))
-	s.store.SetConfig("defense_vcn", req.VcnID)
-	s.store.SetConfig("defense_cidrs", strings.Join(req.Blacklist, ","))
+	scope := strconv.FormatInt(req.TenantID, 10) + "_" + req.VcnID
+	s.store.SetConfig("defense_enabled_"+scope, "true")
+	s.store.SetConfig("defense_tenant_"+scope, strconv.FormatInt(req.TenantID, 10))
+	s.store.SetConfig("defense_vcn_"+scope, req.VcnID)
+	s.store.SetConfig("defense_cidrs_"+scope, strings.Join(req.Blacklist, ","))
 	s.audit(req.TenantID, "defense:enable", strconv.Itoa(len(req.Blacklist))+" IPs blocked", r)
 	jsonOK(w, map[string]interface{}{"status": "ok", "blocked": len(req.Blacklist)})
 }
@@ -128,7 +131,7 @@ func (s *Server) handleDefenseDisable(w http.ResponseWriter, r *http.Request) {
 	slReq := core.ListSecurityListsRequest{
 		CompartmentId: common.String(tenant.TenancyOCID),
 		VcnId:         common.String(req.VcnID),
-		Limit:         common.Int(1),
+		Limit:         common.Int(100),
 	}
 	slResp, err := vcn.ListSecurityLists(r.Context(), slReq)
 	if err != nil {
@@ -139,50 +142,58 @@ func (s *Server) handleDefenseDisable(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, "no security list found")
 		return
 	}
-	sl := slResp.Items[0]
 
-	// Restore: load the original rules saved during enable.
-	// If none saved (legacy), fall back to adding an allow-all rule.
-	var restoredRules []core.IngressSecurityRule
-	if origStr, err := s.store.GetConfig(defenseOriginalRulesPrefix + req.VcnID); err == nil && origStr != "" {
-		if err := json.Unmarshal([]byte(origStr), &restoredRules); err != nil {
-			restoredRules = nil
-		}
-	}
-	if restoredRules == nil {
-		// Check if an allow-all rule already exists before appending.
-		hasAllowAll := false
-		for _, r := range sl.IngressSecurityRules {
-			if r.Protocol != nil && *r.Protocol == "all" &&
-				r.Source != nil && *r.Source == "0.0.0.0/0" {
-				hasAllowAll = true
-				break
+	for _, sl := range slResp.Items {
+
+		// Restore: load the original rules saved during enable.
+		// If none saved (legacy), fall back to adding an allow-all rule.
+		var restoredRules []core.IngressSecurityRule
+		if origStr, err := s.store.GetConfig(defenseOriginalRulesPrefix + req.VcnID + "_" + *sl.Id); err == nil && origStr != "" {
+			if err := json.Unmarshal([]byte(origStr), &restoredRules); err != nil {
+				log.Printf("[defense] unmarshal original rules for %s: %v", *sl.Id, err)
+				restoredRules = nil
 			}
 		}
-		restoredRules = sl.IngressSecurityRules
-		if !hasAllowAll {
-			restoredRules = append(restoredRules, core.IngressSecurityRule{
-				Protocol: common.String("all"),
-				Source:   common.String("0.0.0.0/0"),
-			})
+		if restoredRules == nil {
+			// Check if an allow-all rule already exists before appending.
+			hasAllowAll := false
+			for _, r := range sl.IngressSecurityRules {
+				if r.Protocol != nil && *r.Protocol == "all" &&
+					r.Source != nil && *r.Source == "0.0.0.0/0" {
+					hasAllowAll = true
+					break
+				}
+			}
+			restoredRules = sl.IngressSecurityRules
+			if !hasAllowAll {
+				restoredRules = append(restoredRules, core.IngressSecurityRule{
+					Protocol: common.String("all"),
+					Source:   common.String("0.0.0.0/0"),
+				})
+			}
+		}
+
+		updateReq := core.UpdateSecurityListRequest{
+			SecurityListId: sl.Id,
+			UpdateSecurityListDetails: core.UpdateSecurityListDetails{
+				IngressSecurityRules: restoredRules,
+				EgressSecurityRules:  sl.EgressSecurityRules,
+			},
+		}
+		if _, err := vcn.UpdateSecurityList(r.Context(), updateReq); err != nil {
+			jsonErr(w, "update security list: "+err.Error())
+			return
 		}
 	}
 
-	updateReq := core.UpdateSecurityListRequest{
-		SecurityListId: sl.Id,
-		UpdateSecurityListDetails: core.UpdateSecurityListDetails{
-			IngressSecurityRules: restoredRules,
-			EgressSecurityRules:  sl.EgressSecurityRules,
-		},
+	scope := strconv.FormatInt(req.TenantID, 10) + "_" + req.VcnID
+	s.store.SetConfig("defense_enabled_"+scope, "false")
+	s.store.SetConfig("defense_tenant_"+scope, "")
+	s.store.SetConfig("defense_vcn_"+scope, "")
+	s.store.SetConfig("defense_cidrs_"+scope, "")
+	for _, sl := range slResp.Items {
+		s.store.SetConfig(defenseOriginalRulesPrefix+req.VcnID+"_"+*sl.Id, "")
 	}
-	if _, err := vcn.UpdateSecurityList(r.Context(), updateReq); err != nil {
-		jsonErr(w, "update security list: "+err.Error())
-		return
-	}
-
-	s.store.SetConfig("defense_enabled", "false")
-	s.store.SetConfig("defense_cidrs", "")
-	s.store.SetConfig(defenseOriginalRulesPrefix+req.VcnID, "")
 	s.audit(req.TenantID, "defense:disable", req.VcnID, r)
 	jsonOK(w, map[string]string{"status": "ok"})
 }

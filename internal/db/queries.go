@@ -6,6 +6,18 @@ import (
 	"time"
 )
 
+func escapeLike(s string) string {
+	b := make([]byte, 0, len(s)+8)
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c == '%' || c == '_' || c == '\\' {
+			b = append(b, '\\')
+		}
+		b = append(b, c)
+	}
+	return string(b)
+}
+
 // Tenant
 
 func (s *Store) CreateTenant(t *Tenant) error {
@@ -181,15 +193,15 @@ func (s *Store) ListAudit(limit int) ([]AuditLog, error) {
 }
 
 func (s *Store) ListAuditPaginated(keyword string, page, size int) ([]AuditLog, int64, error) {
-	kw := "%" + keyword + "%"
+	kw := "%" + escapeLike(keyword) + "%"
 	var total int64
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM audit_logs WHERE action LIKE ? OR detail LIKE ?`, kw, kw).Scan(&total); err != nil {
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM audit_logs WHERE action LIKE ? ESCAPE '\' OR detail LIKE ? ESCAPE '\'`, kw, kw).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("count audit_logs: %w", err)
 	}
 
 	offset := (page - 1) * size
 	rows, err := s.db.Query(`SELECT id, tenant_id, action, detail, ip, created_at FROM audit_logs
-		WHERE action LIKE ? OR detail LIKE ?
+		WHERE action LIKE ? ESCAPE '\' OR detail LIKE ? ESCAPE '\'
 		ORDER BY id DESC LIMIT ? OFFSET ?`,
 		kw, kw, size, offset)
 	if err != nil {
@@ -299,9 +311,9 @@ func (s *Store) SetConfig(key, value string) error {
 }
 
 func (s *Store) ListInstancesPaginated(tenantID int64, keyword string, page, size int) ([]Instance, int64, error) {
-	kw := "%" + keyword + "%"
+	kw := "%" + escapeLike(keyword) + "%"
 	var total int64
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM instances WHERE (tenant_id=? OR ?=0) AND (name LIKE ? OR ocid LIKE ? OR public_ip LIKE ?)`,
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM instances WHERE (tenant_id=? OR ?=0) AND (name LIKE ? ESCAPE '\' OR ocid LIKE ? ESCAPE '\' OR public_ip LIKE ? ESCAPE '\')`,
 		tenantID, tenantID, kw, kw, kw).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("count instances: %w", err)
 	}
@@ -310,7 +322,7 @@ func (s *Store) ListInstancesPaginated(tenantID int64, keyword string, page, siz
 	rows, err := s.db.Query(`SELECT id, tenant_id, name, ocid, shape, ocpu, memory_gb, boot_volume_gb,
 		public_ip, private_ip, state, availability_domain, fault_domain, image_id, subnet_id,
 		region, created_at, synced_at FROM instances
-		WHERE (tenant_id=? OR ?=0) AND (name LIKE ? OR ocid LIKE ? OR public_ip LIKE ?)
+		WHERE (tenant_id=? OR ?=0) AND (name LIKE ? ESCAPE '\' OR ocid LIKE ? ESCAPE '\' OR public_ip LIKE ? ESCAPE '\')
 		ORDER BY created_at DESC LIMIT ? OFFSET ?`,
 		tenantID, tenantID, kw, kw, kw, size, offset)
 	if err != nil {
@@ -331,16 +343,16 @@ func (s *Store) ListInstancesPaginated(tenantID int64, keyword string, page, siz
 }
 
 func (s *Store) ListTenantsPaginated(keyword string, page, size int) ([]Tenant, int64, error) {
-	kw := "%" + keyword + "%"
+	kw := "%" + escapeLike(keyword) + "%"
 	var total int64
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM tenants WHERE name LIKE ? OR region LIKE ?`, kw, kw).Scan(&total); err != nil {
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM tenants WHERE name LIKE ? ESCAPE '\' OR region LIKE ? ESCAPE '\'`, kw, kw).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("count tenants: %w", err)
 	}
 
 	offset := (page - 1) * size
 	rows, err := s.db.Query(`SELECT id, name, user_ocid, tenancy_ocid, region, fingerprint, key_file,
 		status, coalesce(home_region,''), coalesce(subscribed,''), created_at, updated_at FROM tenants
-		WHERE name LIKE ? OR region LIKE ?
+		WHERE name LIKE ? ESCAPE '\' OR region LIKE ? ESCAPE '\'
 		ORDER BY id DESC LIMIT ? OFFSET ?`,
 		kw, kw, size, offset)
 	if err != nil {
@@ -360,16 +372,16 @@ func (s *Store) ListTenantsPaginated(keyword string, page, size int) ([]Tenant, 
 }
 
 func (s *Store) ListTasksPaginated(keyword string, page, size int) ([]Task, int64, error) {
-	kw := "%" + keyword + "%"
+	kw := "%" + escapeLike(keyword) + "%"
 	var total int64
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM tasks WHERE type LIKE ? OR message LIKE ?`, kw, kw).Scan(&total); err != nil {
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM tasks WHERE type LIKE ? ESCAPE '\' OR message LIKE ? ESCAPE '\'`, kw, kw).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("count tasks: %w", err)
 	}
 
 	offset := (page - 1) * size
 	rows, err := s.db.Query(`SELECT id, tenant_id, type, status, progress, message, payload,
 		coalesce(result,''), created_at, started_at, finished_at FROM tasks
-		WHERE type LIKE ? OR message LIKE ?
+		WHERE type LIKE ? ESCAPE '\' OR message LIKE ? ESCAPE '\'
 		ORDER BY id DESC LIMIT ? OFFSET ?`,
 		kw, kw, size, offset)
 	if err != nil {
@@ -519,6 +531,9 @@ func (s *Store) GetSSHKeyByID(id int64) (*SSHKey, error) {
 		`SELECT id, name, public_key, COALESCE(private_key,''), fingerprint, COALESCE(tenant_id,0), created_at FROM ssh_keys WHERE id=?`,
 		id,
 	).Scan(&k.ID, &k.Name, &k.PublicKey, &k.PrivateKey, &k.Fingerprint, &k.TenantID, &k.CreatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
 	if err != nil {
 		return nil, err
 	}

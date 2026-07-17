@@ -188,7 +188,12 @@ func (s *Server) handleTGCallback(bot *telegram.Bot, chatID int64, messageID int
 	case action == "blacklist" && len(parts) >= 2 && parts[1] == "add":
 		s.tgBlacklistAddPrompt(bot, chatID, messageID)
 	case action == "blacklist" && len(parts) >= 3 && parts[1] == "remove":
-		id, _ := strconv.ParseInt(parts[2], 10, 64)
+		id, err := strconv.ParseInt(parts[2], 10, 64)
+		if err != nil {
+			kb := tgMainKeyboard()
+			tgSend(bot, chatID, messageID, "Invalid blacklist entry ID", &kb)
+			return
+		}
 		s.tgBlacklistRemoveID(bot, chatID, messageID, id)
 	case action == "blacklist" && len(parts) >= 2 && parts[1] == "clear":
 		if len(parts) >= 3 && parts[2] == "confirm" {

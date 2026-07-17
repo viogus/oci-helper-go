@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -161,16 +162,20 @@ func (s *Server) handleTenantByID(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodPatch:
 		var req struct {
-			Name         string `json:"name"`
-			NotifyTG     string `json:"notify_tg"`
-			NotifyDingtalk string `json:"notify_dingtalk"`
-			Region       string `json:"region"`
+			Name           string  `json:"name"`
+			NotifyTG       *string `json:"notify_tg"`
+			NotifyDingtalk *string `json:"notify_dingtalk"`
+			Region         string  `json:"region"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			jsonErr(w, "invalid body: "+err.Error())
 			return
 		}
-		t, _ := s.store.GetTenant(id)
+		t, err := s.store.GetTenant(id)
+		if err != nil {
+			jsonErr(w, "get tenant: "+err.Error())
+			return
+		}
 		if t == nil {
 			jsonErr(w, "not found")
 			return
@@ -182,11 +187,11 @@ func (s *Server) handleTenantByID(w http.ResponseWriter, r *http.Request) {
 			t.Region = req.Region
 		}
 		// Notification settings stored in config table
-		if req.NotifyTG != "" {
-			s.store.SetConfig(fmt.Sprintf("tenant_ntg_%d", id), req.NotifyTG)
+		if req.NotifyTG != nil {
+			s.store.SetConfig(fmt.Sprintf("tenant_ntg_%d", id), *req.NotifyTG)
 		}
-		if req.NotifyDingtalk != "" {
-			s.store.SetConfig(fmt.Sprintf("tenant_ndtalk_%d", id), req.NotifyDingtalk)
+		if req.NotifyDingtalk != nil {
+			s.store.SetConfig(fmt.Sprintf("tenant_ndtalk_%d", id), *req.NotifyDingtalk)
 		}
 		// Update tenant in DB
 		if _, err := s.store.DB().Exec(`UPDATE tenants SET name=?, region=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`,
@@ -238,7 +243,11 @@ func (s *Server) handleTenantInfo(w http.ResponseWriter, r *http.Request) {
 	}
 	tenantInfoCache.RUnlock()
 
-	t, _ := s.store.GetTenant(id)
+	t, err := s.store.GetTenant(id)
+	if err != nil {
+		jsonErr(w, "get tenant: "+err.Error())
+		return
+	}
 	if t == nil {
 		jsonErr(w, "not found")
 		return
@@ -777,13 +786,13 @@ func (s *Server) handleTenantUpload(w http.ResponseWriter, r *http.Request) {
 
 	// Read the key file content
 	buf := make([]byte, handler.Size)
-	if _, err := keyFile.Read(buf); err != nil {
+	if _, err := io.ReadFull(keyFile, buf); err != nil {
 		jsonErr(w, "read key file: "+err.Error())
 		return
 	}
 
-	// Generate unique filename if not provided
-	filename := handler.Filename
+	// Generate unique filename if not provided (sanitized against path traversal)
+	filename := filepath.Base(handler.Filename)
 	if filename == "" {
 		filename = fmt.Sprintf("upload_%d.pem", time.Now().UnixNano())
 	}
@@ -792,6 +801,13 @@ func (s *Server) handleTenantUpload(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, "save key file: "+err.Error())
 		return
 	}
+	// Clean up key file on validation or DB failure
+	removeFile := true
+	defer func() {
+		if removeFile {
+			os.Remove(keyPath)
+		}
+	}()
 
 	// Parse tenant fields from form
 	tenant := &db.Tenant{
@@ -824,6 +840,7 @@ func (s *Server) handleTenantUpload(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, "create tenant: "+err.Error())
 		return
 	}
+	removeFile = false
 	s.audit(tenant.ID, "tenant:upload", tenant.Name, r)
 	jsonOK(w, tenant)
 }
@@ -835,14 +852,17 @@ func (s *Server) handleRefreshPlanType(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	var req struct {
-		TenantID int64 `json:"tenant_id"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		jsonErr(w, "invalid body: "+err.Error())
+	idStr := trimTenantSuffix(r.URL.Path, "/refresh-plan-type")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil || id <= 0 {
+		jsonErr(w, "invalid tenant id")
 		return
 	}
-	t, _ := s.store.GetTenant(req.TenantID)
+	t, err := s.store.GetTenant(id)
+	if err != nil {
+		jsonErr(w, "get tenant: "+err.Error())
+		return
+	}
 	if t == nil {
 		jsonErr(w, "tenant not found")
 		return
@@ -852,11 +872,11 @@ func (s *Server) handleRefreshPlanType(w http.ResponseWriter, r *http.Request) {
 	planType := ""
 	client, err := s.clientFor(t)
 	if err != nil {
-		log.Printf("[refresh-plan-type] client for tenant %d: %v", req.TenantID, err)
+		log.Printf("[refresh-plan-type] client for tenant %d: %v", id, err)
 	} else {
 		sub, err := client.GetSubscriptionInfo(r.Context())
 		if err != nil {
-			log.Printf("[refresh-plan-type] subscription for tenant %d: %v", req.TenantID, err)
+			log.Printf("[refresh-plan-type] subscription for tenant %d: %v", id, err)
 		} else if sub != nil {
 			planType = string(sub.PlanType)
 		}
@@ -864,16 +884,16 @@ func (s *Server) handleRefreshPlanType(w http.ResponseWriter, r *http.Request) {
 
 	// Store plan type and refresh timestamp.
 	if planType != "" {
-		if err := s.store.SetConfig(fmt.Sprintf("tenant_plan_type_%d", req.TenantID), planType); err != nil {
-			log.Printf("[refresh-plan-type] save plan type for tenant %d: %v", req.TenantID, err)
+		if err := s.store.SetConfig(fmt.Sprintf("tenant_plan_type_%d", id), planType); err != nil {
+			log.Printf("[refresh-plan-type] save plan type for tenant %d: %v", id, err)
 		}
 	}
-	configKey := fmt.Sprintf("tenant_plan_refresh_%d", req.TenantID)
+	configKey := fmt.Sprintf("tenant_plan_refresh_%d", id)
 	if err := s.store.SetConfig(configKey, time.Now().Format(time.RFC3339)); err != nil {
 		jsonErr(w, "save refresh time: "+err.Error())
 		return
 	}
-	s.audit(req.TenantID, "tenant:refresh-plan-type", "", r)
+	s.audit(id, "tenant:refresh-plan-type", "", r)
 	jsonOK(w, map[string]string{
 		"status":   "ok",
 		"planType": planType,

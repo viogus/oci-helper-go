@@ -172,7 +172,7 @@ func (w *Worker) runBatchStart(task *db.Task) {
 		default:
 		}
 
-		instID := payload.InstanceIDs[i]
+		instID := bareOCID(payload.InstanceIDs[i])
 		progress := (i * 100) / total
 		w.store.UpdateTaskStatus(task.ID, "running", progress, instID)
 

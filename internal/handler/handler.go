@@ -38,9 +38,10 @@ type Server struct {
 	store    *db.Store
 	auth     *auth.Service
 	mux      *http.ServeMux
-	worker   *Worker
+	worker    *Worker
 	ratelimit *loginRateLimiter
 	startTime time.Time
+	stopping   chan struct{}
 }
 
 func New(cfg *config.Config, store *db.Store) *Server {
@@ -52,6 +53,7 @@ func New(cfg *config.Config, store *db.Store) *Server {
 		worker:    NewWorker(store, cfg.KeysDir),
 		ratelimit: newLoginRateLimiter(),
 		startTime: time.Now(),
+		stopping:   make(chan struct{}),
 	}
 	s.routes()
 	go s.worker.Run()
@@ -60,6 +62,7 @@ func New(cfg *config.Config, store *db.Store) *Server {
 
 // Shutdown gracefully stops background workers.
 func (s *Server) Shutdown() {
+	close(s.stopping)
 	s.worker.Shutdown()
 }
 
@@ -275,7 +278,7 @@ func (s *Server) routes() {
 			}
 			// Set CSP on the HTML document (the SPA shell). CSP is a
 			// document-level policy; setting it on API responses has no effect.
-			w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://*.tile.openstreetmap.org; connect-src 'self' ws: wss:; font-src 'self' data:; frame-src 'self'; object-src 'none'; base-uri 'self'")
+			w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://*.tile.openstreetmap.org; connect-src 'self'; font-src 'self' data:; frame-src 'self'; object-src 'none'; base-uri 'self'")
 			// Try to open the file; if it doesn't exist in the embedded FS,
 			// serve index.html for SPA client-side routing.
 			path := strings.TrimPrefix(r.URL.Path, "/")
@@ -342,6 +345,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if totp == "" || !auth.ValidateTOTP(secret, totp) {
+			s.ratelimit.allow(ip)
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
@@ -509,6 +513,9 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		}
 		jsonOK(w, out)
 	case http.MethodPost:
+		if !s.requireAdmin(w, r) {
+			return
+		}
 		var req struct {
 			Key   string `json:"key"`
 			Value string `json:"value"`
@@ -788,7 +795,7 @@ func (s *Server) handleAIChat(w http.ResponseWriter, r *http.Request) {
 		lastMsg := req.Messages[len(req.Messages)-1].Content
 		if searchResults, err := ai.Search(lastMsg); err == nil && len(searchResults) > 0 {
 			req.Messages = append([]ai.ChatMessage{
-				{Role: "system", Content: "Search results for additional context:\n" + searchResults},
+				{Role: "system", Content: "=== SEARCH CONTEXT START ===\n" + searchResults + "\n=== SEARCH CONTEXT END ==="},
 			}, req.Messages...)
 		}
 	}
@@ -804,6 +811,7 @@ func (s *Server) handleAIChat(w http.ResponseWriter, r *http.Request) {
 		}
 		ch, err := client.ChatStream(r.Context(), req.Messages)
 		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
 			fmt.Fprintf(w, "event: error\ndata: %s\n\n", err.Error())
 			flusher.Flush()
 			return

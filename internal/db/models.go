@@ -43,17 +43,18 @@ type Instance struct {
 
 // Task represents an asynchronous background operation (batch create, batch start, etc.).
 type Task struct {
-	ID          int64     `json:"id"`
-	TenantID    int64     `json:"tenantId"`
-	Type        string    `json:"type"`
-	Status      string    `json:"status"`
-	Progress    int       `json:"progress"`
-	Message     string    `json:"message"`
-	Payload     string    `json:"payload"`
-	Result      string    `json:"result,omitempty"`
-	CreatedAt   time.Time `json:"createdAt"`
-	StartedAt   *time.Time `json:"startedAt,omitempty"`
-	FinishedAt  *time.Time `json:"finishedAt,omitempty"`
+	ID           int64      `json:"id"`
+	TenantID     int64      `json:"tenantId"`
+	ParentTaskID int64      `json:"parentTaskId"`
+	Type         string     `json:"type"`
+	Status       string     `json:"status"`
+	Progress     int        `json:"progress"`
+	Message      string     `json:"message"`
+	Payload      string     `json:"payload"`
+	Result       string     `json:"result,omitempty"`
+	CreatedAt    time.Time  `json:"createdAt"`
+	StartedAt    *time.Time `json:"startedAt,omitempty"`
+	FinishedAt   *time.Time `json:"finishedAt,omitempty"`
 }
 
 // AuditLog records an auditable action performed through the panel.
@@ -130,6 +131,23 @@ type InstancePlan struct {
 	OCPUs             float64   `json:"ocpus"`
 	MemoryGB          float64   `json:"memoryGB"`
 	CreatedAt         time.Time `json:"createdAt"`
+}
+
+// StockAlert represents a stock availability monitor for an OCI shape in a
+// region/availability-domain. The background monitor checks periodically and
+// sends a Telegram notification when stock status changes.
+type StockAlert struct {
+	ID                 int64      `json:"id"`
+	TenantID           int64      `json:"tenantId"`
+	Region             string     `json:"region"`
+	Shape              string     `json:"shape"`
+	AvailabilityDomain string     `json:"availabilityDomain"`
+	ChatID             int64      `json:"chatId"`
+	Enabled            bool       `json:"enabled"`
+	LastCheckedAt      *time.Time `json:"lastCheckedAt,omitempty"`
+	LastStockStatus    string     `json:"lastStockStatus"`
+	CreatedAt          time.Time  `json:"createdAt"`
+	UpdatedAt          time.Time  `json:"updatedAt"`
 }
 
 // User represents an authenticated panel user with role-based access.

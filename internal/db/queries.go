@@ -140,15 +140,15 @@ func (s *Store) GetInstanceByID(id string) (*Instance, error) {
 // Task
 
 func (s *Store) CreateTask(t *Task) error {
-	_, err := s.db.Exec(`INSERT INTO tasks (tenant_id, type, status, payload) VALUES (?,?,?,?)`, t.TenantID, t.Type, t.Status, t.Payload)
+	_, err := s.db.Exec(`INSERT INTO tasks (tenant_id, parent_task_id, type, status, payload) VALUES (?,?,?,?,?)`, t.TenantID, t.ParentTaskID, t.Type, t.Status, t.Payload)
 	return err
 }
 
 // GetTaskByID returns a single task by its primary key, or nil if not found.
 func (s *Store) GetTaskByID(id int64) (*Task, error) {
 	var t Task
-	err := s.db.QueryRow(`SELECT id, tenant_id, type, status, progress, message, payload, coalesce(result,''), created_at, started_at, finished_at FROM tasks WHERE id=?`, id).
-		Scan(&t.ID, &t.TenantID, &t.Type, &t.Status, &t.Progress, &t.Message, &t.Payload, &t.Result, &t.CreatedAt, &t.StartedAt, &t.FinishedAt)
+	err := s.db.QueryRow(`SELECT id, tenant_id, coalesce(parent_task_id,0), type, status, progress, message, payload, coalesce(result,''), created_at, started_at, finished_at FROM tasks WHERE id=?`, id).
+		Scan(&t.ID, &t.TenantID, &t.ParentTaskID, &t.Type, &t.Status, &t.Progress, &t.Message, &t.Payload, &t.Result, &t.CreatedAt, &t.StartedAt, &t.FinishedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -176,7 +176,7 @@ func (s *Store) UpdateTaskStatus(id int64, status string, progress int, message 
 }
 
 func (s *Store) ListTasks() ([]Task, error) {
-	rows, err := s.db.Query(`SELECT id, tenant_id, type, status, progress, message, payload, coalesce(result,''), created_at, started_at, finished_at FROM tasks ORDER BY id DESC LIMIT 200`)
+	rows, err := s.db.Query(`SELECT id, tenant_id, coalesce(parent_task_id,0), type, status, progress, message, payload, coalesce(result,''), created_at, started_at, finished_at FROM tasks ORDER BY id DESC LIMIT 200`)
 	if err != nil {
 		return nil, err
 	}
@@ -184,7 +184,7 @@ func (s *Store) ListTasks() ([]Task, error) {
 	var list []Task
 	for rows.Next() {
 		var t Task
-		if err := rows.Scan(&t.ID, &t.TenantID, &t.Type, &t.Status, &t.Progress, &t.Message, &t.Payload, &t.Result, &t.CreatedAt, &t.StartedAt, &t.FinishedAt); err != nil {
+		if err := rows.Scan(&t.ID, &t.TenantID, &t.ParentTaskID, &t.Type, &t.Status, &t.Progress, &t.Message, &t.Payload, &t.Result, &t.CreatedAt, &t.StartedAt, &t.FinishedAt); err != nil {
 			return nil, err
 		}
 		list = append(list, t)
@@ -403,7 +403,7 @@ func (s *Store) ListTasksPaginated(keyword string, page, size int) ([]Task, int6
 	}
 
 	offset := (page - 1) * size
-	rows, err := s.db.Query(`SELECT id, tenant_id, type, status, progress, message, payload,
+	rows, err := s.db.Query(`SELECT id, tenant_id, coalesce(parent_task_id,0), type, status, progress, message, payload,
 		coalesce(result,''), created_at, started_at, finished_at FROM tasks
 		WHERE type LIKE ? ESCAPE '\' OR message LIKE ? ESCAPE '\'
 		ORDER BY id DESC LIMIT ? OFFSET ?`,
@@ -415,7 +415,7 @@ func (s *Store) ListTasksPaginated(keyword string, page, size int) ([]Task, int6
 	var list []Task
 	for rows.Next() {
 		var t Task
-		if err := rows.Scan(&t.ID, &t.TenantID, &t.Type, &t.Status, &t.Progress, &t.Message,
+		if err := rows.Scan(&t.ID, &t.TenantID, &t.ParentTaskID, &t.Type, &t.Status, &t.Progress, &t.Message,
 			&t.Payload, &t.Result, &t.CreatedAt, &t.StartedAt, &t.FinishedAt); err != nil {
 			return nil, 0, err
 		}
@@ -427,6 +427,24 @@ func (s *Store) ListTasksPaginated(keyword string, page, size int) ([]Task, int6
 func (s *Store) UpdateTaskPayload(id int64, payload string) error {
 	_, err := s.db.Exec(`UPDATE tasks SET payload=? WHERE id=?`, payload, id)
 	return err
+}
+
+// ListTasksByParentID returns all tasks that share a given parent_task_id.
+func (s *Store) ListTasksByParentID(parentID int64) ([]Task, error) {
+	rows, err := s.db.Query(`SELECT id, tenant_id, coalesce(parent_task_id,0), type, status, progress, message, payload, coalesce(result,''), created_at, started_at, finished_at FROM tasks WHERE parent_task_id=? ORDER BY id`, parentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var list []Task
+	for rows.Next() {
+		var t Task
+		if err := rows.Scan(&t.ID, &t.TenantID, &t.ParentTaskID, &t.Type, &t.Status, &t.Progress, &t.Message, &t.Payload, &t.Result, &t.CreatedAt, &t.StartedAt, &t.FinishedAt); err != nil {
+			return nil, err
+		}
+		list = append(list, t)
+	}
+	return list, rows.Err()
 }
 
 // ResetRunningTasks sets all "running" tasks back to "pending" so they are retried on restart.
@@ -641,6 +659,16 @@ func (s *Store) GetUserByUsername(username string) (*User, error) {
 	return &u, err
 }
 
+func (s *Store) GetUserByID(id int64) (*User, error) {
+	var u User
+	err := s.db.QueryRow(`SELECT id, username, password_hash, role, mfa_enabled, mfa_secret, email, created_at, updated_at FROM users WHERE id=?`, id).
+		Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &u.MFAEnabled, &u.MFASecret, &u.Email, &u.CreatedAt, &u.UpdatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	return &u, err
+}
+
 func (s *Store) CreateUser(u *User) error {
 	_, err := s.db.Exec(`INSERT INTO users (username, password_hash, role, email) VALUES (?,?,?,?)`,
 		u.Username, u.PasswordHash, u.Role, u.Email)
@@ -659,5 +687,93 @@ func (s *Store) UpdateUserMFA(id int64, secret string, enabled bool) error {
 
 func (s *Store) DeleteUser(id int64) error {
 	_, err := s.db.Exec(`DELETE FROM users WHERE id=?`, id)
+	return err
+}
+
+// ── Stock Alerts ────────────────────────────────────────────────────────
+
+func (s *Store) CreateStockAlert(a *StockAlert) error {
+	_, err := s.db.Exec(
+		`INSERT INTO stock_alerts (tenant_id, region, shape, availability_domain, chat_id, enabled)
+		 VALUES (?,?,?,?,?,?)`,
+		a.TenantID, a.Region, a.Shape, a.AvailabilityDomain, a.ChatID, a.Enabled)
+	return err
+}
+
+func (s *Store) ListStockAlerts(tenantID int64) ([]StockAlert, error) {
+	q := `SELECT id, tenant_id, region, shape, availability_domain, chat_id, enabled,
+		last_checked_at, last_stock_status, created_at, updated_at
+		FROM stock_alerts WHERE (tenant_id=? OR ?=0) ORDER BY id DESC`
+	rows, err := s.db.Query(q, tenantID, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var list []StockAlert
+	for rows.Next() {
+		var a StockAlert
+		if err := rows.Scan(&a.ID, &a.TenantID, &a.Region, &a.Shape,
+			&a.AvailabilityDomain, &a.ChatID, &a.Enabled,
+			&a.LastCheckedAt, &a.LastStockStatus, &a.CreatedAt, &a.UpdatedAt); err != nil {
+			return nil, err
+		}
+		list = append(list, a)
+	}
+	return list, rows.Err()
+}
+
+func (s *Store) GetStockAlertByID(id int64) (*StockAlert, error) {
+	var a StockAlert
+	err := s.db.QueryRow(
+		`SELECT id, tenant_id, region, shape, availability_domain, chat_id, enabled,
+		 last_checked_at, last_stock_status, created_at, updated_at
+		 FROM stock_alerts WHERE id=?`, id).
+		Scan(&a.ID, &a.TenantID, &a.Region, &a.Shape,
+			&a.AvailabilityDomain, &a.ChatID, &a.Enabled,
+			&a.LastCheckedAt, &a.LastStockStatus, &a.CreatedAt, &a.UpdatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	return &a, err
+}
+
+func (s *Store) UpdateStockAlert(a *StockAlert) error {
+	_, err := s.db.Exec(
+		`UPDATE stock_alerts SET tenant_id=?, region=?, shape=?, availability_domain=?, chat_id=?, enabled=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`,
+		a.TenantID, a.Region, a.Shape, a.AvailabilityDomain, a.ChatID, a.Enabled, a.ID)
+	return err
+}
+
+func (s *Store) DeleteStockAlert(id int64) error {
+	_, err := s.db.Exec(`DELETE FROM stock_alerts WHERE id=?`, id)
+	return err
+}
+
+func (s *Store) ListEnabledStockAlerts() ([]StockAlert, error) {
+	rows, err := s.db.Query(
+		`SELECT id, tenant_id, region, shape, availability_domain, chat_id, enabled,
+		 last_checked_at, last_stock_status, created_at, updated_at
+		 FROM stock_alerts WHERE enabled=1 ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var list []StockAlert
+	for rows.Next() {
+		var a StockAlert
+		if err := rows.Scan(&a.ID, &a.TenantID, &a.Region, &a.Shape,
+			&a.AvailabilityDomain, &a.ChatID, &a.Enabled,
+			&a.LastCheckedAt, &a.LastStockStatus, &a.CreatedAt, &a.UpdatedAt); err != nil {
+			return nil, err
+		}
+		list = append(list, a)
+	}
+	return list, rows.Err()
+}
+
+func (s *Store) UpdateStockAlertStatus(id int64, status string) error {
+	_, err := s.db.Exec(
+		`UPDATE stock_alerts SET last_checked_at=CURRENT_TIMESTAMP, last_stock_status=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`,
+		status, id)
 	return err
 }

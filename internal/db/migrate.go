@@ -156,6 +156,32 @@ var migrations = []struct {
 			`ALTER TABLE instances ADD COLUMN region TEXT NOT NULL DEFAULT ''`,
 		},
 	},
+	{
+		Version: 5,
+		Name:    "add_parent_task_id",
+		SQL: []string{
+			`ALTER TABLE tasks ADD COLUMN parent_task_id INTEGER DEFAULT 0`,
+		},
+	},
+	{
+		Version: 6,
+		Name:    "add_stock_alerts",
+		SQL: []string{
+			`CREATE TABLE IF NOT EXISTS stock_alerts (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				tenant_id INTEGER NOT NULL,
+				region TEXT NOT NULL,
+				shape TEXT NOT NULL,
+				availability_domain TEXT NOT NULL DEFAULT '',
+				chat_id INTEGER NOT NULL DEFAULT 0,
+				enabled INTEGER NOT NULL DEFAULT 1,
+				last_checked_at TIMESTAMP,
+				last_stock_status TEXT DEFAULT '',
+				created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+				updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+			)`,
+		},
+	},
 }
 
 func (s *Store) runMigrations() error {

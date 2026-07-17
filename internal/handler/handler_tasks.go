@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -24,6 +25,7 @@ func (s *Server) handleBatchCreate(w http.ResponseWriter, r *http.Request) {
 		AvailabilityDomain string  `json:"availability_domain"`
 		BootVolumeSizeGB   int64   `json:"boot_volume_size_gb"`
 		DisplayNamePrefix  string  `json:"display_name_prefix"`
+		MultiTenant        bool    `json:"multi_tenant"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonErr(w, "invalid body: "+err.Error())
@@ -43,10 +45,42 @@ func (s *Server) handleBatchCreate(w http.ResponseWriter, r *http.Request) {
 		req.DisplayNamePrefix = "oci-helper"
 	}
 
-	// Create one task per tenant
+	// When multi_tenant is true (or multiple tenant IDs provided), create a
+	// parent task to track aggregate progress, then fan out one child task per
+	// tenant. Each child runs independently through the existing batch_create
+	// worker path. The existing single-tenant flow continues to work unchanged.
+	isMulti := req.MultiTenant || len(req.TenantIDs) > 1
+
+	var parentTaskID int64
+	if isMulti {
+		// Create parent tracking task.
+		parentPayload, _ := json.Marshal(map[string]interface{}{
+			"tenant_ids":           req.TenantIDs,
+			"instances_per_tenant": req.InstancesPerTenant,
+			"region":               req.Region,
+			"shape":                req.Shape,
+			"image_id":             req.ImageID,
+			"display_name_prefix":  req.DisplayNamePrefix,
+			"total_tenants":        len(req.TenantIDs),
+		})
+		parentTask := &db.Task{
+			Type:         "batch_create_multi",
+			Status:       "running",
+			Progress:     0,
+			Message:      fmt.Sprintf("0/%d tenants done", len(req.TenantIDs)),
+			Payload:      string(parentPayload),
+		}
+		if err := s.store.CreateTask(parentTask); err != nil {
+			jsonErr(w, "create parent task: "+err.Error())
+			return
+		}
+		parentTaskID = parentTask.ID
+	}
+
+	// Create one child task per tenant.
 	var taskIDs []int64
 	for _, tid := range req.TenantIDs {
-		payload, _ := json.Marshal(map[string]interface{}{
+		childPayload, _ := json.Marshal(map[string]interface{}{
 			"tenant_id":            tid,
 			"instances_per_tenant": req.InstancesPerTenant,
 			"region":               req.Region,
@@ -56,12 +90,14 @@ func (s *Server) handleBatchCreate(w http.ResponseWriter, r *http.Request) {
 			"availability_domain":  req.AvailabilityDomain,
 			"boot_volume_size_gb":  req.BootVolumeSizeGB,
 			"display_name_prefix":  req.DisplayNamePrefix,
+			"parent_task_id":       parentTaskID,
 		})
 		task := &db.Task{
-			TenantID: tid,
-			Type:     "batch_create",
-			Status:   "pending",
-			Payload:  string(payload),
+			TenantID:     tid,
+			ParentTaskID: parentTaskID,
+			Type:         "batch_create",
+			Status:       "pending",
+			Payload:      string(childPayload),
 		}
 		if err := s.store.CreateTask(task); err != nil {
 			jsonErr(w, "create task: "+err.Error())
@@ -70,7 +106,7 @@ func (s *Server) handleBatchCreate(w http.ResponseWriter, r *http.Request) {
 		taskIDs = append(taskIDs, task.ID)
 	}
 	s.audit(0, "batch-create:submit", strconv.Itoa(len(req.TenantIDs))+" tenants", r)
-	jsonOK(w, map[string]interface{}{"task_ids": taskIDs, "status": "pending"})
+	jsonOK(w, map[string]interface{}{"task_ids": taskIDs, "status": "pending", "parent_task_id": parentTaskID})
 }
 
 func (s *Server) handleCreateTasks(w http.ResponseWriter, r *http.Request) {
@@ -159,7 +195,7 @@ func (s *Server) handleCreateTasks(w http.ResponseWriter, r *http.Request) {
 		}
 		var filtered []db.Task
 		for _, t := range all {
-			if t.Type == "batch_create" {
+			if t.Type == "batch_create" || t.Type == "batch_create_multi" {
 				if keyword != "" && !strings.Contains(strings.ToLower(t.Payload), strings.ToLower(keyword)) &&
 					!strings.Contains(strings.ToLower(t.Status), strings.ToLower(keyword)) {
 					continue

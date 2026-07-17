@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/viogus/oci-helper-go/internal/cloudflare"
 	"github.com/viogus/oci-helper-go/internal/db"
@@ -212,11 +214,11 @@ func (s *Server) handleCloudflareOCISync(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	var req struct {
-		TenantID   int64    `json:"tenant_id"`
-		ZoneID     string   `json:"zone_id"`
-		Domain     string   `json:"domain"`
-		Action     string   `json:"action"` // add, remove, update
-		CfgID      int64    `json:"cfg_id"`
+		TenantID    int64    `json:"tenant_id"`
+		ZoneID      string   `json:"zone_id"`
+		Domain      string   `json:"domain"`
+		Action      string   `json:"action"` // add, remove, update
+		CfgID       int64    `json:"cfg_id"`
 		InstanceIDs []string `json:"instance_ids"` // optional: specific instances
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -386,6 +388,267 @@ func parseInt64(s string) (int64, error) {
 }
 
 func errStr(err error) string {
-	if err == nil { return "" }
+	if err == nil {
+		return ""
+	}
 	return err.Error()
+}
+
+// ── DNS Auto-Sync Monitor ───────────────────────────────────────────────
+
+// dnsAutoSyncState holds runtime state for the background DNS auto-sync monitor.
+type dnsAutoSyncState struct {
+	mu          sync.Mutex
+	lastRun     time.Time
+	lastResults []map[string]interface{}
+	running     bool
+}
+
+// startDNSAutoSync runs the background DNS auto-sync monitor in a goroutine.
+// It polls every 60 seconds, checks dns_auto_sync_enabled config, and updates
+// Cloudflare DNS records when public IPs change.
+func (s *Server) startDNSAutoSync() {
+	log.Println("[dns-auto-sync] monitor started")
+	ticker := time.NewTicker(60 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-s.stopping:
+			log.Println("[dns-auto-sync] monitor stopped")
+			return
+		case <-ticker.C:
+			s.runDNSAutoSync()
+		case <-s.dnsAutoSyncTrigger:
+			s.runDNSAutoSync()
+		}
+	}
+}
+
+// runDNSAutoSync performs one cycle of the auto-sync: reads config, fetches
+// all instances with public IPs, and creates or updates Cloudflare DNS records
+// when an IP has changed since the last sync.
+func (s *Server) runDNSAutoSync() {
+	s.dnsSyncState.mu.Lock()
+	if s.dnsSyncState.running {
+		s.dnsSyncState.mu.Unlock()
+		return // prevent overlapping runs
+	}
+	s.dnsSyncState.running = true
+	s.dnsSyncState.mu.Unlock()
+
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("[dns-auto-sync] panic: %v", r)
+		}
+		s.dnsSyncState.mu.Lock()
+		s.dnsSyncState.running = false
+		s.dnsSyncState.lastRun = time.Now()
+		s.dnsSyncState.mu.Unlock()
+	}()
+
+	enabled, _ := s.store.GetConfig("dns_auto_sync_enabled")
+	if enabled != "true" {
+		return
+	}
+
+	zoneID, _ := s.store.GetConfig("dns_auto_sync_zone_id")
+	domain, _ := s.store.GetConfig("dns_auto_sync_domain")
+	cfgIDStr, _ := s.store.GetConfig("dns_auto_sync_cfg_id")
+
+	if zoneID == "" {
+		log.Println("[dns-auto-sync] zone_id not configured, skipping")
+		return
+	}
+
+	// Resolve Cloudflare token: prefer named CfCfg, fall back to global config.
+	var token string
+	if cfgID, err := strconv.ParseInt(cfgIDStr, 10, 64); err == nil && cfgID > 0 {
+		cfg, cfgErr := s.store.GetCfCfg(cfgID)
+		if cfgErr == nil && cfg != nil {
+			token = cfg.Token
+		}
+	}
+	if token == "" {
+		token, _ = s.store.GetConfig("cloudflare_token")
+	}
+	if token == "" {
+		log.Println("[dns-auto-sync] no Cloudflare token configured, skipping")
+		return
+	}
+
+	cf := cloudflare.New(token)
+
+	// Get ALL instances across all tenants that have public IPs.
+	instances, err := s.store.ListInstances(0) // tenantID=0 means all
+	if err != nil {
+		log.Printf("[dns-auto-sync] list instances: %v", err)
+		return
+	}
+
+	existingRecords, err := cf.ListDNSRecords(zoneID)
+	if err != nil {
+		log.Printf("[dns-auto-sync] list dns records: %v", err)
+		return
+	}
+
+	var results []map[string]interface{}
+
+	for _, inst := range instances {
+		if inst.PublicIP == "" {
+			continue
+		}
+
+		// Build DNS name: instance name + optional domain suffix.
+		dnsName := inst.Name
+		if domain != "" {
+			dnsName = inst.Name + "." + domain
+		}
+
+		lastIPKey := "dns_last_ip_" + inst.ID
+		lastIP, _ := s.store.GetConfig(lastIPKey)
+
+		if lastIP == inst.PublicIP {
+			continue // no change
+		}
+
+		// Normalize names for comparison (strip trailing dot, lowercase).
+		normalize := func(s string) string {
+			return strings.ToLower(strings.TrimRight(s, "."))
+		}
+		target := normalize(dnsName)
+
+		// Check if a DNS record already exists for this instance.
+		var existingRecord *cloudflare.DNSRecord
+		for _, rec := range existingRecords {
+			if normalize(rec.Name) == target {
+				recCopy := rec
+				existingRecord = &recCopy
+				break
+			}
+		}
+
+		if existingRecord != nil {
+			// Update existing record.
+			_, err := cf.UpdateDNSRecord(zoneID, existingRecord.ID, cloudflare.DNSRecord{
+				Type:    "A",
+				Name:    dnsName,
+				Content: inst.PublicIP,
+				TTL:     120,
+			})
+			if err != nil {
+				log.Printf("[dns-auto-sync] update %s: %v", inst.Name, err)
+				results = append(results, map[string]interface{}{
+					"instance": inst.Name,
+					"dns":      dnsName,
+					"ip":       inst.PublicIP,
+					"action":   "update",
+					"error":    err.Error(),
+				})
+				continue
+			}
+			log.Printf("[dns-auto-sync] %s: %s -> %s (updated)", inst.Name, lastIP, inst.PublicIP)
+			results = append(results, map[string]interface{}{
+				"instance": inst.Name,
+				"dns":      dnsName,
+				"ip":       inst.PublicIP,
+				"action":   "update",
+				"old_ip":   lastIP,
+			})
+		} else {
+			// Create new record.
+			_, err := cf.CreateDNSRecord(zoneID, cloudflare.DNSRecord{
+				Type:    "A",
+				Name:    dnsName,
+				Content: inst.PublicIP,
+				TTL:     120,
+			})
+			if err != nil {
+				log.Printf("[dns-auto-sync] create %s: %v", inst.Name, err)
+				results = append(results, map[string]interface{}{
+					"instance": inst.Name,
+					"dns":      dnsName,
+					"ip":       inst.PublicIP,
+					"action":   "create",
+					"error":    err.Error(),
+				})
+				continue
+			}
+			log.Printf("[dns-auto-sync] %s: (new) %s (created)", inst.Name, inst.PublicIP)
+			results = append(results, map[string]interface{}{
+				"instance": inst.Name,
+				"dns":      dnsName,
+				"ip":       inst.PublicIP,
+				"action":   "create",
+			})
+		}
+
+		// Persist last known IP.
+		if err := s.store.SetConfig(lastIPKey, inst.PublicIP); err != nil {
+			log.Printf("[dns-auto-sync] save last IP for %s: %v", inst.Name, err)
+		}
+	}
+
+	// Save last sync time and results summary.
+	s.store.SetConfig("dns_auto_sync_last_time", time.Now().UTC().Format(time.RFC3339))
+	if len(results) > 0 {
+		summary, _ := json.Marshal(results)
+		s.store.SetConfig("dns_auto_sync_last_results", string(summary))
+	}
+
+	s.dnsSyncState.mu.Lock()
+	s.dnsSyncState.lastResults = results
+	s.dnsSyncState.mu.Unlock()
+}
+
+// ── DNS Auto-Sync API Handlers ──────────────────────────────────────────
+
+// handleCloudflareAutoSyncStatus returns the current auto-sync configuration and state.
+func (s *Server) handleCloudflareAutoSyncStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	enabled, _ := s.store.GetConfig("dns_auto_sync_enabled")
+	zoneID, _ := s.store.GetConfig("dns_auto_sync_zone_id")
+	domain, _ := s.store.GetConfig("dns_auto_sync_domain")
+	cfgIDStr, _ := s.store.GetConfig("dns_auto_sync_cfg_id")
+	lastTime, _ := s.store.GetConfig("dns_auto_sync_last_time")
+	lastResultsStr, _ := s.store.GetConfig("dns_auto_sync_last_results")
+
+	var lastResults []map[string]interface{}
+	if lastResultsStr != "" {
+		_ = json.Unmarshal([]byte(lastResultsStr), &lastResults)
+	}
+	// Fill from in-memory state if config is empty.
+	if len(lastResults) == 0 {
+		s.dnsSyncState.mu.Lock()
+		lastResults = s.dnsSyncState.lastResults
+		s.dnsSyncState.mu.Unlock()
+	}
+
+	jsonOK(w, map[string]interface{}{
+		"enabled":         enabled == "true",
+		"zoneId":          zoneID,
+		"domain":          domain,
+		"cfgId":           cfgIDStr,
+		"lastSync":        lastTime,
+		"lastCount":       len(lastResults),
+		"lastSyncResults": lastResults,
+	})
+}
+
+// handleCloudflareAutoSyncTrigger manually triggers a DNS auto-sync cycle.
+func (s *Server) handleCloudflareAutoSyncTrigger(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	// Non-blocking send to trigger channel; if the monitor is busy, it will
+	// pick up the next tick anyway.
+	select {
+	case s.dnsAutoSyncTrigger <- struct{}{}:
+	default:
+	}
+	jsonOK(w, map[string]string{"status": "triggered"})
 }

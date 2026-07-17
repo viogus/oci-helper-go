@@ -42,21 +42,29 @@ type Server struct {
 	ratelimit *loginRateLimiter
 	startTime time.Time
 	stopping   chan struct{}
+
+	// DNS auto-sync
+	dnsAutoSyncTrigger chan struct{}
+	dnsSyncState        dnsAutoSyncState
 }
 
 func New(cfg *config.Config, store *db.Store) *Server {
 	s := &Server{
-		cfg:       cfg,
-		store:     store,
-		auth:      auth.New(cfg.Username, cfg.Password, cfg.MFASecret, cfg.MFA, cfg.SecureCookies),
-		mux:       http.NewServeMux(),
-		worker:    NewWorker(store, cfg.KeysDir),
-		ratelimit: newLoginRateLimiter(),
-		startTime: time.Now(),
-		stopping:   make(chan struct{}),
+		cfg:                cfg,
+		store:              store,
+		auth:               auth.New(cfg.Username, cfg.Password, cfg.MFASecret, cfg.MFA, cfg.SecureCookies),
+		mux:                http.NewServeMux(),
+		worker:             NewWorker(store, cfg.KeysDir),
+		ratelimit:          newLoginRateLimiter(),
+		startTime:          time.Now(),
+		stopping:           make(chan struct{}),
+		dnsAutoSyncTrigger: make(chan struct{}, 1),
+		dnsSyncState:       dnsAutoSyncState{},
 	}
 	s.routes()
 	go s.worker.Run()
+	go s.startDNSAutoSync()
+	go s.startStockMonitor()
 	return s
 }
 
@@ -164,6 +172,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/update/now", s.withAuth(s.handleUpdateNow))
 	s.mux.HandleFunc("/api/admin/blacklist/clear", s.withAuth(s.handleAdminBlacklistClear))
 	s.mux.HandleFunc("/api/notify/test", s.withAuth(s.handleNotifyTest))
+		// Stock alerts
+		s.mux.HandleFunc("/api/stock-alerts", s.withAuth(s.handleStockAlerts))
 	// SSH keys
 	s.mux.HandleFunc("/api/ssh/keys", s.withAuth(s.handleSSHKeys))
 	// Users
@@ -172,6 +182,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/instances/vnc", s.withAuth(s.handleStartVNC))
 	s.mux.HandleFunc("/api/instances/vnc/stop", s.withAuth(s.handleStopVNC))
 	s.mux.HandleFunc("/api/instances/vnc/wait", s.withAuth(s.handleConsoleWait))
+	s.mux.HandleFunc("/api/instances/vnc/proxy", s.withAuth(s.handleVNCProxy))
 	s.mux.HandleFunc("/api/instances/config-info", s.withAuth(s.handleInstanceConfigInfo))
 	s.mux.HandleFunc("/api/instances/update-password", s.withAuth(s.handleUpdatePassword))
 	s.mux.HandleFunc("/api/shell/ws", s.withAuth(s.handleShellWS))
@@ -196,6 +207,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/instances/config-update", s.withAuth(s.handleInstanceConfigUpdate))
 	// G10: batch check alive
 	s.mux.HandleFunc("/api/instances/check-alive-batch", s.withAuth(s.handleCheckAliveBatch))
+	// G16: netboot rescue
+	s.mux.HandleFunc("/api/instances/netboot-rescue/stop", s.withAuth(s.handleNetbootRescueStop))
+	s.mux.HandleFunc("/api/instances/netboot-rescue", s.withAuth(s.handleNetbootRescue))
 
 	// dashboard glance
 	s.mux.HandleFunc("/api/glance", s.withAuth(s.handleGlance))
@@ -247,6 +261,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/tenants/", s.withAuth(s.handleTenantByID))
 	s.mux.HandleFunc("/api/instances/", s.withAuth(s.handleInstanceAction))
 	s.mux.HandleFunc("/api/shell/", s.withAuth(s.handleShell))
+	s.mux.HandleFunc("/api/cloudflare/auto-sync/status", s.withAuth(s.handleCloudflareAutoSyncStatus))
+	s.mux.HandleFunc("/api/cloudflare/auto-sync/trigger", s.withAuth(s.handleCloudflareAutoSyncTrigger))
 	s.mux.HandleFunc("/api/cloudflare/", s.withAuth(s.handleCloudflare))
 	s.mux.HandleFunc("/api/cloudflare/cfgs", s.withAuth(s.handleCloudflareCfgs))
 	s.mux.HandleFunc("/api/cloudflare/cfgs/", s.withAuth(s.handleCloudflareCfgByID))
@@ -260,6 +276,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/ip-data/", s.withAuth(s.handleIpDataByID))
 	s.mux.HandleFunc("/api/users/", s.withAuth(s.handleUserByID))
 	s.mux.HandleFunc("/api/sync/", s.withAuth(s.handleSync))
+		s.mux.HandleFunc("/api/stock-alerts/", s.withAuth(s.handleStockAlertByID))
 
 
 		// Static files (frontend) with SPA fallback.
@@ -330,31 +347,41 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
-	// check MFA BEFORE setting session — prevents MFA status leak
-	mfaEnabled, mfaErr := s.store.GetConfig("mfa_enabled")
-	if mfaErr != nil {
-		log.Printf("[login] config read error: %v", mfaErr)
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
-		return
-	}
-	if mfaEnabled == "true" {
-		totp := r.Header.Get("X-TOTP")
-		secret, err := s.store.GetConfig("mfa_secret")
-		if err != nil {
-			log.Printf("[login] secret read error: %v", err)
-			http.Error(w, "Unauthorized", http.StatusUnauthorized)
-			return
-		}
-		if totp == "" || !auth.ValidateTOTP(secret, totp) {
-			s.ratelimit.allow(ip)
-			http.Error(w, "Unauthorized", http.StatusUnauthorized)
-			return
-		}
-	}
+	// Validate password first (prevents MFA status leak).
 	if !s.auth.Login(w, r) {
 		// Record failed attempt; may trigger persistent blacklist.
 		s.ratelimit.allow(ip)
 		return
+	}
+	// After password validation succeeds, check MFA.
+	// Per-user MFA takes precedence over global MFA.
+	username, _, _ := r.BasicAuth()
+	user, userErr := s.store.GetUserByUsername(username)
+	if userErr != nil {
+		log.Printf("[login] GetUserByUsername(%s): %v", username, userErr)
+	}
+	if userErr == nil && user != nil && user.MFAEnabled {
+		// Per-user MFA is enabled — require TOTP
+		totp := r.Header.Get("X-TOTP")
+		if totp == "" || !auth.ValidateTOTP(user.MFASecret, totp) {
+			s.ratelimit.allow(ip)
+			s.auth.Logout(w)
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+	} else {
+		// Fall back to global MFA check
+		mfaEnabled, mfaErr := s.store.GetConfig("mfa_enabled")
+		if mfaErr == nil && mfaEnabled == "true" {
+			totp := r.Header.Get("X-TOTP")
+			secret, secErr := s.store.GetConfig("mfa_secret")
+			if secErr != nil || !auth.ValidateTOTP(secret, totp) {
+				s.ratelimit.allow(ip)
+				s.auth.Logout(w)
+				http.Error(w, "Unauthorized", http.StatusUnauthorized)
+				return
+			}
+		}
 	}
 	s.ratelimit.reset(ip)
 	jsonOK(w, map[string]string{"status": "ok"})
@@ -470,17 +497,30 @@ func (s *Server) handleGoogleCallback(w http.ResponseWriter, r *http.Request) {
 	// set session using signed cookie
 	// Look up user role from DB (default to "user" for new accounts).
 	role := "user"
+	var oauthUser *db.User
 	if u, err := s.store.GetUserByUsername(userInfo.Email); err == nil && u != nil {
 		role = u.Role
+		oauthUser = u
 	}
-	// Enforce MFA for OAuth login, same as handleLogin does.
-	mfaEnabled, mfaErr := s.store.GetConfig("mfa_enabled")
-	if mfaErr == nil && mfaEnabled == "true" {
+	// Enforce MFA for OAuth login.
+	// Per-user MFA takes precedence over global MFA.
+	if oauthUser != nil && oauthUser.MFAEnabled {
+		// Per-user MFA is enabled — require TOTP
 		totp := r.URL.Query().Get("totp")
-		secret, secErr := s.store.GetConfig("mfa_secret")
-		if secErr != nil || !auth.ValidateTOTP(secret, totp) {
+		if totp == "" || !auth.ValidateTOTP(oauthUser.MFASecret, totp) {
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
+		}
+	} else {
+		// Fall back to global MFA check
+		mfaEnabled, mfaErr := s.store.GetConfig("mfa_enabled")
+		if mfaErr == nil && mfaEnabled == "true" {
+			totp := r.URL.Query().Get("totp")
+			secret, secErr := s.store.GetConfig("mfa_secret")
+			if secErr != nil || !auth.ValidateTOTP(secret, totp) {
+				http.Error(w, "Unauthorized", http.StatusUnauthorized)
+				return
+			}
 		}
 	}
 	signedValue := s.auth.CreateSession(userInfo.Email, role)

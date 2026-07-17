@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/viogus/oci-helper-go/internal/auth"
 	"github.com/viogus/oci-helper-go/internal/db"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -162,6 +163,82 @@ func (s *Server) handleUserByID(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		jsonErr(w, "unknown action: "+action)
+
+	case http.MethodPost:
+		switch action {
+		case "mfa/setup":
+			u, err := s.store.GetUserByID(id)
+			if err != nil || u == nil {
+				jsonErr(w, "user not found")
+				return
+			}
+			secret := auth.GenerateMFA()
+			if err := s.store.UpdateUserMFA(id, secret, false); err != nil {
+				jsonErr(w, "save mfa secret: "+err.Error())
+				return
+			}
+			uri := auth.TOTPURI(secret, u.Username, "oci-helper")
+			s.audit(0, "user:mfa:setup", u.Username, r)
+			jsonOK(w, map[string]string{"secret": secret, "uri": uri})
+			return
+
+		case "mfa/verify":
+			var req struct {
+				Code string `json:"code"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				jsonErr(w, "invalid body: "+err.Error())
+				return
+			}
+			u, err := s.store.GetUserByID(id)
+			if err != nil || u == nil {
+				jsonErr(w, "user not found")
+				return
+			}
+			if u.MFASecret == "" {
+				jsonErr(w, "MFA not set up, call mfa/setup first")
+				return
+			}
+			if !auth.ValidateTOTP(u.MFASecret, req.Code) {
+				jsonErr(w, "invalid code")
+				return
+			}
+			if err := s.store.UpdateUserMFA(id, u.MFASecret, true); err != nil {
+				jsonErr(w, "enable mfa: "+err.Error())
+				return
+			}
+			s.audit(0, "user:mfa:enabled", u.Username, r)
+			jsonOK(w, map[string]string{"status": "ok"})
+			return
+
+		case "mfa/disable":
+			var req struct {
+				Code string `json:"code"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				jsonErr(w, "invalid body: "+err.Error())
+				return
+			}
+			u, err := s.store.GetUserByID(id)
+			if err != nil || u == nil {
+				jsonErr(w, "user not found")
+				return
+			}
+			if u.MFASecret == "" || !auth.ValidateTOTP(u.MFASecret, req.Code) {
+				jsonErr(w, "valid TOTP code required to disable MFA")
+				return
+			}
+			if err := s.store.UpdateUserMFA(id, "", false); err != nil {
+				jsonErr(w, "disable mfa: "+err.Error())
+				return
+			}
+			s.audit(0, "user:mfa:disabled", u.Username, r)
+			jsonOK(w, map[string]string{"status": "ok"})
+			return
+
+		default:
+			jsonErr(w, "unknown action: "+action)
+		}
 
 	default:
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)

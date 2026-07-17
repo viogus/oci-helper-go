@@ -18,6 +18,8 @@ const pollInterval = 5 * time.Second
 // Runs in its own goroutine started by Server.New().
 // Supports checkpoint-resume: interrupted tasks are reset to pending on restart
 // and resume from where they left off using saved progress in the payload.
+// For multi-tenant batch operations, child tasks are executed in parallel
+// goroutines (up to 5 concurrent) with a parent task tracking overall progress.
 type Worker struct {
 	store   *db.Store
 	keysDir string
@@ -27,11 +29,14 @@ type Worker struct {
 	// so no mutex is needed.
 	restarts int
 	stop     chan struct{}
+	// batchSem limits concurrent batch operations to 5 — prevents resource
+	// exhaustion when multiple tenants run batch create/start in parallel.
+	batchSem chan struct{}
 }
 
 // NewWorker creates a Worker with the given store and keys directory.
 func NewWorker(store *db.Store, keysDir string) *Worker {
-	return &Worker{store: store, keysDir: keysDir, stop: make(chan struct{})}
+	return &Worker{store: store, keysDir: keysDir, stop: make(chan struct{}), batchSem: make(chan struct{}, 5)}
 }
 
 // Shutdown signals the worker to stop gracefully. Resets any running tasks
@@ -135,14 +140,25 @@ func (w *Worker) processNext() {
 		}
 		switch t.Type {
 		case "batch_start":
-			w.runBatchStart(t)
+			go w.runWithSem(t, w.runBatchStart)
 		case "batch_create":
-			w.runBatchCreate(t)
+			go w.runWithSem(t, w.runBatchCreate)
+		case "batch_create_multi":
+			// Parent task — stays running until all children finish.
+			// updateParentProgress (called by children) handles the
+			// final status transition.
+			w.store.UpdateTaskStatus(t.ID, "running", 0, "0 tenants done")
 		default:
 			w.store.UpdateTaskStatus(t.ID, "failed", 0, "unknown task type: "+t.Type)
 		}
-		return // one at a time
 	}
+}
+
+// runWithSem wraps a task runner with semaphore-based concurrency limiting.
+func (w *Worker) runWithSem(t *db.Task, fn func(*db.Task)) {
+	w.batchSem <- struct{}{}
+	defer func() { <-w.batchSem }()
+	fn(t)
 }
 
 // batchStartPayload is saved in Task.Payload as JSON.
@@ -225,6 +241,7 @@ func (w *Worker) runBatchStart(task *db.Task) {
 // batchCreatePayload is saved in Task.Payload as JSON.
 type batchCreatePayload struct {
 	TenantID           int64  `json:"tenant_id"`
+	ParentTaskID       int64  `json:"parent_task_id"`
 	InstancesPerTenant int    `json:"instances_per_tenant"`
 	Region             string `json:"region"`
 	Shape              string `json:"shape"`
@@ -246,12 +263,14 @@ func (w *Worker) runBatchCreate(task *db.Task) {
 	tenant, err := w.store.GetTenant(payload.TenantID)
 	if err != nil || tenant == nil {
 		w.store.UpdateTaskStatus(task.ID, "failed", 0, "tenant not found")
+		w.maybeUpdateParent(payload.ParentTaskID)
 		return
 	}
 
 	client, err := w.newClient(tenant)
 	if err != nil {
 		w.store.UpdateTaskStatus(task.ID, "failed", 0, "oci client: "+err.Error())
+		w.maybeUpdateParent(payload.ParentTaskID)
 		return
 	}
 
@@ -302,6 +321,7 @@ func (w *Worker) runBatchCreate(task *db.Task) {
 	}
 
 	w.store.UpdateTaskStatus(task.ID, "completed", 100, fmt.Sprintf("created %d instances", total))
+	w.maybeUpdateParent(payload.ParentTaskID)
 }
 
 // taskIsActive re-reads the task status from the DB and returns true if it is
@@ -327,4 +347,42 @@ func (w *Worker) saveCheckpoint(task *db.Task, payload interface{}, index int) {
 	if data, err := json.Marshal(payload); err == nil {
 		w.store.UpdateTaskPayload(task.ID, string(data))
 	}
+}
+
+// maybeUpdateParent checks if the current task has a parent and, if so,
+// recalculates the parent's progress based on how many child tasks have
+// completed or failed. When all children are done the parent is marked
+// completed.
+func (w *Worker) maybeUpdateParent(parentTaskID int64) {
+	if parentTaskID <= 0 {
+		return
+	}
+	children, err := w.store.ListTasksByParentID(parentTaskID)
+	if err != nil || len(children) == 0 {
+		return
+	}
+
+	completed := 0
+	failed := 0
+	for _, c := range children {
+		if c.Status == "completed" {
+			completed++
+		} else if c.Status == "failed" {
+			failed++
+		}
+	}
+	done := completed + failed
+	total := len(children)
+	progress := (done * 100) / total
+
+	status := "running"
+	if done >= total {
+		status = "completed"
+	}
+
+	msg := fmt.Sprintf("%d/%d tenants done", done, total)
+	if failed > 0 {
+		msg += fmt.Sprintf(" (%d failed)", failed)
+	}
+	w.store.UpdateTaskStatus(parentTaskID, status, progress, msg)
 }

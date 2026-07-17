@@ -3075,3 +3075,164 @@ func (c *Client) CostSummary(ctx context.Context, startDate, endDate string) ([]
 }
 
 // Tenant returns the tenant config.
+func (c *Client) Tenant() *db.Tenant { return c.tenant }
+
+// WaitForState polls the instance lifecycle state until it matches desiredState
+// or a terminal/error state is reached. Returns true if the desired state was
+// reached, false on timeout or terminal state.
+func (c *Client) WaitForState(ctx context.Context, instanceID, desiredState string, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		inst, err := c.GetInstance(ctx, instanceID)
+		if err != nil {
+			return false
+		}
+		state := string(inst.LifecycleState)
+		if state == desiredState {
+			return true
+		}
+		if state == "TERMINATED" || state == "TERMINATING" {
+			return false
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(5 * time.Second):
+		}
+	}
+	return false
+}
+
+// CreateBootVolumeFromImage creates a boot volume from an OCI platform image by
+// launching a minimal temporary instance, detaching its boot volume, and
+// terminating the instance (preserving the boot volume). Returns the created
+// boot volume ID.
+func (c *Client) CreateBootVolumeFromImage(ctx context.Context, compartmentID, availabilityDomain, imageID, subnetID, displayName string) (string, error) {
+	// Step 1: Launch a minimal temp instance from the rescue image.
+	launchReq := core.LaunchInstanceRequest{
+		LaunchInstanceDetails: core.LaunchInstanceDetails{
+			CompartmentId:      common.String(compartmentID),
+			AvailabilityDomain: common.String(availabilityDomain),
+			DisplayName:        common.String(displayName),
+			ImageId:            common.String(imageID),
+			Shape:              common.String("VM.Standard.E2.1.Micro"),
+			SubnetId:           common.String(subnetID),
+			CreateVnicDetails: &core.CreateVnicDetails{
+				SubnetId: common.String(subnetID),
+			},
+			SourceDetails: core.InstanceSourceViaImageDetails{
+				ImageId: common.String(imageID),
+			},
+		},
+	}
+	resp, err := c.compute.LaunchInstance(ctx, launchReq)
+	if err != nil {
+		return "", fmt.Errorf("launch temp instance: %w", err)
+	}
+	tempID := *resp.Id
+
+	// Step 2: Wait for temp instance to be RUNNING.
+	if !c.WaitForState(ctx, tempID, "RUNNING", 5*time.Minute) {
+		// Best-effort cleanup.
+		c.TerminateInstance(context.Background(), tempID, false, false)
+		return "", fmt.Errorf("timeout waiting for temp instance to start")
+	}
+
+	// Step 3: Stop the temp instance.
+	if _, err := c.InstanceAction(ctx, tempID, core.InstanceActionActionStop); err != nil {
+		c.TerminateInstance(context.Background(), tempID, false, false)
+		return "", fmt.Errorf("stop temp instance: %w", err)
+	}
+	if !c.WaitForState(ctx, tempID, "STOPPED", 120*time.Second) {
+		c.TerminateInstance(context.Background(), tempID, false, false)
+		return "", fmt.Errorf("timeout waiting for temp instance to stop")
+	}
+
+	// Step 4: Get boot volume from the temp instance.
+	attach, err := c.GetBootVolumeAttachment(ctx, compartmentID, tempID)
+	if err != nil {
+		c.TerminateInstance(context.Background(), tempID, false, false)
+		return "", fmt.Errorf("get boot volume attachment for temp: %w", err)
+	}
+	bvID := *attach.BootVolumeId
+
+	// Step 5: Detach boot volume from temp instance.
+	if err := c.DetachBootVolume(ctx, *attach.Id); err != nil {
+		c.TerminateInstance(context.Background(), tempID, true, false)
+		return "", fmt.Errorf("detach boot volume from temp: %w", err)
+	}
+
+	// Step 6: Terminate the temp instance, preserving the boot volume.
+	if err := c.TerminateInstance(ctx, tempID, true, false); err != nil {
+		return "", fmt.Errorf("terminate temp instance: %w", err)
+	}
+
+	return bvID, nil
+}
+
+// ── Stock Availability ──────────────────────────────────────────────────
+
+// CheckInstanceStock checks whether a compute shape is available for launch
+// in the given region and (optionally) availability domain. It works by:
+//  1. Setting the client region to the target region.
+//  2. Listing Oracle Linux images in that region and picking the first one.
+//  3. Calling ListShapes with that image to get the supported shape list.
+//  4. Checking whether the requested shape appears in the results.
+//
+// Returns "available", "out_of_stock", or "unknown" on error.
+func (c *Client) CheckInstanceStock(ctx context.Context, region, shape, ad string) (string, error) {
+	c.SetRegion(region)
+
+	// Find a reference Oracle Linux image in the target region.
+	compartmentID := c.tenant.TenancyOCID
+	images, err := c.ListImages(ctx, compartmentID, "Oracle Linux")
+	if err != nil || len(images) == 0 {
+		// Try without OS filter as fallback.
+		images, err = c.ListImages(ctx, compartmentID, "")
+		if err != nil || len(images) == 0 {
+			return "unknown", fmt.Errorf("check stock: no images available in region %s", region)
+		}
+	}
+
+	imageID := *images[0].Id
+
+	// List shapes compatible with the reference image.
+	shapes, err := c.ListShapes(ctx, compartmentID, imageID)
+	if err != nil {
+		return "unknown", fmt.Errorf("check stock list shapes: %w", err)
+	}
+
+	for _, s := range shapes {
+		if s.Shape != nil && *s.Shape == shape {
+			// If an AD was specified, also check AD-scoped availability via limits API.
+			if ad != "" {
+				avail, availErr := c.getResourceAvailability(ctx, compartmentID, region, "compute", "standard-core-count", ad)
+				if availErr == nil && avail <= 0 {
+					return "out_of_stock", nil
+				}
+			}
+			return "available", nil
+		}
+	}
+	return "out_of_stock", nil
+}
+
+// getResourceAvailability queries the OCI limits service for a specific limit
+// in a given AD. Returns the available count, or 0 on error.
+func (c *Client) getResourceAvailability(ctx context.Context, compartmentID, region, serviceName, limitName, ad string) (int64, error) {
+	c.SetRegion(region)
+	req := limits.GetResourceAvailabilityRequest{
+		ServiceName:        common.String(serviceName),
+		LimitName:          common.String(limitName),
+		CompartmentId:      common.String(compartmentID),
+		AvailabilityDomain: common.String(ad),
+	}
+	resp, err := c.limits.GetResourceAvailability(ctx, req)
+	if err != nil {
+		return 0, err
+	}
+	if resp.Available == nil {
+		return 0, nil
+	}
+	return *resp.Available, nil
+}

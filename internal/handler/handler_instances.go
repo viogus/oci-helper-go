@@ -24,6 +24,7 @@ func (s *Server) handleInstances(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		tenantID, _ := strconv.ParseInt(r.URL.Query().Get("tenant_id"), 10, 64)
 		keyword := r.URL.Query().Get("keyword")
+		state := r.URL.Query().Get("state")
 		page, _ := strconv.Atoi(r.URL.Query().Get("page"))
 		if page < 1 {
 			page = 1
@@ -32,7 +33,7 @@ func (s *Server) handleInstances(w http.ResponseWriter, r *http.Request) {
 		if size < 1 {
 			size = 20
 		}
-		list, total, err := s.store.ListInstancesPaginated(tenantID, keyword, page, size)
+		list, total, err := s.store.ListInstancesPaginated(tenantID, keyword, state, page, size)
 		if err != nil {
 			jsonErr(w, "list instances: "+err.Error())
 			return
@@ -778,6 +779,227 @@ func (s *Server) handleCheckAliveBatch(w http.ResponseWriter, r *http.Request) {
 
 	s.audit(req.TenantID, "instance:check-alive-batch", strconv.Itoa(len(running)), r)
 	jsonOK(w, map[string]interface{}{"results": results})
+}
+
+// ── Shrink Boot Volume to 47GB ─────────────────────────────────────────
+
+func (s *Server) handleShrinkDisk(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		TenantID   int64  `json:"tenant_id"`
+		InstanceID string `json:"instance_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonErr(w, "invalid body: "+err.Error())
+		return
+	}
+	if req.TenantID == 0 || req.InstanceID == "" {
+		jsonErr(w, "tenant_id and instance_id are required")
+		return
+	}
+
+	client, tenant, ok := s.clientForInstance(req.TenantID, req.InstanceID, w)
+	if !ok {
+		return
+	}
+	ocid := bareOCID(req.InstanceID)
+
+	// Step 1: Get instance details from OCI.
+	ctx := r.Context()
+	inst, err := client.GetInstance(ctx, ocid)
+	if err != nil {
+		jsonErr(w, "get instance: "+err.Error())
+		return
+	}
+	compartmentID := strOr(inst.CompartmentId, tenant.TenancyOCID)
+	ad := strOr(inst.AvailabilityDomain, "")
+	if ad == "" {
+		jsonErr(w, "instance has no availability domain")
+		return
+	}
+
+	// Step 2: Get the boot volume attachment for this instance.
+	attachments, err := client.ListBootVolumeAttachments(ctx, compartmentID, ocid)
+	if err != nil {
+		jsonErr(w, "list boot volume attachments: "+err.Error())
+		return
+	}
+	if len(attachments) == 0 {
+		jsonErr(w, "no boot volume attached to instance")
+		return
+	}
+	attachment := attachments[0]
+	oldVolumeID := strOr(attachment.BootVolumeId, "")
+	attachmentID := strOr(attachment.Id, "")
+	if oldVolumeID == "" || attachmentID == "" {
+		jsonErr(w, "boot volume attachment missing IDs")
+		return
+	}
+
+	// Step 3: Get old boot volume size.
+	oldBV, err := client.GetBootVolume(ctx, oldVolumeID)
+	if err != nil {
+		jsonErr(w, "get boot volume: "+err.Error())
+		return
+	}
+	oldSizeGB := int64(0)
+	if oldBV.SizeInGBs != nil {
+		oldSizeGB = *oldBV.SizeInGBs
+	}
+	const targetSizeGB = 47
+	if oldSizeGB <= targetSizeGB {
+		jsonErr(w, fmt.Sprintf("boot volume is already %dGB or smaller (current: %dGB)", targetSizeGB, oldSizeGB))
+		return
+	}
+
+	// Step 4: Stop the instance if it is running.
+	initialState := string(inst.LifecycleState)
+	if initialState == "RUNNING" || initialState == "STARTING" {
+		if _, err := client.InstanceAction(ctx, ocid, core.InstanceActionActionStop); err != nil {
+			jsonErr(w, "stop instance: "+err.Error())
+			return
+		}
+		log.Printf("[shrink-disk] stopping instance %s", ocid)
+		if !client.WaitForState(ctx, ocid, "STOPPED", 5*time.Minute) {
+			jsonErr(w, "timeout waiting for instance to stop")
+			return
+		}
+	} else if initialState != "STOPPED" {
+		jsonErr(w, fmt.Sprintf("instance must be RUNNING or STOPPED, current state: %s", initialState))
+		return
+	}
+
+	// Step 5: Detach the old boot volume.
+	log.Printf("[shrink-disk] detaching boot volume %s", oldVolumeID)
+	if err := client.DetachBootVolume(ctx, attachmentID); err != nil {
+		// Try to re-start the instance if it was stopped by us.
+		if initialState == "RUNNING" {
+			client.InstanceAction(context.Background(), ocid, core.InstanceActionActionStart)
+		}
+		jsonErr(w, "detach boot volume: "+err.Error())
+		return
+	}
+
+	// Step 6: Create a new 47GB boot volume cloned from the old one.
+	newDisplayName := fmt.Sprintf("%s-shrunk-47g", strOr(inst.DisplayName, ocid))
+	if len(newDisplayName) > 255 {
+		newDisplayName = newDisplayName[:255]
+	}
+	log.Printf("[shrink-disk] creating new %dGB boot volume from %s", targetSizeGB, oldVolumeID)
+	newBV, err := client.CreateBootVolume(ctx, compartmentID, ad, oldVolumeID, newDisplayName, targetSizeGB)
+	if err != nil {
+		// Rollback: re-attach old boot volume.
+		if _, attachErr := client.AttachBootVolume(ctx, oldVolumeID, ocid); attachErr != nil {
+			log.Printf("[shrink-disk] rollback attach old BV failed: %v", attachErr)
+		}
+		if initialState == "RUNNING" {
+			client.InstanceAction(context.Background(), ocid, core.InstanceActionActionStart)
+		}
+		jsonErr(w, "create boot volume: "+err.Error())
+		return
+	}
+	newVolumeID := strOr(newBV.Id, "")
+	if newVolumeID == "" {
+		// Rollback: re-attach old boot volume.
+		client.AttachBootVolume(ctx, oldVolumeID, ocid)
+		if initialState == "RUNNING" {
+			client.InstanceAction(context.Background(), ocid, core.InstanceActionActionStart)
+		}
+		jsonErr(w, "created boot volume has no ID")
+		return
+	}
+
+	// Step 7: Wait for new boot volume to become AVAILABLE.
+	log.Printf("[shrink-disk] waiting for new boot volume %s to be available", newVolumeID)
+	{
+		bvCtx, bvCancel := context.WithTimeout(ctx, 5*time.Minute)
+		defer bvCancel()
+		deadline := time.Now().Add(5 * time.Minute)
+		for time.Now().Before(deadline) {
+			bv, pollErr := client.GetBootVolume(bvCtx, newVolumeID)
+			if pollErr != nil {
+				client.DeleteBootVolume(context.Background(), newVolumeID)
+				client.AttachBootVolume(context.Background(), oldVolumeID, ocid)
+				if initialState == "RUNNING" {
+					client.InstanceAction(context.Background(), ocid, core.InstanceActionActionStart)
+				}
+				jsonErr(w, "poll new boot volume: "+pollErr.Error())
+				return
+			}
+			state := string(bv.LifecycleState)
+			if state == "AVAILABLE" {
+				break
+			}
+			if state == "FAULTY" || state == "TERMINATED" || state == "TERMINATING" {
+				client.DeleteBootVolume(context.Background(), newVolumeID)
+				client.AttachBootVolume(context.Background(), oldVolumeID, ocid)
+				if initialState == "RUNNING" {
+					client.InstanceAction(context.Background(), ocid, core.InstanceActionActionStart)
+				}
+				jsonErr(w, fmt.Sprintf("new boot volume entered %s state", state))
+				return
+			}
+			select {
+			case <-bvCtx.Done():
+				client.DeleteBootVolume(context.Background(), newVolumeID)
+				client.AttachBootVolume(context.Background(), oldVolumeID, ocid)
+				if initialState == "RUNNING" {
+					client.InstanceAction(context.Background(), ocid, core.InstanceActionActionStart)
+				}
+				jsonErr(w, "timeout waiting for new boot volume to become available")
+				return
+			case <-time.After(5 * time.Second):
+			}
+		}
+	}
+
+	// Step 8: Attach the new boot volume.
+	log.Printf("[shrink-disk] attaching new boot volume %s to instance %s", newVolumeID, ocid)
+	if _, err := client.AttachBootVolume(ctx, newVolumeID, ocid); err != nil {
+		client.DeleteBootVolume(context.Background(), newVolumeID)
+		client.AttachBootVolume(context.Background(), oldVolumeID, ocid)
+		if initialState == "RUNNING" {
+			client.InstanceAction(context.Background(), ocid, core.InstanceActionActionStart)
+		}
+		jsonErr(w, "attach new boot volume: "+err.Error())
+		return
+	}
+
+	// Step 9: Delete the old boot volume.
+	log.Printf("[shrink-disk] deleting old boot volume %s", oldVolumeID)
+	if err := client.DeleteBootVolume(ctx, oldVolumeID); err != nil {
+		log.Printf("[shrink-disk] delete old boot volume %s: %v (non-fatal)", oldVolumeID, err)
+	}
+
+	// Step 10: Start the instance if it was originally running.
+	if initialState == "RUNNING" {
+		log.Printf("[shrink-disk] starting instance %s", ocid)
+		if _, err := client.InstanceAction(ctx, ocid, core.InstanceActionActionStart); err != nil {
+			jsonErr(w, fmt.Sprintf("boot volume shrunk to %dGB but failed to start instance: %v", targetSizeGB, err))
+			return
+		}
+	}
+
+	// Step 11: Update the instance boot volume size in the DB.
+	instID := fmt.Sprintf("%d:%s", req.TenantID, req.InstanceID)
+	if dbInst, err := s.store.GetInstanceByID(instID); err == nil && dbInst != nil {
+		dbInst.BootVolumeGB = targetSizeGB
+		if err := s.store.UpsertInstance(dbInst); err != nil {
+			log.Printf("[shrink-disk] update boot volume size in DB: %v", err)
+		}
+	}
+
+	s.audit(req.TenantID, "instance:shrink-disk",
+		fmt.Sprintf("%s: %dGB → %dGB", req.InstanceID, oldSizeGB, targetSizeGB), r)
+	jsonOK(w, map[string]interface{}{
+		"status":      "ok",
+		"message":     "boot volume shrunk to 47GB, instance restarted",
+		"old_size_gb": oldSizeGB,
+		"new_size_gb": targetSizeGB,
+	})
 }
 
 func (s *Server) handleOneClick500M(w http.ResponseWriter, r *http.Request) {

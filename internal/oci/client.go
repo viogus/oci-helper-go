@@ -2795,6 +2795,32 @@ func (c *Client) DeleteBootVolume(ctx context.Context, bootVolumeID string) erro
 	return nil
 }
 
+// CreateBootVolume creates a new boot volume by cloning from an existing source
+// boot volume. The new volume will have the specified size in GB (which must be
+// >= the source volume's size). This is the OCI pattern for "shrinking" a volume
+// indirectly: clone to a smaller size by using a different source mechanism.
+// For creating a smaller volume, use CreateBootVolumeFromSource with SizeInGBs
+// set to the desired (smaller) size and the source details pointing to the
+// original volume.
+func (c *Client) CreateBootVolume(ctx context.Context, compartmentID, availabilityDomain, sourceVolumeID, displayName string, sizeInGBs int64) (*core.BootVolume, error) {
+	req := core.CreateBootVolumeRequest{
+		CreateBootVolumeDetails: core.CreateBootVolumeDetails{
+			CompartmentId:      common.String(compartmentID),
+			AvailabilityDomain: common.String(availabilityDomain),
+			DisplayName:        common.String(displayName),
+			SizeInGBs:          common.Int64(sizeInGBs),
+			SourceDetails: core.BootVolumeSourceFromBootVolumeDetails{
+				Id: common.String(sourceVolumeID),
+			},
+		},
+	}
+	resp, err := c.bootVolume.CreateBootVolume(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("create boot volume: %w", err)
+	}
+	return &resp.BootVolume, nil
+}
+
 func (c *Client) UpdateBootVolumeWithVPU(ctx context.Context, id string, sizeInGBs int64, displayName string, vpusPerGB int64) (*core.BootVolume, error) {
 	details := core.UpdateBootVolumeDetails{}
 	if sizeInGBs > 0 {
@@ -3107,7 +3133,7 @@ func (c *Client) WaitForState(ctx context.Context, instanceID, desiredState stri
 // launching a minimal temporary instance, detaching its boot volume, and
 // terminating the instance (preserving the boot volume). Returns the created
 // boot volume ID.
-func (c *Client) CreateBootVolumeFromImage(ctx context.Context, compartmentID, availabilityDomain, imageID, subnetID, displayName string) (string, error) {
+func (c *Client) CreateBootVolumeFromImage(ctx context.Context, compartmentID, availabilityDomain, imageID, subnetID, displayName, shape string) (string, error) {
 	// Step 1: Launch a minimal temp instance from the rescue image.
 	launchReq := core.LaunchInstanceRequest{
 		LaunchInstanceDetails: core.LaunchInstanceDetails{
@@ -3115,7 +3141,7 @@ func (c *Client) CreateBootVolumeFromImage(ctx context.Context, compartmentID, a
 			AvailabilityDomain: common.String(availabilityDomain),
 			DisplayName:        common.String(displayName),
 			ImageId:            common.String(imageID),
-			Shape:              common.String("VM.Standard.E2.1.Micro"),
+			Shape:              common.String(shape),
 			SubnetId:           common.String(subnetID),
 			CreateVnicDetails: &core.CreateVnicDetails{
 				SubnetId: common.String(subnetID),

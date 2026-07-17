@@ -14,7 +14,16 @@ func (s *Server) handleInstancePlans(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		tenantID, _ := strconv.ParseInt(r.URL.Query().Get("tenant_id"), 10, 64)
-		list, err := s.store.ListInstancePlans(tenantID)
+		keyword := r.URL.Query().Get("keyword")
+		page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+		if page < 1 {
+			page = 1
+		}
+		size, _ := strconv.Atoi(r.URL.Query().Get("size"))
+		if size < 1 {
+			size = 20
+		}
+		list, total, err := s.store.ListInstancePlansPaginated(tenantID, keyword, page, size)
 		if err != nil {
 			jsonErr(w, "list plans: "+err.Error())
 			return
@@ -22,7 +31,7 @@ func (s *Server) handleInstancePlans(w http.ResponseWriter, r *http.Request) {
 		if list == nil {
 			list = []db.InstancePlan{}
 		}
-		jsonOK(w, map[string]interface{}{"data": list})
+		jsonOK(w, map[string]interface{}{"data": list, "total": total, "page": page, "size": size})
 
 	case http.MethodPost:
 		var req struct {

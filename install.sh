@@ -36,6 +36,7 @@ DB_PATH="/app/oci-helper/oci-helper.db"
 KEYS_DIR_OVERRIDE="/app/oci-helper/keys"
 VERSION="latest"
 DO_UNINSTALL=false
+SKIP_SYSTEMD=false
 
 # ── Usage ────────────────────────────────────────────────────────────────────
 usage() {
@@ -297,9 +298,10 @@ OCI_KEYS_DIR=${KEYS_DIR_OVERRIDE}
 EOF
     chmod 600 "$ENV_FILE"
 
-    # Write systemd unit for bare-metal binary
-    step "Creating systemd service: ${SERVICE_FILE}..."
-    cat > "$SERVICE_FILE" <<UNIT
+    # Write systemd unit for bare-metal binary (Linux only)
+    if ! $SKIP_SYSTEMD; then
+        step "Creating systemd service: ${SERVICE_FILE}..."
+        cat > "$SERVICE_FILE" <<UNIT
 [Unit]
 Description=OCI Helper
 After=network.target
@@ -316,9 +318,10 @@ RestartSec=5
 WantedBy=multi-user.target
 UNIT
 
-    systemctl daemon-reload
-    systemctl enable oci-helper
-    systemctl start oci-helper
+        systemctl daemon-reload
+        systemctl enable oci-helper
+        systemctl start oci-helper
+    fi
 
     info "Bare-metal installation complete."
 }
@@ -425,46 +428,9 @@ main() {
             install_docker
             ;;
         bare)
-            # On macOS, skip systemd parts
             if [[ "$GOOS" == "darwin" ]]; then
-                step "Installing bare-metal binary (macOS)..."
-                local binary_name="oci-helper-${GOOS}-${GOARCH}"
-                local download_url
-                if [[ "$VERSION" == "latest" ]]; then
-                    download_url="https://github.com/${REPO}/releases/latest/download/${binary_name}"
-                else
-                    download_url="https://github.com/${REPO}/releases/download/v${VERSION}/${binary_name}"
-                fi
-
-                step "Downloading: ${download_url}..."
-                local tmp_bin
-                tmp_bin=$(mktemp)
-                curl -fsSL --retry 3 --retry-delay 2 -o "$tmp_bin" "$download_url"
-                if [[ ! -s "$tmp_bin" ]]; then
-                    download_url="https://github.com/${REPO}/releases/download/${VERSION}/${binary_name}"
-                    step "Retrying: ${download_url}..."
-                    curl -fsSL --retry 3 --retry-delay 2 -o "$tmp_bin" "$download_url"
-                fi
-                if [[ ! -s "$tmp_bin" ]]; then
-                    error "Failed to download binary. Expected: ${binary_name}"
-                    rm -f "$tmp_bin"
-                    exit 1
-                fi
-                chmod +x "$tmp_bin"
-                mv "$tmp_bin" "${INSTALL_DIR}/${BINARY_NAME}"
-                mkdir -p "$(dirname "$DB_PATH")" "$KEYS_DIR_OVERRIDE"
-
-                # Write env file for reference
-                mkdir -p "$(dirname "$ENV_FILE")"
-                cat > "$ENV_FILE" <<EOF
-PORT=${PORT}
-OCI_USERNAME=${USERNAME}
-OCI_PASSWORD=${PASSWORD}
-OCI_DB_PATH=${DB_PATH}
-OCI_KEYS_DIR=${KEYS_DIR_OVERRIDE}
-EOF
-                chmod 600 "$ENV_FILE"
-
+                SKIP_SYSTEMD=true
+                install_bare
                 echo ""
                 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
                 echo ""

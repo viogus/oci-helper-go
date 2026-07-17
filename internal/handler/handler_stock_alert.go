@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/viogus/oci-helper-go/internal/db"
@@ -166,6 +167,9 @@ func (s *Server) startStockMonitor() {
 }
 
 func (s *Server) runStockCheck(tgToken string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 55*time.Second)
+	defer cancel()
+
 	alerts, err := s.store.ListEnabledStockAlerts()
 	if err != nil {
 		log.Printf("[stock-monitor] list alerts: %v", err)
@@ -176,32 +180,46 @@ func (s *Server) runStockCheck(tgToken string) {
 	}
 	log.Printf("[stock-monitor] checking %d alerts", len(alerts))
 
+	sem := make(chan struct{}, 5)
+	var wg sync.WaitGroup
+
+loop:
 	for _, a := range alerts {
-		status, err := s.checkOneStockAlert(&a)
-		if err != nil {
-			log.Printf("[stock-monitor] alert %d (%s/%s): %v", a.ID, a.Region, a.Shape, err)
-			continue
+		select {
+		case <-ctx.Done():
+			break loop
+		default:
 		}
+		wg.Add(1)
+		go func(alert db.StockAlert) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
 
-		// Detect status change.
-		if status != a.LastStockStatus {
-			log.Printf("[stock-monitor] alert %d: %s/%s changed from %q to %q",
-				a.ID, a.Region, a.Shape, a.LastStockStatus, status)
-			s.store.UpdateStockAlertStatus(a.ID, status)
-
-			// Send Telegram notification.
-			if a.ChatID != 0 && tgToken != "" {
-				msg := buildStockAlertMessage(a.Region, a.Shape, a.AvailabilityDomain, status)
-				bot := telegram.New(tgToken)
-				if err := bot.SendMessage(a.ChatID, msg); err != nil {
-					log.Printf("[stock-monitor] telegram send: %v", err)
-				}
+			status, err := s.checkOneStockAlert(&alert)
+			if err != nil {
+				log.Printf("[stock-monitor] alert %d (%s/%s): %v", alert.ID, alert.Region, alert.Shape, err)
+				return
 			}
-		} else {
-			// Only update the timestamp, no notification needed.
-			s.store.UpdateStockAlertStatus(a.ID, status)
-		}
+
+			if status != alert.LastStockStatus {
+				log.Printf("[stock-monitor] alert %d: %s/%s changed from %q to %q",
+					alert.ID, alert.Region, alert.Shape, alert.LastStockStatus, status)
+				s.store.UpdateStockAlertStatus(alert.ID, status)
+
+				if alert.ChatID != 0 && tgToken != "" {
+					msg := buildStockAlertMessage(alert.Region, alert.Shape, alert.AvailabilityDomain, status)
+					bot := telegram.New(tgToken)
+					if err := bot.SendMessage(alert.ChatID, msg); err != nil {
+						log.Printf("[stock-monitor] telegram send: %v", err)
+					}
+				}
+			} else {
+				s.store.UpdateStockAlertStatus(alert.ID, status)
+			}
+		}(a)
 	}
+	wg.Wait()
 }
 
 // checkOneStockAlert creates an OCI client for the tenant and checks stock.

@@ -504,8 +504,7 @@ func (s *Server) runDNSAutoSync() {
 			dnsName = inst.Name + "." + domain
 		}
 
-		lastIPKey := "dns_last_ip_" + inst.ID
-		lastIP, _ := s.store.GetConfig(lastIPKey)
+		lastIP := inst.DNSLastIP
 
 		if lastIP == inst.PublicIP {
 			continue // no change
@@ -583,7 +582,7 @@ func (s *Server) runDNSAutoSync() {
 		}
 
 		// Persist last known IP.
-		if err := s.store.SetConfig(lastIPKey, inst.PublicIP); err != nil {
+		if err := s.store.UpdateInstanceDNSIP(inst.ID, inst.PublicIP); err != nil {
 			log.Printf("[dns-auto-sync] save last IP for %s: %v", inst.Name, err)
 		}
 	}

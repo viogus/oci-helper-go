@@ -37,6 +37,7 @@ type Instance struct {
 	ImageID       string    `json:"imageId"`
 	SubnetID      string    `json:"subnetId"`
 	Region        string    `json:"region"`
+	DNSLastIP     string    `json:"dnsLastIp"`
 	CreatedAt     time.Time `json:"createdAt"`
 	SyncedAt      time.Time `json:"syncedAt"`
 }

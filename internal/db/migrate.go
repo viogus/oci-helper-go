@@ -182,6 +182,13 @@ var migrations = []struct {
 			)`,
 		},
 	},
+	{
+		Version: 7,
+		Name:    "add_instance_dns_last_ip",
+		SQL: []string{
+			`ALTER TABLE instances ADD COLUMN dns_last_ip TEXT DEFAULT ''`,
+		},
+	},
 }
 
 func (s *Store) runMigrations() error {

@@ -180,6 +180,7 @@ func (s *Server) handleVNCProxy(w http.ResponseWriter, r *http.Request) {
 	go func() {
 		defer wg.Done()
 		for {
+			wsConn.SetReadDeadline(time.Now().Add(60 * time.Second))
 			_, data, readErr := wsConn.ReadMessage()
 			if readErr != nil {
 				closeDone.Do(func() { close(done) })

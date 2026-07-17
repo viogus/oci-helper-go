@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
-
 )
 
 func (s *Server) handleBootVolumes(w http.ResponseWriter, r *http.Request) {
@@ -18,7 +18,49 @@ func (s *Server) handleBootVolumes(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, "list boot volumes: "+err.Error())
 		return
 	}
-	jsonOK(w, vols)
+
+	// Keyword filtering (case-insensitive match on display name, OCID, or size)
+	keyword := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("keyword")))
+	if keyword != "" {
+		filtered := vols[:0]
+		for _, v := range vols {
+			dn := strings.ToLower(strOr(v.DisplayName, ""))
+			oid := strings.ToLower(strOr(v.Id, ""))
+			sz := ""
+			if v.SizeInGBs != nil {
+				sz = fmt.Sprintf("%d", *v.SizeInGBs)
+			}
+			if strings.Contains(dn, keyword) || strings.Contains(oid, keyword) || strings.Contains(sz, keyword) {
+				filtered = append(filtered, v)
+			}
+		}
+		vols = filtered
+	}
+
+	// In-memory pagination
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	if page < 1 {
+		page = 1
+	}
+	size, _ := strconv.Atoi(r.URL.Query().Get("size"))
+	if size < 1 {
+		size = 20
+	}
+	start := (page - 1) * size
+	end := start + size
+	if start > len(vols) {
+		start = len(vols)
+	}
+	if end > len(vols) {
+		end = len(vols)
+	}
+
+	jsonOK(w, map[string]interface{}{
+		"data":  vols[start:end],
+		"total": len(vols),
+		"page":  page,
+		"size":  size,
+	})
 }
 
 func (s *Server) handleBootVolumeByID(w http.ResponseWriter, r *http.Request) {

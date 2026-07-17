@@ -132,7 +132,7 @@ func (s *Server) handleNetbootRescue(w http.ResponseWriter, r *http.Request) {
 	// Step 9: Launch temp instance from rescue image, detach its boot volume,
 	// and terminate the temp instance. Returns the rescue boot volume ID.
 	rescueBVName := fmt.Sprintf("netboot-rescue-%s", ocid)
-	rescueBV, err := client.CreateBootVolumeFromImage(ctx, compartmentID, ad, rescueImageID, subnetID, rescueBVName)
+	rescueBV, err := client.CreateBootVolumeFromImage(ctx, compartmentID, ad, rescueImageID, subnetID, rescueBVName, "VM.Standard.E2.1.Micro")
 	if err != nil {
 		// Rollback: re-attach original boot volume.
 		if _, attachErr := client.AttachBootVolume(ctx, originalBV, ocid); attachErr != nil {

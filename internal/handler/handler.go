@@ -201,6 +201,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/instances/check-alive", s.withAuth(s.handleCheckAlive))
 	s.mux.HandleFunc("/api/instances/one-click-500m", s.withAuth(s.handleOneClick500M))
 	s.mux.HandleFunc("/api/instances/one-click-close-500m", s.withAuth(s.handleOneClickClose500M))
+	s.mux.HandleFunc("/api/instances/shrink-disk", s.withAuth(s.handleShrinkDisk))
 	s.mux.HandleFunc("/api/instances/auto-rescue", s.withAuth(s.handleAutoRescue))
 	s.mux.HandleFunc("/api/instances/update-shape", s.withAuth(s.handleUpdateShape))
 	// G6: config-update

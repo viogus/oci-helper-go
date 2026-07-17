@@ -89,10 +89,16 @@ func (s *Store) UpdateInstanceState(id string, state string) error {
 	return err
 }
 
+// UpdateInstanceDNSIP updates the dns_last_ip column for an instance.
+func (s *Store) UpdateInstanceDNSIP(id string, ip string) error {
+	_, err := s.db.Exec(`UPDATE instances SET dns_last_ip=? WHERE id=?`, ip, id)
+	return err
+}
+
 func (s *Store) UpsertInstance(inst *Instance) error {
 	_, err := s.db.Exec(
-		`INSERT INTO instances (id, tenant_id, name, ocid, shape, ocpu, memory_gb, boot_volume_gb, public_ip, private_ip, state, availability_domain, fault_domain, image_id, subnet_id, region, synced_at)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
+		`INSERT INTO instances (id, tenant_id, name, ocid, shape, ocpu, memory_gb, boot_volume_gb, public_ip, private_ip, state, availability_domain, fault_domain, image_id, subnet_id, region, dns_last_ip, synced_at)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'',CURRENT_TIMESTAMP)
 		 ON CONFLICT(id) DO UPDATE SET
 		   name=excluded.name, shape=excluded.shape, ocpu=excluded.ocpu, memory_gb=excluded.memory_gb,
 		   boot_volume_gb=excluded.boot_volume_gb, public_ip=excluded.public_ip, private_ip=excluded.private_ip,
@@ -104,7 +110,7 @@ func (s *Store) UpsertInstance(inst *Instance) error {
 }
 
 func (s *Store) ListInstances(tenantID int64) ([]Instance, error) {
-	rows, err := s.db.Query(`SELECT id, tenant_id, name, ocid, shape, ocpu, memory_gb, boot_volume_gb, public_ip, private_ip, state, availability_domain, fault_domain, image_id, subnet_id, region, created_at, synced_at FROM instances WHERE tenant_id=? OR ?=0 ORDER BY created_at DESC`, tenantID, tenantID)
+	rows, err := s.db.Query(`SELECT id, tenant_id, name, ocid, shape, ocpu, memory_gb, boot_volume_gb, public_ip, private_ip, state, availability_domain, fault_domain, image_id, subnet_id, region, coalesce(dns_last_ip,''), created_at, synced_at FROM instances WHERE tenant_id=? OR ?=0 ORDER BY created_at DESC`, tenantID, tenantID)
 	if err != nil {
 		return nil, err
 	}
@@ -112,7 +118,7 @@ func (s *Store) ListInstances(tenantID int64) ([]Instance, error) {
 	var list []Instance
 	for rows.Next() {
 		var i Instance
-		if err := rows.Scan(&i.ID, &i.TenantID, &i.Name, &i.OCID, &i.Shape, &i.OCPU, &i.MemoryGB, &i.BootVolumeGB, &i.PublicIP, &i.PrivateIP, &i.State, &i.AvailabilityDomain, &i.FaultDomain, &i.ImageID, &i.SubnetID, &i.Region, &i.CreatedAt, &i.SyncedAt); err != nil {
+		if err := rows.Scan(&i.ID, &i.TenantID, &i.Name, &i.OCID, &i.Shape, &i.OCPU, &i.MemoryGB, &i.BootVolumeGB, &i.PublicIP, &i.PrivateIP, &i.State, &i.AvailabilityDomain, &i.FaultDomain, &i.ImageID, &i.SubnetID, &i.Region, &i.DNSLastIP, &i.CreatedAt, &i.SyncedAt); err != nil {
 			return nil, err
 		}
 		list = append(list, i)
@@ -129,8 +135,8 @@ func (s *Store) DeleteInstancesByTenant(tenantID int64) error {
 
 func (s *Store) GetInstanceByID(id string) (*Instance, error) {
 	var i Instance
-	err := s.db.QueryRow(`SELECT id, tenant_id, name, ocid, shape, ocpu, memory_gb, boot_volume_gb, public_ip, private_ip, state, availability_domain, fault_domain, image_id, subnet_id, region, created_at, synced_at FROM instances WHERE id=?`, id).
-		Scan(&i.ID, &i.TenantID, &i.Name, &i.OCID, &i.Shape, &i.OCPU, &i.MemoryGB, &i.BootVolumeGB, &i.PublicIP, &i.PrivateIP, &i.State, &i.AvailabilityDomain, &i.FaultDomain, &i.ImageID, &i.SubnetID, &i.Region, &i.CreatedAt, &i.SyncedAt)
+	err := s.db.QueryRow(`SELECT id, tenant_id, name, ocid, shape, ocpu, memory_gb, boot_volume_gb, public_ip, private_ip, state, availability_domain, fault_domain, image_id, subnet_id, region, coalesce(dns_last_ip,''), created_at, synced_at FROM instances WHERE id=?`, id).
+		Scan(&i.ID, &i.TenantID, &i.Name, &i.OCID, &i.Shape, &i.OCPU, &i.MemoryGB, &i.BootVolumeGB, &i.PublicIP, &i.PrivateIP, &i.State, &i.AvailabilityDomain, &i.FaultDomain, &i.ImageID, &i.SubnetID, &i.Region, &i.DNSLastIP, &i.CreatedAt, &i.SyncedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -282,8 +288,8 @@ func (s *Store) CreateTenantImportTx(tx *sql.Tx, name, userOCID, tenancyOCID, re
 // UpsertInstanceImportTx upserts an instance within a transaction.
 func (s *Store) UpsertInstanceImportTx(tx *sql.Tx, id string, tenantID int64, name, ocid, shape, state, publicIP, privateIP, region, availabilityDomain, faultDomain, imageID, subnetID string, ocpu, memoryGB float64, bootVolumeGB int64) error {
 	_, err := tx.Exec(
-		`INSERT INTO instances (id, tenant_id, name, ocid, shape, ocpu, memory_gb, boot_volume_gb, public_ip, private_ip, state, availability_domain, fault_domain, image_id, subnet_id, region, synced_at)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
+		`INSERT INTO instances (id, tenant_id, name, ocid, shape, ocpu, memory_gb, boot_volume_gb, public_ip, private_ip, state, availability_domain, fault_domain, image_id, subnet_id, region, dns_last_ip, synced_at)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'',CURRENT_TIMESTAMP)
 		 ON CONFLICT(id) DO UPDATE SET
 		   name=excluded.name, shape=excluded.shape, ocpu=excluded.ocpu, memory_gb=excluded.memory_gb,
 		   boot_volume_gb=excluded.boot_volume_gb,
@@ -334,21 +340,32 @@ func (s *Store) SetConfig(key, value string) error {
 	return err
 }
 
-func (s *Store) ListInstancesPaginated(tenantID int64, keyword string, page, size int) ([]Instance, int64, error) {
+func (s *Store) ListInstancesPaginated(tenantID int64, keyword string, state string, page, size int) ([]Instance, int64, error) {
 	kw := "%" + escapeLike(keyword) + "%"
 	var total int64
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM instances WHERE (tenant_id=? OR ?=0) AND (name LIKE ? ESCAPE '\' OR ocid LIKE ? ESCAPE '\' OR public_ip LIKE ? ESCAPE '\')`,
-		tenantID, tenantID, kw, kw, kw).Scan(&total); err != nil {
+	countQ := `SELECT COUNT(*) FROM instances WHERE (tenant_id=? OR ?=0) AND (name LIKE ? ESCAPE '\' OR ocid LIKE ? ESCAPE '\' OR public_ip LIKE ? ESCAPE '\')`
+	countArgs := []interface{}{tenantID, tenantID, kw, kw, kw}
+	if state != "" {
+		countQ += ` AND state=?`
+		countArgs = append(countArgs, state)
+	}
+	if err := s.db.QueryRow(countQ, countArgs...).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("count instances: %w", err)
 	}
 
 	offset := (page - 1) * size
-	rows, err := s.db.Query(`SELECT id, tenant_id, name, ocid, shape, ocpu, memory_gb, boot_volume_gb,
+	selQ := `SELECT id, tenant_id, name, ocid, shape, ocpu, memory_gb, boot_volume_gb,
 		public_ip, private_ip, state, availability_domain, fault_domain, image_id, subnet_id,
-		region, created_at, synced_at FROM instances
-		WHERE (tenant_id=? OR ?=0) AND (name LIKE ? ESCAPE '\' OR ocid LIKE ? ESCAPE '\' OR public_ip LIKE ? ESCAPE '\')
-		ORDER BY created_at DESC LIMIT ? OFFSET ?`,
-		tenantID, tenantID, kw, kw, kw, size, offset)
+		region, coalesce(dns_last_ip,''), created_at, synced_at FROM instances
+		WHERE (tenant_id=? OR ?=0) AND (name LIKE ? ESCAPE '\' OR ocid LIKE ? ESCAPE '\' OR public_ip LIKE ? ESCAPE '\')`
+	selArgs := []interface{}{tenantID, tenantID, kw, kw, kw}
+	if state != "" {
+		selQ += ` AND state=?`
+		selArgs = append(selArgs, state)
+	}
+	selQ += ` ORDER BY created_at DESC LIMIT ? OFFSET ?`
+	selArgs = append(selArgs, size, offset)
+	rows, err := s.db.Query(selQ, selArgs...)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -358,7 +375,7 @@ func (s *Store) ListInstancesPaginated(tenantID int64, keyword string, page, siz
 		var i Instance
 		if err := rows.Scan(&i.ID, &i.TenantID, &i.Name, &i.OCID, &i.Shape, &i.OCPU, &i.MemoryGB, &i.BootVolumeGB,
 			&i.PublicIP, &i.PrivateIP, &i.State, &i.AvailabilityDomain, &i.FaultDomain, &i.ImageID, &i.SubnetID,
-			&i.Region, &i.CreatedAt, &i.SyncedAt); err != nil {
+			&i.Region, &i.DNSLastIP, &i.CreatedAt, &i.SyncedAt); err != nil {
 			return nil, 0, err
 		}
 		list = append(list, i)
@@ -611,6 +628,36 @@ func (s *Store) ListInstancePlans(tenantID int64) ([]InstancePlan, error) {
 		list = append(list, p)
 	}
 	return list, rows.Err()
+}
+
+func (s *Store) ListInstancePlansPaginated(tenantID int64, keyword string, page, size int) ([]InstancePlan, int64, error) {
+	kw := "%" + escapeLike(keyword) + "%"
+	var total int64
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM instance_plans WHERE (tenant_id=? OR ?=0) AND (name LIKE ? ESCAPE '\' OR shape LIKE ? ESCAPE '\')`,
+		tenantID, tenantID, kw, kw).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count instance_plans: %w", err)
+	}
+
+	offset := (page - 1) * size
+	rows, err := s.db.Query(`SELECT id, name, tenant_id, shape, image_id, subnet_id, availability_domain,
+		boot_volume_size_gb, ocpus, memory_gb, created_at FROM instance_plans
+		WHERE (tenant_id=? OR ?=0) AND (name LIKE ? ESCAPE '\' OR shape LIKE ? ESCAPE '\')
+		ORDER BY id DESC LIMIT ? OFFSET ?`,
+		tenantID, tenantID, kw, kw, size, offset)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	var list []InstancePlan
+	for rows.Next() {
+		var p InstancePlan
+		if err := rows.Scan(&p.ID, &p.Name, &p.TenantID, &p.Shape, &p.ImageID, &p.SubnetID,
+			&p.AvailabilityDomain, &p.BootVolumeSizeGB, &p.OCPUs, &p.MemoryGB, &p.CreatedAt); err != nil {
+			return nil, 0, err
+		}
+		list = append(list, p)
+	}
+	return list, total, rows.Err()
 }
 
 func (s *Store) CreateInstancePlan(p *InstancePlan) error {

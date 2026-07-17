@@ -86,7 +86,7 @@ func (s *Service) Login(w http.ResponseWriter, r *http.Request) bool {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return false
 	}
-	sess := Session{User: user, Role: "admin", CreatedAt: time.Now(), Version: s.sessionVersion}
+	sess := Session{User: user, Role: "admin", CreatedAt: time.Now(), Version: atomic.LoadInt64(&s.sessionVersion)}
 	data, err := json.Marshal(sess)
 	if err != nil {
 		http.Error(w, "Internal error", http.StatusInternalServerError)
@@ -116,7 +116,7 @@ func (s *Service) CreateSession(user, role string) string {
 	if role == "" {
 		role = "user"
 	}
-	sess := Session{User: user, Role: role, CreatedAt: time.Now(), Version: s.sessionVersion}
+	sess := Session{User: user, Role: role, CreatedAt: time.Now(), Version: atomic.LoadInt64(&s.sessionVersion)}
 	data, err := json.Marshal(sess)
 	if err != nil {
 		return ""

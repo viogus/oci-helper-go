@@ -1539,18 +1539,30 @@ func securityRuleID(slID, direction string, protocol, source, dest *string, tcpO
 func (c *Client) ListSecurityRules(ctx context.Context, vcnID, keyword string, page, size int) ([]SecurityRuleInfo, int64, error) {
 	defer c.withSubtreeInterceptor(&c.vcn.Interceptor)()
 	compartmentID := c.tenant.TenancyOCID
-	req := core.ListSecurityListsRequest{
-		CompartmentId: common.String(compartmentID),
-		VcnId:         common.String(vcnID),
-		Limit:         common.Int(100),
-	}
-	resp, err := c.vcn.ListSecurityLists(ctx, req)
-	if err != nil {
-		return nil, 0, err
+
+	// Paginate through all security lists — a VCN may have >100.
+	var allSecurityLists []core.SecurityList
+	pageSL := common.String("")
+	for {
+		req := core.ListSecurityListsRequest{
+			CompartmentId: common.String(compartmentID),
+			VcnId:         common.String(vcnID),
+			Limit:         common.Int(100),
+			Page:          pageSL,
+		}
+		resp, err := c.vcn.ListSecurityLists(ctx, req)
+		if err != nil {
+			return nil, 0, err
+		}
+		allSecurityLists = append(allSecurityLists, resp.Items...)
+		if resp.OpcNextPage == nil || *resp.OpcNextPage == "" {
+			break
+		}
+		pageSL = resp.OpcNextPage
 	}
 
 	var all []SecurityRuleInfo
-	for _, sl := range resp.Items {
+	for _, sl := range allSecurityLists {
 		for _, rule := range sl.IngressSecurityRules {
 			info := SecurityRuleInfo{
 				ID:       securityRuleID(*sl.Id, "ingress", rule.Protocol, rule.Source, nil, rule.TcpOptions),
@@ -1598,7 +1610,9 @@ func (c *Client) ListSecurityRules(ctx context.Context, vcnID, keyword string, p
 	var filtered []SecurityRuleInfo
 	for _, r := range all {
 		if kw == "" || strings.Contains(strings.ToLower(r.Protocol), kw) ||
-			strings.Contains(strings.ToLower(r.Source), kw) || strings.Contains(strings.ToLower(r.Port), kw) {
+			strings.Contains(strings.ToLower(r.Source), kw) ||
+			strings.Contains(strings.ToLower(r.Dest), kw) ||
+			strings.Contains(strings.ToLower(r.Port), kw) {
 			filtered = append(filtered, r)
 		}
 	}
@@ -1617,21 +1631,7 @@ func (c *Client) ListSecurityRules(ctx context.Context, vcnID, keyword string, p
 }
 
 func (c *Client) AddIngressRule(ctx context.Context, vcnID, protocol, port, source string) error {
-	req := core.ListSecurityListsRequest{
-		CompartmentId: common.String(c.tenant.TenancyOCID),
-		VcnId:         common.String(vcnID),
-		Limit:         common.Int(1),
-	}
-	resp, err := c.vcn.ListSecurityLists(ctx, req)
-	if err != nil {
-		return err
-	}
-	if len(resp.Items) == 0 {
-		return fmt.Errorf("no security list found")
-	}
-
-	sl := resp.Items[0]
-	ingressRules := sl.IngressSecurityRules
+	// Build the new rule once (same for all security lists).
 	newRule := core.IngressSecurityRule{
 		Protocol: common.String(protocol),
 		Source:   common.String(source),
@@ -1653,20 +1653,42 @@ func (c *Client) AddIngressRule(ctx context.Context, vcnID, protocol, port, sour
 			newRule.TcpOptions = &core.TcpOptions{DestinationPortRange: portRange}
 		}
 	}
-	// Dedup: skip if identical rule already exists.
-	if !hasIngressRule(ingressRules, newRule) {
-		ingressRules = append(ingressRules, newRule)
-	}
 
-	updateReq := core.UpdateSecurityListRequest{
-		SecurityListId: sl.Id,
-		UpdateSecurityListDetails: core.UpdateSecurityListDetails{
-			IngressSecurityRules: ingressRules,
-			EgressSecurityRules:  sl.EgressSecurityRules,
-		},
+	// Apply to ALL security lists in the VCN, not just the first.
+	page := common.String("")
+	for {
+		req := core.ListSecurityListsRequest{
+			CompartmentId: common.String(c.tenant.TenancyOCID),
+			VcnId:         common.String(vcnID),
+			Limit:         common.Int(100),
+			Page:          page,
+		}
+		resp, err := c.vcn.ListSecurityLists(ctx, req)
+		if err != nil {
+			return err
+		}
+		for _, sl := range resp.Items {
+			ingressRules := sl.IngressSecurityRules
+			if !hasIngressRule(ingressRules, newRule) {
+				ingressRules = append(ingressRules, newRule)
+			}
+			updateReq := core.UpdateSecurityListRequest{
+				SecurityListId: sl.Id,
+				UpdateSecurityListDetails: core.UpdateSecurityListDetails{
+					IngressSecurityRules: ingressRules,
+					EgressSecurityRules:  sl.EgressSecurityRules,
+				},
+			}
+			if _, err := c.vcn.UpdateSecurityList(ctx, updateReq); err != nil {
+				return fmt.Errorf("update security list %s: %w", *sl.Id, err)
+			}
+		}
+		if resp.OpcNextPage == nil || *resp.OpcNextPage == "" {
+			break
+		}
+		page = resp.OpcNextPage
 	}
-	_, err = c.vcn.UpdateSecurityList(ctx, updateReq)
-	return err
+	return nil
 }
 
 // hasIngressRule checks whether an equivalent ingress rule already exists.
@@ -1772,21 +1794,7 @@ func intPtrEq(a, b *int) bool {
 }
 
 func (c *Client) AddEgressRule(ctx context.Context, vcnID, protocol, port, dest string) error {
-	req := core.ListSecurityListsRequest{
-		CompartmentId: common.String(c.tenant.TenancyOCID),
-		VcnId:         common.String(vcnID),
-		Limit:         common.Int(1),
-	}
-	resp, err := c.vcn.ListSecurityLists(ctx, req)
-	if err != nil {
-		return err
-	}
-	if len(resp.Items) == 0 {
-		return fmt.Errorf("no security list found")
-	}
-
-	sl := resp.Items[0]
-	egressRules := sl.EgressSecurityRules
+	// Build the new rule once (same for all security lists).
 	newRule := core.EgressSecurityRule{
 		Protocol:    common.String(protocol),
 		Destination: common.String(dest),
@@ -1808,20 +1816,42 @@ func (c *Client) AddEgressRule(ctx context.Context, vcnID, protocol, port, dest 
 				newRule.TcpOptions = &core.TcpOptions{DestinationPortRange: portRange}
 			}
 	}
-	// Dedup: skip if identical rule already exists.
-	if !hasEgressRule(egressRules, newRule) {
-		egressRules = append(egressRules, newRule)
-	}
 
-	updateReq := core.UpdateSecurityListRequest{
-		SecurityListId: sl.Id,
-		UpdateSecurityListDetails: core.UpdateSecurityListDetails{
-			IngressSecurityRules: sl.IngressSecurityRules,
-			EgressSecurityRules:  egressRules,
-		},
+	// Apply to ALL security lists in the VCN, not just the first.
+	page := common.String("")
+	for {
+		req := core.ListSecurityListsRequest{
+			CompartmentId: common.String(c.tenant.TenancyOCID),
+			VcnId:         common.String(vcnID),
+			Limit:         common.Int(100),
+			Page:          page,
+		}
+		resp, err := c.vcn.ListSecurityLists(ctx, req)
+		if err != nil {
+			return err
+		}
+		for _, sl := range resp.Items {
+			egressRules := sl.EgressSecurityRules
+			if !hasEgressRule(egressRules, newRule) {
+				egressRules = append(egressRules, newRule)
+			}
+			updateReq := core.UpdateSecurityListRequest{
+				SecurityListId: sl.Id,
+				UpdateSecurityListDetails: core.UpdateSecurityListDetails{
+					IngressSecurityRules: sl.IngressSecurityRules,
+					EgressSecurityRules:  egressRules,
+				},
+			}
+			if _, err := c.vcn.UpdateSecurityList(ctx, updateReq); err != nil {
+				return fmt.Errorf("update security list %s: %w", *sl.Id, err)
+			}
+		}
+		if resp.OpcNextPage == nil || *resp.OpcNextPage == "" {
+			break
+		}
+		page = resp.OpcNextPage
 	}
-	_, err = c.vcn.UpdateSecurityList(ctx, updateReq)
-	return err
+	return nil
 }
 
 type ruleFilter struct {

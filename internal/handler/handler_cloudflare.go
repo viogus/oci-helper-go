@@ -260,7 +260,12 @@ func (s *Server) handleCloudflareOCISync(w http.ResponseWriter, r *http.Request)
 	var instances []db.Instance
 	if len(req.InstanceIDs) > 0 {
 		for _, id := range req.InstanceIDs {
-			inst, _ := s.store.GetInstanceByID(fmt.Sprintf("%d:%s", req.TenantID, id))
+			// Support both bare OCIDs and composite IDs (tenantID:ocid).
+			lookupID := id
+			if !strings.Contains(id, ":") {
+				lookupID = fmt.Sprintf("%d:%s", req.TenantID, id)
+			}
+			inst, _ := s.store.GetInstanceByID(lookupID)
 			if inst != nil {
 				instances = append(instances, *inst)
 			}

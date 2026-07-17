@@ -43,7 +43,7 @@ func Lookup(ip string) (*Info, error) {
 	}
 
 	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Get("http://ip-api.com/json/" + ip + "?fields=status,message,country,regionName,city,lat,lon,org,as")
+	resp, err := client.Get("https://ip-api.com/json/" + ip + "?fields=status,message,country,regionName,city,lat,lon,org,as")
 	if err != nil {
 		return nil, fmt.Errorf("geoip request: %w", err)
 	}
@@ -77,7 +77,7 @@ func Lookup(ip string) (*Info, error) {
 func isPrivate(ipStr string) bool {
 	ip := net.ParseIP(ipStr)
 	if ip == nil {
-		return true
+		return false // let the upstream API reject invalid IPs with a clear error
 	}
 	return ip.IsLoopback() || ip.IsPrivate() || ip.IsUnspecified()
 }

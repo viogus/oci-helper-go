@@ -47,7 +47,7 @@ func (rl *loginRateLimiter) allow(ip string) bool {
 		return true
 	}
 	entry.count++
-	if entry.count > rl.maxHits {
+	if entry.count >= rl.maxHits {
 		rl.blockedIPs[ip] = now
 		return false
 	}
@@ -70,7 +70,7 @@ func (rl *loginRateLimiter) isBlocked(ip string) bool {
 	}
 	// Check time-window rate limit.
 	entry, ok := rl.entries[ip]
-	if ok && time.Since(entry.start) <= rl.window && entry.count > rl.maxHits {
+	if ok && time.Since(entry.start) <= rl.window && entry.count >= rl.maxHits {
 		return true
 	}
 	return false

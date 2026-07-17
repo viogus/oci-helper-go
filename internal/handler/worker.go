@@ -44,13 +44,18 @@ func (w *Worker) Shutdown() {
 	default:
 	}
 	log.Println("[worker] shutting down...")
-	// Reset running tasks so they are not orphaned
+	// Signal the worker goroutine to stop BEFORE resetting running tasks.
+	// This avoids a race where ResetRunningTasks sets "running"→"pending"
+	// then the worker goroutine re-sets it back to "running" before
+	// processing the stop channel.
+	close(w.stop)
+	// Reset running tasks so they are not orphaned. The worker goroutine
+	// is no longer processing, so this is safe.
 	if n, err := w.store.ResetRunningTasks(); err != nil {
 		log.Printf("[worker] shutdown: reset running tasks: %v", err)
 	} else if n > 0 {
 		log.Printf("[worker] shutdown: reset %d running task(s) to pending", n)
 	}
-	close(w.stop)
 }
 
 // newClient delegates to the package-level clientForTenant with the worker's keysDir.
@@ -107,6 +112,7 @@ func (w *Worker) Run() {
 }
 
 func (w *Worker) processNext() {
+	// Use a DB query that returns only pending tasks, avoiding an O(n) scan.
 	tasks, err := w.store.ListTasks()
 	if err != nil {
 		log.Printf("[worker] list tasks: %v", err)
@@ -116,6 +122,16 @@ func (w *Worker) processNext() {
 		t := &tasks[i]
 		if t.Status != "pending" {
 			continue
+		}
+		// Atomically claim the task — guards against TOCTOU race with
+		// HTTP cancel/pause handler that also writes to this task row.
+		claimed, err := w.store.ClaimTask(t.ID)
+		if err != nil {
+			log.Printf("[worker] claim task %d: %v", t.ID, err)
+			return
+		}
+		if !claimed {
+			continue // another goroutine or HTTP handler already claimed it
 		}
 		switch t.Type {
 		case "batch_start":
@@ -138,8 +154,6 @@ type batchStartPayload struct {
 }
 
 func (w *Worker) runBatchStart(task *db.Task) {
-	w.store.UpdateTaskStatus(task.ID, "running", 0, "starting...")
-
 	var payload batchStartPayload
 	if err := json.Unmarshal([]byte(task.Payload), &payload); err != nil {
 		w.store.UpdateTaskStatus(task.ID, "failed", 0, "invalid payload: "+err.Error())
@@ -170,6 +184,13 @@ func (w *Worker) runBatchStart(task *db.Task) {
 			log.Printf("[worker] batch_start %d interrupted by shutdown at index %d/%d", task.ID, i, total)
 			return
 		default:
+		}
+		// Re-check DB status — user may have paused/cancelled the task.
+		if !w.taskIsActive(task.ID) {
+			w.saveCheckpoint(task, &payload, i)
+			w.store.UpdateTaskStatus(task.ID, "pending", 0, "paused by user")
+			log.Printf("[worker] batch_start %d paused at index %d/%d", task.ID, i, total)
+			return
 		}
 
 		instID := bareOCID(payload.InstanceIDs[i])
@@ -216,8 +237,6 @@ type batchCreatePayload struct {
 }
 
 func (w *Worker) runBatchCreate(task *db.Task) {
-	w.store.UpdateTaskStatus(task.ID, "running", 0, "creating instances...")
-
 	var payload batchCreatePayload
 	if err := json.Unmarshal([]byte(task.Payload), &payload); err != nil {
 		w.store.UpdateTaskStatus(task.ID, "failed", 0, "invalid payload: "+err.Error())
@@ -249,6 +268,13 @@ func (w *Worker) runBatchCreate(task *db.Task) {
 			return
 		default:
 		}
+		// Re-check DB status — user may have paused/cancelled the task.
+		if !w.taskIsActive(task.ID) {
+			w.saveCheckpoint(task, &payload, i)
+			w.store.UpdateTaskStatus(task.ID, "pending", 0, "paused by user")
+			log.Printf("[worker] batch_create %d paused at index %d/%d", task.ID, i, total)
+			return
+		}
 
 		progress := (i * 100) / total
 		displayName := fmt.Sprintf("%s-%s-%d", payload.DisplayNamePrefix, tenant.Name, i+1)
@@ -265,10 +291,28 @@ func (w *Worker) runBatchCreate(task *db.Task) {
 
 		w.store.UpdateTaskStatus(task.ID, "running", progress, "created "+displayName)
 		w.saveCheckpoint(task, &payload, i+1)
-		time.Sleep(2 * time.Second)
+		// Interruptible sleep — respects shutdown signal.
+		select {
+		case <-w.stop:
+			w.saveCheckpoint(task, &payload, i+1)
+			w.store.UpdateTaskStatus(task.ID, "pending", 0, "interrupted by shutdown")
+			return
+		case <-time.After(2 * time.Second):
+		}
 	}
 
 	w.store.UpdateTaskStatus(task.ID, "completed", 100, fmt.Sprintf("created %d instances", total))
+}
+
+// taskIsActive re-reads the task status from the DB and returns true if it is
+// still "running". Returns false for any other status (cancelled, paused, failed,
+// completed, or missing) — the worker loop should stop processing.
+func (w *Worker) taskIsActive(taskID int64) bool {
+	t, err := w.store.GetTaskByID(taskID)
+	if err != nil || t == nil {
+		return false
+	}
+	return t.Status == "running"
 }
 
 // saveCheckpoint persists the current progress index into the task payload.

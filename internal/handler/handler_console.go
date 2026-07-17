@@ -4,9 +4,11 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
-	"strings"
 	"strconv"
+	"strings"
 	"time"
+
+	ociclient "github.com/viogus/oci-helper-go/internal/oci"
 )
 
 // handleStopVNC deletes the OCI Instance Console Connection identified by
@@ -89,7 +91,16 @@ func (s *Server) handleConsoleWait(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	client, _, ok := s.getTenantClient(tenantID, w)
+	// If instance_id is provided, use clientForInstance to set the
+	// correct region. Console connections are region-scoped.
+	instanceID := r.URL.Query().Get("instance_id")
+	var client *ociclient.Client
+	var ok bool
+	if instanceID != "" {
+		client, _, ok = s.clientForInstance(tenantID, instanceID, w)
+	} else {
+		client, _, ok = s.getTenantClient(tenantID, w)
+	}
 	if !ok {
 		return
 	}

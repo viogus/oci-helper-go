@@ -928,7 +928,6 @@ func (s *Server) handleAutoRescue(w http.ResponseWriter, r *http.Request) {
 			time.Sleep(30 * time.Second)
 			if checkAlive() {
 				log.Printf("[autoRescue] %s recovered via softreset", instanceID)
-				log.Printf("[autoRescue] %s recovered via softreset", instanceID)
 				return
 			}
 		}
@@ -939,7 +938,6 @@ func (s *Server) handleAutoRescue(w http.ResponseWriter, r *http.Request) {
 		} else {
 			time.Sleep(60 * time.Second)
 			if checkAlive() {
-				log.Printf("[autoRescue] %s recovered via reset", instanceID)
 				log.Printf("[autoRescue] %s recovered via reset", instanceID)
 				return
 			}
@@ -1205,24 +1203,14 @@ func (s *Server) handleUpdatePassword(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, "password must be at least 8 characters")
 		return
 	}
-	client, _, ok := s.clientForInstance(req.TenantID, req.InstanceID, w)
-	if !ok {
-		return
-	}
-	existing, err := client.GetInstance(r.Context(), bareOCID(req.InstanceID))
-	tags := map[string]string{}
-	if err == nil && existing != nil && existing.FreeformTags != nil {
-		for k, v := range existing.FreeformTags {
-			tags[k] = v
-		}
-	}
-	tags["root_password"] = req.NewPassword
-	if err := client.UpdateInstanceFreeformTags(r.Context(), bareOCID(req.InstanceID), tags); err != nil {
-		jsonErr(w, "update password tag: "+err.Error())
-		return
-	}
+	// Do NOT store the root password in OCI freeform tags — they are
+	// visible to anyone with instances.read in OCI IAM. The password is
+	// injected via cloud-init at launch time only and never persisted.
+	//
+	// For existing instances without cloud-init, the caller should use
+	// the shell console to set the password interactively.
 	s.audit(req.TenantID, "instance:update-password", req.InstanceID, r)
-	jsonOK(w, map[string]string{"status": "ok"})
+	jsonOK(w, map[string]string{"status": "ok", "warning": "password not stored in OCI tags; use cloud-init at launch or shell console for existing instances"})
 }
 
 // discoverRegions calls the OCI Identity API to list subscribed regions for the tenancy.

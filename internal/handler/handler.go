@@ -64,6 +64,7 @@ func New(cfg *config.Config, store *db.Store) *Server {
 func (s *Server) Shutdown() {
 	close(s.stopping)
 	s.worker.Shutdown()
+	s.ratelimit.stop()
 }
 
 // clientForTenant resolves the tenant's key file path (may be relative filename)
@@ -471,6 +472,16 @@ func (s *Server) handleGoogleCallback(w http.ResponseWriter, r *http.Request) {
 	role := "user"
 	if u, err := s.store.GetUserByUsername(userInfo.Email); err == nil && u != nil {
 		role = u.Role
+	}
+	// Enforce MFA for OAuth login, same as handleLogin does.
+	mfaEnabled, mfaErr := s.store.GetConfig("mfa_enabled")
+	if mfaErr == nil && mfaEnabled == "true" {
+		totp := r.URL.Query().Get("totp")
+		secret, secErr := s.store.GetConfig("mfa_secret")
+		if secErr != nil || !auth.ValidateTOTP(secret, totp) {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
 	}
 	signedValue := s.auth.CreateSession(userInfo.Email, role)
 	http.SetCookie(w, &http.Cookie{

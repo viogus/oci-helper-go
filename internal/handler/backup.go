@@ -148,8 +148,9 @@ func (s *Server) handleRestore(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, "begin tx: "+err.Error())
 		return
 	}
+	defer tx.Rollback() // safe no-op after successful Commit
+
 	if err := s.store.ClearAllTx(tx); err != nil {
-		tx.Rollback()
 		jsonErr(w, "clear: "+err.Error())
 		return
 	}

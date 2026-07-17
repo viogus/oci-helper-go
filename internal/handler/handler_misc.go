@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"math/big"
+	"net"
 	"net/http"
 	"os"
 	"strconv"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/viogus/oci-helper-go/internal/db"
 	"github.com/viogus/oci-helper-go/internal/dingtalk"
+	"github.com/viogus/oci-helper-go/internal/geoip"
 	"github.com/viogus/oci-helper-go/internal/telegram"
 )
 
@@ -366,7 +368,25 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleIPInfo(w http.ResponseWriter, r *http.Request) {
-	jsonOK(w, map[string]string{"ip": r.RemoteAddr})
+	// Support querying an arbitrary IP, or default to the caller's IP.
+	targetIP := r.URL.Query().Get("ip")
+	if targetIP == "" {
+		host, _, err := net.SplitHostPort(r.RemoteAddr)
+		if err != nil {
+			targetIP = r.RemoteAddr
+		} else {
+			targetIP = host
+		}
+	}
+	result, err := geoip.Lookup(targetIP)
+	if err != nil {
+		jsonOK(w, map[string]interface{}{
+			"ip":    targetIP,
+			"error": err.Error(),
+		})
+		return
+	}
+	jsonOK(w, result)
 }
 
 // --- DingTalk Notifications ---

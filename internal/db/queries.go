@@ -144,6 +144,30 @@ func (s *Store) CreateTask(t *Task) error {
 	return err
 }
 
+// GetTaskByID returns a single task by its primary key, or nil if not found.
+func (s *Store) GetTaskByID(id int64) (*Task, error) {
+	var t Task
+	err := s.db.QueryRow(`SELECT id, tenant_id, type, status, progress, message, payload, coalesce(result,''), created_at, started_at, finished_at FROM tasks WHERE id=?`, id).
+		Scan(&t.ID, &t.TenantID, &t.Type, &t.Status, &t.Progress, &t.Message, &t.Payload, &t.Result, &t.CreatedAt, &t.StartedAt, &t.FinishedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	return &t, err
+}
+
+// ClaimTask atomically transitions a task from "pending" to "running".
+// Returns true if the task was successfully claimed, false if another
+// goroutine already claimed or the task no longer exists.
+func (s *Store) ClaimTask(id int64) (bool, error) {
+	now := time.Now()
+	res, err := s.db.Exec(`UPDATE tasks SET status='running', started_at=? WHERE id=? AND status='pending'`, now, id)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
+
 func (s *Store) UpdateTaskStatus(id int64, status string, progress int, message string) error {
 	now := time.Now()
 	_, err := s.db.Exec(`UPDATE tasks SET status=?, progress=?, message=?, started_at=CASE WHEN started_at IS NULL AND ?='running' THEN ? ELSE started_at END, finished_at=CASE WHEN ? IN ('completed','failed') THEN ? ELSE finished_at END WHERE id=?`,

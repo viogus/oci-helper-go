@@ -1,4 +1,5 @@
 import axios from 'axios'
+import { getRouter } from '../router/instance.js'
 
 const api = axios.create({
   baseURL: '/api',
@@ -29,7 +30,7 @@ api.interceptors.response.use(
 
     // Handle 401 redirect
     if (err.response?.status === 401) {
-      const router = (window.__router)
+      const router = getRouter()
       if (router && router.currentRoute?.value?.path !== '/login') {
         router.push('/login')
       }

@@ -129,7 +129,12 @@ func (s *Server) handleShellWS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// ── Decrypt private key ───────────────────────────────────────────
-	privPEM, err := decryptSSHPrivateKey(sshKey.PrivateKey)
+	encKey, err := s.getSSHEncryptionKey()
+	if err != nil {
+		jsonErr(w, "get encryption key: "+err.Error())
+		return
+	}
+	privPEM, err := decryptSSHPrivateKey(encKey, sshKey.PrivateKey)
 	if err != nil {
 		jsonErr(w, "decrypt ssh key: "+err.Error())
 		return

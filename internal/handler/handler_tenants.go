@@ -415,7 +415,12 @@ func (s *Server) tenantAndClient(w http.ResponseWriter, r *http.Request, idStr s
 		jsonErr(w, "invalid tenant id")
 		return 0, nil, nil, false
 	}
-	t, _ := s.store.GetTenant(id)
+	t, err := s.store.GetTenant(id)
+	if err != nil {
+		log.Printf("[tenantAndClient] get tenant %d: %v", id, err)
+		jsonErr(w, "get tenant: "+err.Error())
+		return 0, nil, nil, false
+	}
 	if t == nil {
 		jsonErr(w, "tenant not found")
 		return 0, nil, nil, false
@@ -708,7 +713,12 @@ func (s *Server) handleTenantPasswordPolicy(w http.ResponseWriter, r *http.Reque
 		jsonErr(w, "invalid tenant id")
 		return
 	}
-	t, _ := s.store.GetTenant(id)
+	t, err := s.store.GetTenant(id)
+	if err != nil {
+		log.Printf("[password-policy] get tenant %d: %v", id, err)
+		jsonErr(w, "get tenant: "+err.Error())
+		return
+	}
 	if t == nil {
 		jsonErr(w, "tenant not found")
 		return
@@ -745,7 +755,12 @@ func (s *Server) handleTenantProxy(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, "invalid tenant id")
 		return
 	}
-	t, _ := s.store.GetTenant(id)
+	t, err := s.store.GetTenant(id)
+	if err != nil {
+		log.Printf("[proxy] get tenant %d: %v", id, err)
+		jsonErr(w, "get tenant: "+err.Error())
+		return
+	}
 	if t == nil {
 		jsonErr(w, "tenant not found")
 		return
@@ -928,7 +943,13 @@ func (s *Server) handleRefreshPlanTypeBatch(w http.ResponseWriter, r *http.Reque
 
 	for _, tenantID := range req.TenantIDs {
 		res := result{TenantID: tenantID}
-		t, _ := s.store.GetTenant(tenantID)
+		t, err := s.store.GetTenant(tenantID)
+		if err != nil {
+			log.Printf("[batch-subscription] get tenant %d: %v", tenantID, err)
+			res.Error = "get tenant: " + err.Error()
+			results = append(results, res)
+			continue
+		}
 		if t == nil {
 			res.Error = "tenant not found"
 			results = append(results, res)

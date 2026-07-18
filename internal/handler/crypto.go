@@ -9,34 +9,39 @@ import (
 	"io"
 	"log"
 	"os"
-	"sync"
 )
 
-var (
-	sshKeyEncryptionKey []byte
-	sshKeyOnce          sync.Once
-)
+// getSSHEncryptionKey returns the 32-byte AES key for SSH private key encryption.
+// Priority: 1) OCI_SSH_KEY_ENCRYPTION_KEY env var, 2) persisted key in DB config table,
+// 3) generate new random key and persist to DB.
+func (s *Server) getSSHEncryptionKey() ([]byte, error) {
+	// 1. Try env var first (explicit override, backward compat)
+	if envKey := os.Getenv("OCI_SSH_KEY_ENCRYPTION_KEY"); envKey != "" {
+		if decoded, err := base64.StdEncoding.DecodeString(envKey); err == nil && len(decoded) == 32 {
+			return decoded, nil
+		}
+		log.Printf("[crypto] OCI_SSH_KEY_ENCRYPTION_KEY invalid (need 32 base64-decoded bytes); falling back to DB")
+	}
 
-// getSSHEncryptionKey loads or generates a 32-byte AES key for SSH private key encryption.
-// Uses OCI_SSH_KEY_ENCRYPTION_KEY env var if set; otherwise generates a unique key per process
-// from random bytes (keys persist only for this process lifetime).
-func getSSHEncryptionKey() []byte {
-	sshKeyOnce.Do(func() {
-		if envKey := os.Getenv("OCI_SSH_KEY_ENCRYPTION_KEY"); envKey != "" {
-			if decoded, err := base64.StdEncoding.DecodeString(envKey); err == nil && len(decoded) == 32 {
-				sshKeyEncryptionKey = decoded
-				log.Println("[crypto] using OCI_SSH_KEY_ENCRYPTION_KEY")
-				return
-			}
-			log.Printf("[crypto] OCI_SSH_KEY_ENCRYPTION_KEY invalid (need 32 base64-decoded bytes); generating random key")
+	// 2. Try persisted key in DB config table
+	if dbKey, err := s.store.GetConfig("ssh_key_encryption_key"); err == nil && dbKey != "" {
+		if decoded, err := base64.StdEncoding.DecodeString(dbKey); err == nil && len(decoded) == 32 {
+			return decoded, nil
 		}
-		sshKeyEncryptionKey = make([]byte, 32)
-		if _, err := rand.Read(sshKeyEncryptionKey); err != nil {
-			log.Fatalf("[crypto] failed to generate SSH key encryption key: %v", err)
-		}
-		log.Println("[crypto] using auto-generated SSH key encryption key (per-process)")
-	})
-	return sshKeyEncryptionKey
+		log.Printf("[crypto] persisted ssh_key_encryption_key invalid; regenerating")
+	}
+
+	// 3. Generate new random key and persist to DB
+	newKey := make([]byte, 32)
+	if _, err := rand.Read(newKey); err != nil {
+		return nil, fmt.Errorf("generate SSH key encryption key: %w", err)
+	}
+	encoded := base64.StdEncoding.EncodeToString(newKey)
+	if err := s.store.SetConfig("ssh_key_encryption_key", encoded); err != nil {
+		return nil, fmt.Errorf("persist SSH key encryption key: %w", err)
+	}
+	log.Println("[crypto] generated and persisted new SSH key encryption key in DB")
+	return newKey, nil
 }
 
 // encryptSSHPrivateKey encrypts plaintext with AES-256-GCM.
@@ -44,8 +49,7 @@ func getSSHEncryptionKey() []byte {
 // On any crypto failure, returns ("", error) — never falls back to plaintext.
 // Note: salt(16) is prepended for format compatibility with password-based
 // KDF tools, even though the key is used directly. Not used in key derivation.
-func encryptSSHPrivateKey(plaintext []byte) (string, error) {
-	key := getSSHEncryptionKey()
+func encryptSSHPrivateKey(key, plaintext []byte) (string, error) {
 	salt := make([]byte, 16)
 	if _, err := io.ReadFull(rand.Reader, salt); err != nil {
 		return "", fmt.Errorf("encrypt SSH: read salt: %w", err)
@@ -70,8 +74,7 @@ func encryptSSHPrivateKey(plaintext []byte) (string, error) {
 }
 
 // decryptSSHPrivateKey decrypts data produced by encryptSSHPrivateKey.
-func decryptSSHPrivateKey(encoded string) ([]byte, error) {
-	key := getSSHEncryptionKey()
+func decryptSSHPrivateKey(key []byte, encoded string) ([]byte, error) {
 	data, err := base64.StdEncoding.DecodeString(encoded)
 	if err != nil {
 		return nil, fmt.Errorf("decode: %w", err)

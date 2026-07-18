@@ -184,7 +184,6 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/instances/vnc/wait", s.withAuth(s.handleConsoleWait))
 	s.mux.HandleFunc("/api/instances/vnc/proxy", s.withAuth(s.handleVNCProxy))
 	s.mux.HandleFunc("/api/instances/config-info", s.withAuth(s.handleInstanceConfigInfo))
-	s.mux.HandleFunc("/api/instances/update-password", s.withAuth(s.handleUpdatePassword))
 	s.mux.HandleFunc("/api/shell/ws", s.withAuth(s.handleShellWS))
 	s.mux.HandleFunc("/api/cost/analysis", s.withAuth(s.handleCostAnalysis))
 	s.mux.HandleFunc("/api/cost", s.withAuth(s.handleCost))
@@ -599,8 +598,12 @@ func (s *Server) handleMFASetup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	secret := auth.GenerateMFA()
-	s.store.SetConfig("mfa_secret", secret)
-	s.store.SetConfig("mfa_enabled", "false")
+	if err := s.store.SetConfig("mfa_secret", secret); err != nil {
+		log.Printf("[mfa:setup] set mfa_secret: %v", err)
+	}
+	if err := s.store.SetConfig("mfa_enabled", "false"); err != nil {
+		log.Printf("[mfa:setup] set mfa_enabled: %v", err)
+	}
 	uri := auth.TOTPURI(secret, s.cfg.Username, "oci-helper")
 	s.audit(0, "mfa:setup", "generated new secret", r)
 	jsonOK(w, map[string]string{"secret": secret, "uri": uri})
@@ -627,7 +630,9 @@ func (s *Server) handleMFAVerify(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, "invalid code")
 		return
 	}
-	s.store.SetConfig("mfa_enabled", "true")
+	if err := s.store.SetConfig("mfa_enabled", "true"); err != nil {
+		log.Printf("[mfa:verify] set mfa_enabled: %v", err)
+	}
 	s.audit(0, "mfa:enabled", "", r)
 	jsonOK(w, map[string]string{"status": "ok"})
 }
@@ -649,7 +654,9 @@ func (s *Server) handleMFADisable(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, "valid TOTP code required to disable MFA")
 		return
 	}
-	s.store.SetConfig("mfa_enabled", "false")
+	if err := s.store.SetConfig("mfa_enabled", "false"); err != nil {
+		log.Printf("[mfa:disable] set mfa_enabled: %v", err)
+	}
 	s.audit(0, "mfa:disabled", "", r)
 	jsonOK(w, map[string]string{"status": "ok"})
 }

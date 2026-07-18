@@ -86,5 +86,5 @@ func randStr(n int) string {
 	if _, err := rand.Read(b); err != nil {
 		log.Fatal("config: crypto/rand.Read failed: " + err.Error())
 	}
-	return base64.RawURLEncoding.EncodeToString(b)[:n]
+	return base64.RawURLEncoding.EncodeToString(b)
 }

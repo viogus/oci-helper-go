@@ -139,14 +139,6 @@ func (s *Server) createInstance(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Persist root password as freeform tag so it can be retrieved later.
-	if req.RootPassword != "" {
-		if launchReq.LaunchInstanceDetails.FreeformTags == nil {
-			launchReq.LaunchInstanceDetails.FreeformTags = map[string]string{}
-		}
-		launchReq.LaunchInstanceDetails.FreeformTags["root_password"] = req.RootPassword
-	}
-
 	inst, err := client.LaunchInstanceWithRequest(r.Context(), launchReq)
 	if err != nil {
 		jsonErr(w, "launch: "+err.Error())
@@ -232,8 +224,10 @@ func (s *Server) handleInstanceAction(w http.ResponseWriter, r *http.Request) {
 			jsonErr(w, "terminate: "+err.Error())
 			return
 		}
-		s.store.UpdateInstanceState(instanceID, "TERMINATING")
-	case "start":
+		if err := s.store.UpdateInstanceState(instanceID, "TERMINATING"); err != nil {
+				log.Printf("[instances] UpdateInstanceState %s: %v", instanceID, err)
+			}
+		case "start":
 		_, err := client.InstanceAction(ctx, bareOCID(instanceID), core.InstanceActionActionStart)
 		if err != nil {
 			jsonErr(w, "start: "+err.Error())
@@ -307,7 +301,12 @@ func (s *Server) handleBatchStart(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, "tenantId and instanceIds required")
 		return
 	}
-	payload, _ := json.Marshal(req)
+	payload, err := json.Marshal(req)
+	if err != nil {
+		log.Printf("[batch:start] marshal: %v", err)
+		jsonErr(w, "marshal payload: "+err.Error())
+		return
+	}
 	task := &db.Task{
 		TenantID: req.TenantID,
 		Type:     "batch_start",
@@ -465,9 +464,11 @@ func (s *Server) syncVNICs(ctx context.Context, tenantID int64, regions []string
 		inst.PublicIP = pubIP
 		inst.PrivateIP = privIP
 		inst.SubnetID = subnetID
-		s.store.UpsertInstance(&inst)
+		if err := s.store.UpsertInstance(&inst); err != nil {
+				log.Printf("[sync] upsert vnic %s: %v", inst.OCID, err)
+			}
+		}
 	}
-}
 
 func (s *Server) handleChangeShape(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -1403,36 +1404,6 @@ func (s *Server) handleInstanceConfigInfo(w http.ResponseWriter, r *http.Request
 		"vnic":          vnicInfo,
 		"boot_volume":   bootVolumeInfo,
 	})
-}
-
-// ── Update Root Password ──────────────────────────────────────────────
-
-func (s *Server) handleUpdatePassword(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	var req struct {
-		TenantID    int64  `json:"tenant_id"`
-		InstanceID  string `json:"instance_id"`
-		NewPassword string `json:"new_password"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		jsonErr(w, "invalid body: "+err.Error())
-		return
-	}
-	if len(req.NewPassword) < 8 {
-		jsonErr(w, "password must be at least 8 characters")
-		return
-	}
-	// Do NOT store the root password in OCI freeform tags — they are
-	// visible to anyone with instances.read in OCI IAM. The password is
-	// injected via cloud-init at launch time only and never persisted.
-	//
-	// For existing instances without cloud-init, the caller should use
-	// the shell console to set the password interactively.
-	s.audit(req.TenantID, "instance:update-password", req.InstanceID, r)
-	jsonOK(w, map[string]string{"status": "ok", "warning": "password not stored in OCI tags; use cloud-init at launch or shell console for existing instances"})
 }
 
 // discoverRegions calls the OCI Identity API to list subscribed regions for the tenancy.

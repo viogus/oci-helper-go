@@ -39,7 +39,10 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(`{"status":"ok"}`))
+	_, err := w.Write([]byte(`{"status":"ok"}`))
+	if err != nil {
+		log.Printf("[health] write response: %v", err)
+	}
 }
 
 func (s *Server) handleGlance(w http.ResponseWriter, r *http.Request) {
@@ -48,35 +51,35 @@ func (s *Server) handleGlance(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	db := s.store.DB()
+	dbConn := s.store.DB()
 
 	var usersCount int64
-	if err := db.QueryRow("SELECT COUNT(*) FROM users").Scan(&usersCount); err != nil {
+	if err := dbConn.QueryRow("SELECT COUNT(*) FROM users").Scan(&usersCount); err != nil {
 		log.Printf("[glance] users count: %v", err)
 	}
 
 	var tasksCount int64
-	if err := db.QueryRow("SELECT COUNT(*) FROM tasks").Scan(&tasksCount); err != nil {
+	if err := dbConn.QueryRow("SELECT COUNT(*) FROM tasks").Scan(&tasksCount); err != nil {
 		log.Printf("[glance] tasks count: %v", err)
 	}
 
 	var regionsCount int64
-	if err := db.QueryRow("SELECT COUNT(DISTINCT region) FROM tenants").Scan(&regionsCount); err != nil {
+	if err := dbConn.QueryRow("SELECT COUNT(DISTINCT region) FROM tenants").Scan(&regionsCount); err != nil {
 		log.Printf("[glance] regions count: %v", err)
 	}
 
 	var tenantsCount int64
-	if err := db.QueryRow("SELECT COUNT(*) FROM tenants").Scan(&tenantsCount); err != nil {
+	if err := dbConn.QueryRow("SELECT COUNT(*) FROM tenants").Scan(&tenantsCount); err != nil {
 		log.Printf("[glance] tenants count: %v", err)
 	}
 
 	var instancesCount int64
-	if err := db.QueryRow("SELECT COUNT(*) FROM instances").Scan(&instancesCount); err != nil {
+	if err := dbConn.QueryRow("SELECT COUNT(*) FROM instances").Scan(&instancesCount); err != nil {
 		log.Printf("[glance] instances count: %v", err)
 	}
 
 	var runningCount int64
-	if err := db.QueryRow("SELECT COUNT(*) FROM instances WHERE state = 'RUNNING'").Scan(&runningCount); err != nil {
+	if err := dbConn.QueryRow("SELECT COUNT(*) FROM instances WHERE state = 'RUNNING'").Scan(&runningCount); err != nil {
 		log.Printf("[glance] running count: %v", err)
 	}
 
@@ -173,8 +176,14 @@ func (s *Server) handleTelegramWebhook(w http.ResponseWriter, r *http.Request) {
 
 	// Handle callback queries (button clicks)
 	if update.CallbackQuery != nil {
-		s.handleTGCallback(bot, update.CallbackQuery.Message.Chat.ID,
-			update.CallbackQuery.Message.MessageID,
+		msg := update.CallbackQuery.Message
+		if msg == nil {
+			log.Printf("[telegram] callback query %s has no message, ignoring", update.CallbackQuery.ID)
+			jsonErr(w, "callback message is nil")
+			return
+		}
+		s.handleTGCallback(bot, msg.Chat.ID,
+			msg.MessageID,
 			update.CallbackQuery.ID, update.CallbackQuery.Data)
 		jsonOK(w, map[string]string{"status": "ok"})
 		return
@@ -307,7 +316,10 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 				if readSize > fi.Size() {
 					readSize = fi.Size()
 				}
-				f.Seek(-readSize, 2)
+				_, err = f.Seek(-readSize, 2)
+				if err != nil {
+					log.Printf("[logs] seek: %v", err)
+				}
 				buf := make([]byte, readSize)
 				n, _ := f.Read(buf)
 				lines := strings.Split(string(buf[:n]), "\n")

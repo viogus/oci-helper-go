@@ -117,17 +117,13 @@ func (w *Worker) Run() {
 }
 
 func (w *Worker) processNext() {
-	// Use a DB query that returns only pending tasks, avoiding an O(n) scan.
-	tasks, err := w.store.ListTasks()
+	tasks, err := w.store.ListPendingTasks()
 	if err != nil {
-		log.Printf("[worker] list tasks: %v", err)
+		log.Printf("[worker] list pending tasks: %v", err)
 		return
 	}
 	for i := range tasks {
 		t := &tasks[i]
-		if t.Status != "pending" {
-			continue
-		}
 		// Atomically claim the task — guards against TOCTOU race with
 		// HTTP cancel/pause handler that also writes to this task row.
 		claimed, err := w.store.ClaimTask(t.ID)

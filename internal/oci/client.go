@@ -1638,10 +1638,16 @@ func (c *Client) AddIngressRule(ctx context.Context, vcnID, protocol, port, sour
 	}
 	if protocol == "TCP" || protocol == "UDP" {
 		parts := strings.Split(port, "-")
-		minPort, _ := strconv.Atoi(parts[0])
+		minPort, err := strconv.Atoi(parts[0])
+		if err != nil {
+			return fmt.Errorf("invalid port %s: %w", parts[0], err)
+		}
 		maxPort := minPort
 		if len(parts) > 1 {
-			maxPort, _ = strconv.Atoi(parts[1])
+			maxPort, err = strconv.Atoi(parts[1])
+			if err != nil {
+				return fmt.Errorf("invalid port %s: %w", parts[1], err)
+			}
 		}
 		portRange := &core.PortRange{
 			Min: common.Int(minPort),
@@ -1801,10 +1807,16 @@ func (c *Client) AddEgressRule(ctx context.Context, vcnID, protocol, port, dest 
 	}
 	if protocol == "TCP" || protocol == "UDP" {
 		parts := strings.Split(port, "-")
-		minPort, _ := strconv.Atoi(parts[0])
+		minPort, err := strconv.Atoi(parts[0])
+		if err != nil {
+			return fmt.Errorf("invalid port %s: %w", parts[0], err)
+		}
 		maxPort := minPort
 		if len(parts) > 1 {
-			maxPort, _ = strconv.Atoi(parts[1])
+			maxPort, err = strconv.Atoi(parts[1])
+			if err != nil {
+				return fmt.Errorf("invalid port %s: %w", parts[1], err)
+			}
 		}
 			portRange := &core.PortRange{
 				Min: common.Int(minPort),

@@ -170,7 +170,10 @@ func (s *Store) ClaimTask(id int64) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	n, _ := res.RowsAffected()
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
 	return n > 0, nil
 }
 
@@ -183,6 +186,25 @@ func (s *Store) UpdateTaskStatus(id int64, status string, progress int, message 
 
 func (s *Store) ListTasks() ([]Task, error) {
 	rows, err := s.db.Query(`SELECT id, tenant_id, coalesce(parent_task_id,0), type, status, progress, message, payload, coalesce(result,''), created_at, started_at, finished_at FROM tasks ORDER BY id DESC LIMIT 200`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var list []Task
+	for rows.Next() {
+		var t Task
+		if err := rows.Scan(&t.ID, &t.TenantID, &t.ParentTaskID, &t.Type, &t.Status, &t.Progress, &t.Message, &t.Payload, &t.Result, &t.CreatedAt, &t.StartedAt, &t.FinishedAt); err != nil {
+			return nil, err
+		}
+		list = append(list, t)
+	}
+	return list, rows.Err()
+}
+
+// ListPendingTasks returns up to 50 pending tasks ordered by id.
+// Worker uses this to pick up tasks without an O(n) in-Go filter.
+func (s *Store) ListPendingTasks() ([]Task, error) {
+	rows, err := s.db.Query(`SELECT id, tenant_id, coalesce(parent_task_id,0), type, status, progress, message, payload, coalesce(result,''), created_at, started_at, finished_at FROM tasks WHERE status='pending' ORDER BY id LIMIT 50`)
 	if err != nil {
 		return nil, err
 	}

@@ -55,6 +55,10 @@ func (s *Server) handleDefenseEnable(w http.ResponseWriter, r *http.Request) {
 	}
 
 	for _, sl := range slResp.Items {
+		if sl.Id == nil {
+			log.Printf("[defense] skipping security list with nil Id in VCN %s", req.VcnID)
+			continue
+		}
 
 		// Filter OUT any ingress rule that ALLOWS traffic from blacklisted CIDRs.
 	// OCI security lists use ALLOW semantics only, so to block an IP we
@@ -144,6 +148,10 @@ func (s *Server) handleDefenseDisable(w http.ResponseWriter, r *http.Request) {
 	}
 
 	for _, sl := range slResp.Items {
+		if sl.Id == nil {
+			log.Printf("[defense] skipping security list with nil Id in VCN %s", req.VcnID)
+			continue
+		}
 
 		// Restore: load the original rules saved during enable.
 		// If none saved (legacy), fall back to adding an allow-all rule.
@@ -192,6 +200,9 @@ func (s *Server) handleDefenseDisable(w http.ResponseWriter, r *http.Request) {
 	s.store.SetConfig("defense_vcn_"+scope, "")
 	s.store.SetConfig("defense_cidrs_"+scope, "")
 	for _, sl := range slResp.Items {
+		if sl.Id == nil {
+			continue
+		}
 		s.store.SetConfig(defenseOriginalRulesPrefix+req.VcnID+"_"+*sl.Id, "")
 	}
 	s.audit(req.TenantID, "defense:disable", req.VcnID, r)

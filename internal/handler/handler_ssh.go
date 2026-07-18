@@ -117,7 +117,13 @@ func (s *Server) handleSSHKeyGenerate(w http.ResponseWriter, r *http.Request, re
 	}
 	fingerprint = gossh.FingerprintSHA256(pk)
 
-	encryptedKey, err := encryptSSHPrivateKey(privPEMBytes)
+	encKey, err := s.getSSHEncryptionKey()
+	if err != nil {
+		s.audit(req.TenantID, "ssh:key:generate:error", "get encryption key: "+err.Error(), r)
+		jsonErr(w, "get encryption key: "+err.Error())
+		return
+	}
+	encryptedKey, err := encryptSSHPrivateKey(encKey, privPEMBytes)
 	if err != nil {
 		s.audit(req.TenantID, "ssh:key:generate:error", "encrypt failed: "+err.Error(), r)
 		jsonErr(w, "encrypt private key: "+err.Error())

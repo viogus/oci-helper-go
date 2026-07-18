@@ -3,12 +3,14 @@
 package handler
 
 import (
+	"context"
 	"crypto/subtle"
 	"embed"
 	"encoding/json"
 	"fmt"
 	"io/fs"
 	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -17,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/viogus/oci-helper-go/internal/auth"
@@ -322,21 +325,61 @@ func (s *Server) Handler() http.Handler { return s.mux }
 
 // --- auth ---
 
+type ctxKey string
+
+const reqIDKey ctxKey = "request_id"
+
+var reqIDCounter uint64
+
+type statusWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (s *statusWriter) WriteHeader(code int) {
+	s.status = code
+	s.ResponseWriter.WriteHeader(code)
+}
+
+func requestID(r *http.Request) string {
+	if id, ok := r.Context().Value(reqIDKey).(string); ok {
+		return id
+	}
+	return "-"
+}
+
 func (s *Server) withAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		reqID := strconv.FormatUint(atomic.AddUint64(&reqIDCounter, 1), 10)
+		ctx := context.WithValue(r.Context(), reqIDKey, reqID)
+		r = r.WithContext(ctx)
+		sw := &statusWriter{ResponseWriter: w, status: 200}
+
+		defer func() {
+			slog.Info("request",
+				"req_id", reqID,
+				"method", r.Method,
+				"path", r.URL.Path,
+				"status", sw.status,
+				"duration", time.Since(start).String(),
+				"remote", extractIP(r),
+			)
+		}()
+
 		// Limit request body to 10 MB to prevent memory exhaustion.
-		r.Body = http.MaxBytesReader(w, r.Body, 10<<20)
+		r.Body = http.MaxBytesReader(sw, r.Body, 10<<20)
 		// Set baseline security headers.
-		w.Header().Set("X-Content-Type-Options", "nosniff")
-		w.Header().Set("X-Frame-Options", "DENY")
-		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
+		sw.Header().Set("X-Content-Type-Options", "nosniff")
+		sw.Header().Set("X-Frame-Options", "DENY")
+		sw.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
 		if r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https" {
-			w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+			sw.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
 		}
-		if !s.auth.Authenticate(w, r) {
+		if !s.auth.Authenticate(sw, r) {
 			return
 		}
-		next(w, r)
+		next(sw, r)
 	}
 }
 

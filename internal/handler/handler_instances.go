@@ -422,53 +422,77 @@ func (s *Server) syncVNICs(ctx context.Context, tenantID int64, regions []string
 		log.Printf("[syncVnics] list instances: %v", err)
 		return
 	}
-	// Fetch tenant and create OCI client once — not per instance.
+	if len(instances) == 0 {
+		return
+	}
+	// Fetch tenant once, create per-region clients in goroutines.
 	tenant, err := s.store.GetTenant(tenantID)
 	if err != nil || tenant == nil {
 		log.Printf("[syncVnics] tenant %d not found", tenantID)
 		return
 	}
-	client, err := s.clientFor(tenant)
-	if err != nil {
-		log.Printf("[syncVnics] oci client: %v", err)
-		return
-	}
+	// Group instances by region
+	byRegion := make(map[string][]db.Instance)
 	for _, inst := range instances {
-		parts := strings.SplitN(inst.OCID, ":", 2)
-		ocid := parts[len(parts)-1]
-		if ocid == "" {
-			continue
-		}
 		region := inst.Region
 		if region == "" {
 			region = tenant.Region
 		}
-		client.SetRegion(region)
-		vnics, err := client.GetInstanceVNICs(ctx, tenant.TenancyOCID, ocid)
-		if err != nil || len(vnics) == 0 {
-			continue
-		}
-		vnic := vnics[0]
-		pubIP := ""
-		privIP := ""
-		subnetID := ""
-		if vnic.PublicIp != nil {
-			pubIP = *vnic.PublicIp
-		}
-		if vnic.PrivateIp != nil {
-			privIP = *vnic.PrivateIp
-		}
-		if vnic.SubnetId != nil {
-			subnetID = *vnic.SubnetId
-		}
-		inst.PublicIP = pubIP
-		inst.PrivateIP = privIP
-		inst.SubnetID = subnetID
-		if err := s.store.UpsertInstance(&inst); err != nil {
-				log.Printf("[sync] upsert vnic %s: %v", inst.OCID, err)
-			}
-		}
+		byRegion[region] = append(byRegion[region], inst)
 	}
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	sem := make(chan struct{}, 5)
+	for region, insts := range byRegion {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(region string, insts []db.Instance) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			client, err := s.clientFor(tenant)
+			if err != nil {
+				mu.Lock()
+				log.Printf("[syncVnics] region %s oci client: %v", region, err)
+				mu.Unlock()
+				return
+			}
+			client.SetRegion(region)
+			for _, inst := range insts {
+				parts := strings.SplitN(inst.OCID, ":", 2)
+				ocid := parts[len(parts)-1]
+				if ocid == "" {
+					continue
+				}
+				vnics, err := client.GetInstanceVNICs(ctx, tenant.TenancyOCID, ocid)
+				if err != nil || len(vnics) == 0 {
+					continue
+				}
+				vnic := vnics[0]
+				pubIP := ""
+				privIP := ""
+				subnetID := ""
+				if vnic.PublicIp != nil {
+					pubIP = *vnic.PublicIp
+				}
+				if vnic.PrivateIp != nil {
+					privIP = *vnic.PrivateIp
+				}
+				if vnic.SubnetId != nil {
+					subnetID = *vnic.SubnetId
+				}
+				inst.PublicIP = pubIP
+				inst.PrivateIP = privIP
+				inst.SubnetID = subnetID
+				if err := s.store.UpsertInstance(&inst); err != nil {
+					mu.Lock()
+					log.Printf("[sync] upsert vnic %s: %v", inst.OCID, err)
+					mu.Unlock()
+				}
+			}
+		}(region, insts)
+	}
+	wg.Wait()
+}
 
 func (s *Server) handleChangeShape(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {

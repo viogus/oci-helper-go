@@ -110,7 +110,14 @@ func (s *Store) UpsertInstance(inst *Instance) error {
 }
 
 func (s *Store) ListInstances(tenantID int64) ([]Instance, error) {
-	rows, err := s.db.Query(`SELECT id, tenant_id, name, ocid, shape, ocpu, memory_gb, boot_volume_gb, public_ip, private_ip, state, availability_domain, fault_domain, image_id, subnet_id, region, coalesce(dns_last_ip,''), created_at, synced_at FROM instances WHERE tenant_id=? OR ?=0 ORDER BY created_at DESC`, tenantID, tenantID)
+	var rows *sql.Rows
+	var err error
+	sel := `SELECT id, tenant_id, name, ocid, shape, ocpu, memory_gb, boot_volume_gb, public_ip, private_ip, state, availability_domain, fault_domain, image_id, subnet_id, region, coalesce(dns_last_ip,''), created_at, synced_at FROM instances`
+	if tenantID != 0 {
+		rows, err = s.db.Query(sel+` WHERE tenant_id=? ORDER BY created_at DESC`, tenantID)
+	} else {
+		rows, err = s.db.Query(sel+` ORDER BY created_at DESC`)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -364,9 +371,18 @@ func (s *Store) SetConfig(key, value string) error {
 
 func (s *Store) ListInstancesPaginated(tenantID int64, keyword string, state string, page, size int) ([]Instance, int64, error) {
 	kw := "%" + escapeLike(keyword) + "%"
+	likeClause := `(name LIKE ? ESCAPE '\' OR ocid LIKE ? ESCAPE '\' OR public_ip LIKE ? ESCAPE '\')`
+
 	var total int64
-	countQ := `SELECT COUNT(*) FROM instances WHERE (tenant_id=? OR ?=0) AND (name LIKE ? ESCAPE '\' OR ocid LIKE ? ESCAPE '\' OR public_ip LIKE ? ESCAPE '\')`
-	countArgs := []interface{}{tenantID, tenantID, kw, kw, kw}
+	var countQ string
+	var countArgs []interface{}
+	if tenantID != 0 {
+		countQ = `SELECT COUNT(*) FROM instances WHERE tenant_id=? AND ` + likeClause
+		countArgs = []interface{}{tenantID, kw, kw, kw}
+	} else {
+		countQ = `SELECT COUNT(*) FROM instances WHERE ` + likeClause
+		countArgs = []interface{}{kw, kw, kw}
+	}
 	if state != "" {
 		countQ += ` AND state=?`
 		countArgs = append(countArgs, state)
@@ -376,11 +392,18 @@ func (s *Store) ListInstancesPaginated(tenantID int64, keyword string, state str
 	}
 
 	offset := (page - 1) * size
-	selQ := `SELECT id, tenant_id, name, ocid, shape, ocpu, memory_gb, boot_volume_gb,
+	selBase := `SELECT id, tenant_id, name, ocid, shape, ocpu, memory_gb, boot_volume_gb,
 		public_ip, private_ip, state, availability_domain, fault_domain, image_id, subnet_id,
-		region, coalesce(dns_last_ip,''), created_at, synced_at FROM instances
-		WHERE (tenant_id=? OR ?=0) AND (name LIKE ? ESCAPE '\' OR ocid LIKE ? ESCAPE '\' OR public_ip LIKE ? ESCAPE '\')`
-	selArgs := []interface{}{tenantID, tenantID, kw, kw, kw}
+		region, coalesce(dns_last_ip,''), created_at, synced_at FROM instances`
+	var selQ string
+	var selArgs []interface{}
+	if tenantID != 0 {
+		selQ = selBase + ` WHERE tenant_id=? AND ` + likeClause
+		selArgs = []interface{}{tenantID, kw, kw, kw}
+	} else {
+		selQ = selBase + ` WHERE ` + likeClause
+		selArgs = []interface{}{kw, kw, kw}
+	}
 	if state != "" {
 		selQ += ` AND state=?`
 		selArgs = append(selArgs, state)
@@ -546,10 +569,21 @@ func (s *Store) DeleteCfCfg(id int64) error {
 // ── IpData ─────────────────────────────────────────────────────────────
 
 func (s *Store) ListIpData(tenantID int64, dataType string) ([]IpData, error) {
-	q := `SELECT id, tenant_id, cidr, label, type, enabled, lat, lng, country, area, city, org, asn, created_at FROM ip_data WHERE (tenant_id=? OR ?=0)`
-	args := []interface{}{tenantID, tenantID}
+	sel := `SELECT id, tenant_id, cidr, label, type, enabled, lat, lng, country, area, city, org, asn, created_at FROM ip_data`
+	var q string
+	var args []interface{}
+	if tenantID != 0 {
+		q = sel + ` WHERE tenant_id=?`
+		args = []interface{}{tenantID}
+	} else {
+		q = sel
+	}
 	if dataType != "" {
-		q += ` AND type=?`
+		if tenantID != 0 {
+			q += ` AND type=?`
+		} else {
+			q += ` WHERE type=?`
+		}
 		args = append(args, dataType)
 	}
 	q += ` ORDER BY id DESC`
@@ -589,8 +623,14 @@ func (s *Store) DeleteIpData(id int64) error {
 // ── SSH Keys ───────────────────────────────────────────────────────────
 
 func (s *Store) ListSSHKeys(tenantID int64) ([]SSHKey, error) {
-	rows, err := s.db.Query(`SELECT k.id, k.name, k.public_key, k.fingerprint, COALESCE(k.tenant_id,0), COALESCE(t.name,''), k.created_at FROM ssh_keys k LEFT JOIN tenants t ON k.tenant_id=t.id WHERE (k.tenant_id=? OR ?=0) ORDER BY k.id DESC`,
-		tenantID, tenantID)
+	sel := `SELECT k.id, k.name, k.public_key, k.fingerprint, COALESCE(k.tenant_id,0), COALESCE(t.name,''), k.created_at FROM ssh_keys k LEFT JOIN tenants t ON k.tenant_id=t.id`
+	var rows *sql.Rows
+	var err error
+	if tenantID != 0 {
+		rows, err = s.db.Query(sel+` WHERE k.tenant_id=? ORDER BY k.id DESC`, tenantID)
+	} else {
+		rows, err = s.db.Query(sel+` ORDER BY k.id DESC`)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -635,8 +675,14 @@ func (s *Store) DeleteSSHKey(id int64) error {
 // ── Instance Plans ─────────────────────────────────────────────────────
 
 func (s *Store) ListInstancePlans(tenantID int64) ([]InstancePlan, error) {
-	rows, err := s.db.Query(`SELECT id, name, tenant_id, shape, image_id, subnet_id, availability_domain, boot_volume_size_gb, ocpus, memory_gb, created_at FROM instance_plans WHERE (tenant_id=? OR ?=0) ORDER BY id DESC`,
-		tenantID, tenantID)
+	sel := `SELECT id, name, tenant_id, shape, image_id, subnet_id, availability_domain, boot_volume_size_gb, ocpus, memory_gb, created_at FROM instance_plans`
+	var rows *sql.Rows
+	var err error
+	if tenantID != 0 {
+		rows, err = s.db.Query(sel+` WHERE tenant_id=? ORDER BY id DESC`, tenantID)
+	} else {
+		rows, err = s.db.Query(sel+` ORDER BY id DESC`)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -654,18 +700,37 @@ func (s *Store) ListInstancePlans(tenantID int64) ([]InstancePlan, error) {
 
 func (s *Store) ListInstancePlansPaginated(tenantID int64, keyword string, page, size int) ([]InstancePlan, int64, error) {
 	kw := "%" + escapeLike(keyword) + "%"
+	likeClause := `(name LIKE ? ESCAPE '\' OR shape LIKE ? ESCAPE '\')`
+
 	var total int64
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM instance_plans WHERE (tenant_id=? OR ?=0) AND (name LIKE ? ESCAPE '\' OR shape LIKE ? ESCAPE '\')`,
-		tenantID, tenantID, kw, kw).Scan(&total); err != nil {
+	var countQ string
+	var countArgs []interface{}
+	if tenantID != 0 {
+		countQ = `SELECT COUNT(*) FROM instance_plans WHERE tenant_id=? AND ` + likeClause
+		countArgs = []interface{}{tenantID, kw, kw}
+	} else {
+		countQ = `SELECT COUNT(*) FROM instance_plans WHERE ` + likeClause
+		countArgs = []interface{}{kw, kw}
+	}
+	if err := s.db.QueryRow(countQ, countArgs...).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("count instance_plans: %w", err)
 	}
 
 	offset := (page - 1) * size
-	rows, err := s.db.Query(`SELECT id, name, tenant_id, shape, image_id, subnet_id, availability_domain,
-		boot_volume_size_gb, ocpus, memory_gb, created_at FROM instance_plans
-		WHERE (tenant_id=? OR ?=0) AND (name LIKE ? ESCAPE '\' OR shape LIKE ? ESCAPE '\')
-		ORDER BY id DESC LIMIT ? OFFSET ?`,
-		tenantID, tenantID, kw, kw, size, offset)
+	selBase := `SELECT id, name, tenant_id, shape, image_id, subnet_id, availability_domain,
+		boot_volume_size_gb, ocpus, memory_gb, created_at FROM instance_plans`
+	var selQ string
+	var selArgs []interface{}
+	if tenantID != 0 {
+		selQ = selBase + ` WHERE tenant_id=? AND ` + likeClause
+		selArgs = []interface{}{tenantID, kw, kw}
+	} else {
+		selQ = selBase + ` WHERE ` + likeClause
+		selArgs = []interface{}{kw, kw}
+	}
+	selQ += ` ORDER BY id DESC LIMIT ? OFFSET ?`
+	selArgs = append(selArgs, size, offset)
+	rows, err := s.db.Query(selQ, selArgs...)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -770,10 +835,16 @@ func (s *Store) CreateStockAlert(a *StockAlert) error {
 }
 
 func (s *Store) ListStockAlerts(tenantID int64) ([]StockAlert, error) {
-	q := `SELECT id, tenant_id, region, shape, availability_domain, chat_id, enabled,
+	sel := `SELECT id, tenant_id, region, shape, availability_domain, chat_id, enabled,
 		last_checked_at, last_stock_status, created_at, updated_at
-		FROM stock_alerts WHERE (tenant_id=? OR ?=0) ORDER BY id DESC`
-	rows, err := s.db.Query(q, tenantID, tenantID)
+		FROM stock_alerts`
+	var rows *sql.Rows
+	var err error
+	if tenantID != 0 {
+		rows, err = s.db.Query(sel+` WHERE tenant_id=? ORDER BY id DESC`, tenantID)
+	} else {
+		rows, err = s.db.Query(sel+` ORDER BY id DESC`)
+	}
 	if err != nil {
 		return nil, err
 	}

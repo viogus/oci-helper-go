@@ -23,6 +23,7 @@ type Config struct {
 	LogLevel      string
 	LogFile       string
 	SecureCookies bool
+	DebugPort     string
 }
 
 type GoogleOAuthConfig struct {
@@ -42,6 +43,7 @@ func Load() *Config {
 		LogLevel:      envOr("OCI_LOG_LEVEL", "info"),
 		LogFile:       envOr("OCI_LOG_FILE", "/app/oci-helper/oci-helper.log"),
 		SecureCookies: envOr("OCI_SECURE_COOKIES", "false") == "true",
+		DebugPort:     envOr("OCI_DEBUG_PORT", ""),
 	}
 
 	if c.Password == "" {

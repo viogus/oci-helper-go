@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -39,6 +40,16 @@ func main() {
 	}
 
 	cfg := config.Load()
+
+	// Debug server (pprof) on separate port, only if configured
+	if cfg.DebugPort != "" {
+		go func() {
+			log.Printf("[debug] pprof listening on :%s", cfg.DebugPort)
+			if err := http.ListenAndServe(":"+cfg.DebugPort, nil); err != nil {
+				log.Printf("[debug] pprof server: %v", err)
+			}
+		}()
+	}
 
 	// set up dual logging: stderr + log file
 	if cfg.LogFile != "" {

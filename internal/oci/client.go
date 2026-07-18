@@ -43,10 +43,24 @@ type Client struct {
 	mu sync.Mutex // guards interceptor mutations on all sub-clients
 }
 
+var (
+	pemCache   = make(map[string][]byte)
+	pemCacheMu sync.RWMutex
+)
+
 func NewClient(t *db.Tenant, proxyURL string) (*Client, error) {
-	pemData, err := os.ReadFile(t.KeyFile)
-	if err != nil {
-		return nil, fmt.Errorf("read key file %s: %w", t.KeyFile, err)
+	pemCacheMu.RLock()
+	pemData, ok := pemCache[t.KeyFile]
+	pemCacheMu.RUnlock()
+	if !ok {
+		var err error
+		pemData, err = os.ReadFile(t.KeyFile)
+		if err != nil {
+			return nil, fmt.Errorf("read key file %s: %w", t.KeyFile, err)
+		}
+		pemCacheMu.Lock()
+		pemCache[t.KeyFile] = pemData
+		pemCacheMu.Unlock()
 	}
 	cfg := common.NewRawConfigurationProvider(
 		t.TenancyOCID, t.UserOCID, t.Region, t.Fingerprint,

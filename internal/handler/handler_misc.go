@@ -319,21 +319,23 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 				_, err = f.Seek(-readSize, 2)
 				if err != nil {
 					log.Printf("[logs] seek: %v", err)
+					// Seek failed, fall through to full-file read below.
+				} else {
+					buf := make([]byte, readSize)
+					n, _ := f.Read(buf)
+					lines := strings.Split(string(buf[:n]), "\n")
+					start := 0
+					if len(lines) > tail {
+						start = len(lines) - tail
+					}
+					jsonOK(w, map[string]interface{}{
+						"lines":     lines[start:],
+						"tail":      tail,
+						"file":      logFile,
+						"truncated": true,
+					})
+					return
 				}
-				buf := make([]byte, readSize)
-				n, _ := f.Read(buf)
-				lines := strings.Split(string(buf[:n]), "\n")
-				start := 0
-				if len(lines) > tail {
-					start = len(lines) - tail
-				}
-				jsonOK(w, map[string]interface{}{
-					"lines":     lines[start:],
-					"tail":      tail,
-					"file":      logFile,
-					"truncated": true,
-				})
-				return
 			}
 		}
 		data, err := os.ReadFile(logFile)
@@ -466,40 +468,43 @@ func (s *Server) handleUpdateCheck(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	// Query GitHub releases for the local project repo
+	// Query GitHub releases for the configured update repo
 	type releaseInfo struct {
 		TagName     string `json:"tag_name"`
 		PublishedAt string `json:"published_at"`
 		HTMLURL     string `json:"html_url"`
 		Body        string `json:"body"`
 	}
-	// Try the local repo first, fall back to reference project
-	repos := []string{"viogus/oci-helper-go", "Yohann0617/oci-helper"}
-	for _, repo := range repos {
-		url := fmt.Sprintf("https://api.github.com/repos/%s/releases/latest", repo)
-		httpClient := &http.Client{Timeout: 15 * time.Second}
-		resp, err := httpClient.Get(url)
-		if err != nil {
-			continue
-		}
-		var info releaseInfo
-		if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
-			resp.Body.Close()
-			continue
-		}
-		resp.Body.Close()
-		if info.TagName != "" {
-			jsonOK(w, map[string]interface{}{
-				"current_repo": repo,
-				"latest":       info.TagName,
-				"published_at": info.PublishedAt,
-				"html_url":     info.HTMLURL,
-				"body":         info.Body,
-			})
-			return
-		}
+	// Require explicit update_repo config. No hardcoded fallback.
+	updateRepo, _ := s.store.GetConfig("update_repo")
+	if updateRepo == "" {
+		jsonOK(w, map[string]string{"error": "update repository not configured"})
+		return
 	}
-	jsonOK(w, map[string]string{"error": "no releases found"})
+	url := fmt.Sprintf("https://api.github.com/repos/%s/releases/latest", updateRepo)
+	httpClient := &http.Client{Timeout: 15 * time.Second}
+	resp, err := httpClient.Get(url)
+	if err != nil {
+		jsonOK(w, map[string]string{"error": "failed to check updates: " + err.Error()})
+		return
+	}
+	defer resp.Body.Close()
+	var info releaseInfo
+	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
+		jsonOK(w, map[string]string{"error": "failed to parse release info"})
+		return
+	}
+	if info.TagName == "" {
+		jsonOK(w, map[string]string{"error": "no releases found"})
+		return
+	}
+	jsonOK(w, map[string]interface{}{
+		"current_repo": updateRepo,
+		"latest":       info.TagName,
+		"published_at": info.PublishedAt,
+		"html_url":     info.HTMLURL,
+		"body":         info.Body,
+	})
 }
 
 func (s *Server) handleUpdateNow(w http.ResponseWriter, r *http.Request) {

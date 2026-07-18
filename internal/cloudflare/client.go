@@ -35,9 +35,6 @@ type DNSRecord struct {
 	TTL     int    `json:"ttl,omitempty"`
 }
 
-// boolPtr helper
-func boolPtr(b bool) *bool { return &b }
-
 type apiResponse[T any] struct {
 	Success  bool   `json:"success"`
 	Errors   []any  `json:"errors"`

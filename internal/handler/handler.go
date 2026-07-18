@@ -46,6 +46,9 @@ type Server struct {
 	// DNS auto-sync
 	dnsAutoSyncTrigger chan struct{}
 	dnsSyncState        dnsAutoSyncState
+
+	conversationCache   map[string][]ai.ChatMessage
+	conversationCacheMu sync.Mutex
 }
 
 func New(cfg *config.Config, store *db.Store) *Server {
@@ -59,7 +62,9 @@ func New(cfg *config.Config, store *db.Store) *Server {
 		startTime:          time.Now(),
 		stopping:           make(chan struct{}),
 		dnsAutoSyncTrigger: make(chan struct{}, 1),
-		dnsSyncState:       dnsAutoSyncState{},
+		dnsSyncState:         dnsAutoSyncState{},
+		conversationCache:   make(map[string][]ai.ChatMessage),
+		conversationCacheMu: sync.Mutex{},
 	}
 	s.routes()
 	go s.worker.Run()
@@ -1009,30 +1014,24 @@ func jsonErrStatus(w http.ResponseWriter, msg string, status int) {
 
 // ── G14: AI Chat Cache Clear ────────────────────────────────────────────
 
-// conversationCache holds in-memory AI conversation history, keyed by session.
-var (
-	conversationCache   = make(map[string][]ai.ChatMessage)
-	conversationCacheMu sync.Mutex
-)
-
 func (s *Server) handleAIChatCacheClear(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodDelete {
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 		return
 	}
 	sessionID := r.URL.Query().Get("session_id")
-	conversationCacheMu.Lock()
+	s.conversationCacheMu.Lock()
 	var cleared int
 	if sessionID != "" {
-		if _, ok := conversationCache[sessionID]; ok {
-			delete(conversationCache, sessionID)
+		if _, ok := s.conversationCache[sessionID]; ok {
+			delete(s.conversationCache, sessionID)
 			cleared = 1
 		}
 	} else {
-		cleared = len(conversationCache)
-		conversationCache = make(map[string][]ai.ChatMessage)
+		cleared = len(s.conversationCache)
+		s.conversationCache = make(map[string][]ai.ChatMessage)
 	}
-	conversationCacheMu.Unlock()
+	s.conversationCacheMu.Unlock()
 	s.audit(0, "ai:cache-clear", fmt.Sprintf("cleared %d conversations (session=%s)", cleared, sessionID), r)
 	jsonOK(w, map[string]interface{}{"status": "ok", "cleared": cleared})
 }

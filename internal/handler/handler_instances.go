@@ -1305,6 +1305,15 @@ func (s *Server) handleStartVNC(w http.ResponseWriter, r *http.Request) {
 		defer log.Printf("[vnc] polling goroutine exited for conn=%s", strOr(conn.Id, ""))
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
+		// Cancel context early on server shutdown so goroutine exits immediately.
+		go func() {
+			select {
+			case <-s.stopping:
+				log.Printf("[vnc] shutdown, stopping poll for conn=%s", strOr(conn.Id, ""))
+				cancel()
+			case <-ctx.Done():
+			}
+		}()
 		activeConn, err := client.WaitForConsoleConnectionActive(ctx, *conn.Id)
 		if err != nil {
 			log.Printf("[vnc] wait for active: %v", err)
@@ -1453,14 +1462,15 @@ func updateTenantRegions(store *db.Store, tenantID int64, regions []string) {
 // buildCloudInit returns a cloud-init script that sets the root password
 // and enables SSH password authentication. Mirrors Java's getPwdShell().
 func buildCloudInit(password string) string {
-	// Escape backslash and dollar signs for safe YAML embedding.
-	safePwd := strings.ReplaceAll(password, `\`, `\\`)
-	safePwd = strings.ReplaceAll(safePwd, `$`, `\$`)
+	// Wrap password in single quotes in YAML block scalar to avoid
+	// injection when password contains ':' or other YAML-significant chars.
+	// Escape any single quotes in the password: ' → '\''.
+	quotedPwd := "'" + strings.ReplaceAll(password, "'", `'\''`) + "'"
 	return "#cloud-config\n" +
 		"ssh_pwauth: yes\n" +
 		"chpasswd:\n" +
 		"  list: |\n" +
-		"    root:" + safePwd + "\n" +
+		"    root:" + quotedPwd + "\n" +
 		"  expire: false\n" +
 		"write_files:\n" +
 		"  - path: /tmp/setup_root_access.sh\n" +

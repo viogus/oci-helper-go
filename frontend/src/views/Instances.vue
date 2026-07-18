@@ -158,9 +158,6 @@
                 <el-dropdown-item command="configInfo">
                   Config Info
                 </el-dropdown-item>
-                <el-dropdown-item command="updatePassword">
-                  Update Password
-                </el-dropdown-item>
                 <el-dropdown-item command="autoRescue">
                   Auto Rescue
                 </el-dropdown-item>
@@ -326,20 +323,6 @@
       </template>
     </el-dialog>
 
-    <!-- Update Password Dialog -->
-    <el-dialog v-model="passwordDialogVisible" title="Update Instance Password" width="420px" :close-on-click-modal="false">
-      <el-form :model="passwordForm" label-width="120px">
-        <el-form-item label="New Password" required>
-          <el-input v-model="passwordForm.new_password" type="password" show-password placeholder="Min 8 characters" />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="passwordDialogVisible = false">{{ $t('common.cancel') }}</el-button>
-        <el-button type="primary" :loading="saving" @click="handleUpdatePassword">
-          {{ $t('common.save') }}
-        </el-button>
-      </template>
-    </el-dialog>
   </div>
 </template>
 
@@ -404,11 +387,8 @@ const nameDialogVisible = ref(false)
 const updateShapeDialogVisible = ref(false)
 const configInfoVisible = ref(false)
 const configInfoData = ref(null)
-const passwordDialogVisible = ref(false)
-
 const nameForm = reactive({ name: '' })
 const updateShapeForm = reactive({ shape: '' })
-const passwordForm = reactive({ new_password: '' })
 
 // ---------------------------------------------------------------------------
 // Debounced search
@@ -630,10 +610,6 @@ function handleDropdownAction(row, command) {
     case 'configInfo':
       handleConfigInfo(row)
       break
-    case 'updatePassword':
-      passwordForm.new_password = ''
-      passwordDialogVisible.value = true
-      break
     case 'autoRescue':
       handleAutoRescue(row)
       break
@@ -826,23 +802,6 @@ async function handleConfigInfo(row) {
     configInfoVisible.value = true
   } catch (e) {
     ElMessage.error(e.response?.data?.error || 'Config info failed')
-  }
-}
-
-async function handleUpdatePassword() {
-  saving.value = true
-  try {
-    const res = await post('/instances/update-password', {
-      tenant_id: currentInstance.value.tenantId,
-      instance_id: currentInstance.value.id,
-      new_password: passwordForm.new_password
-    })
-    passwordDialogVisible.value = false
-    ElMessage.success(res.message || 'Password update initiated')
-  } catch (e) {
-    ElMessage.error(e.response?.data?.error || 'Update password failed')
-  } finally {
-    saving.value = false
   }
 }
 

@@ -133,11 +133,11 @@ async function startSession() {
       instance_id: form.instanceId,
       ssh_key_id: form.sshKeyId,
     })
-    if (res.status === 'active') {
+    if (res.connection_id) {
       session.active = true
       session.connectionString = res.connection_string || ''
-      session.consoleId = res.console_id || ''
-      session.vncUrl = res.vnc_url || ''
+      session.consoleId = res.connection_id || ''
+      session.vncUrl = res.vnc_connection_string || ''
       session.fingerprint = res.fingerprint || ''
       session.serviceHostKeyFp = res.service_host_key_fp || ''
     } else {

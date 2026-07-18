@@ -1,1 +1,0 @@
-import{D as t,a2 as e,a4 as a,a7 as s}from"./index-haUA2NLQ.js";function u(n={}){return t("/tenants",n)}function o(n){return e("/tenants",n)}function c(n){return a("/tenants/"+n)}function i(n){return e("/sync/"+n)}function f(){return t("/keys")}function l(n){return s("/keys",n)}export{f as a,o as c,c as d,u as l,i as s,l as u};

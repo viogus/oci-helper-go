@@ -49,6 +49,9 @@ type pemCacheEntry struct {
 }
 
 var (
+	// pemCache caches OCI API private key bytes by absolute file path, keyed by
+	// mod time so key rotation on disk is detected automatically. No eviction
+	// policy — tenant count is small (< 100) so unbounded growth is harmless.
 	pemCache   = make(map[string]pemCacheEntry)
 	pemCacheMu sync.RWMutex
 )
@@ -61,7 +64,9 @@ func loadPEM(keyFile string) ([]byte, error) {
 	if ok {
 		fi, err := os.Stat(keyFile)
 		if err == nil && fi.ModTime().Equal(entry.modTime) {
-			return entry.data, nil
+			data := make([]byte, len(entry.data))
+			copy(data, entry.data)
+			return data, nil
 		}
 	}
 
@@ -71,7 +76,9 @@ func loadPEM(keyFile string) ([]byte, error) {
 	// Double-check: another goroutine may have refreshed while we waited for the write lock.
 	if entry, ok = pemCache[keyFile]; ok {
 		if fi, err := os.Stat(keyFile); err == nil && fi.ModTime().Equal(entry.modTime) {
-			return entry.data, nil
+			data := make([]byte, len(entry.data))
+			copy(data, entry.data)
+			return data, nil
 		}
 	}
 
@@ -83,8 +90,14 @@ func loadPEM(keyFile string) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("stat key file %s: %w", keyFile, err)
 	}
-	pemCache[keyFile] = pemCacheEntry{data: data, modTime: fi.ModTime()}
-	return data, nil
+	// Defensive copy so callers cannot corrupt the cache by mutating the slice.
+	cached := make([]byte, len(data))
+	copy(cached, data)
+	pemCache[keyFile] = pemCacheEntry{data: cached, modTime: fi.ModTime()}
+	// Return a fresh copy so the caller's slice is independent.
+	out := make([]byte, len(data))
+	copy(out, data)
+	return out, nil
 }
 
 func NewClient(t *db.Tenant, proxyURL string) (*Client, error) {

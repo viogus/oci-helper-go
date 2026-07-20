@@ -7,11 +7,13 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"log/slog"
 	"net/http"
 	_ "net/http/pprof"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -44,24 +46,42 @@ func main() {
 	// Debug server (pprof) on separate port, only if configured
 	if cfg.DebugPort != "" {
 		go func() {
-			log.Printf("[debug] pprof listening on :%s", cfg.DebugPort)
-			if err := http.ListenAndServe(":"+cfg.DebugPort, nil); err != nil {
+			log.Printf("[debug] pprof listening on 127.0.0.1:%s", cfg.DebugPort)
+			if err := http.ListenAndServe("127.0.0.1:"+cfg.DebugPort, nil); err != nil {
 				log.Printf("[debug] pprof server: %v", err)
 			}
 		}()
 	}
 
 	// set up dual logging: stderr + log file
+	var logWriter io.Writer = os.Stderr
 	if cfg.LogFile != "" {
 		logDir := filepath.Dir(cfg.LogFile)
 		if err := os.MkdirAll(logDir, 0755); err == nil {
 			f, err := os.OpenFile(cfg.LogFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 			if err == nil {
-				log.SetOutput(io.MultiWriter(os.Stderr, f))
+				logWriter = io.MultiWriter(os.Stderr, f)
 				defer f.Close()
 			}
 		}
 	}
+	log.SetOutput(logWriter)
+
+	// Wire slog to the same writer with the configured log level.
+	var slogLevel slog.Level
+	switch strings.ToLower(cfg.LogLevel) {
+	case "debug":
+		slogLevel = slog.LevelDebug
+	case "warn", "warning":
+		slogLevel = slog.LevelWarn
+	case "error":
+		slogLevel = slog.LevelError
+	default:
+		slogLevel = slog.LevelInfo
+	}
+	slog.SetDefault(slog.New(slog.NewJSONHandler(logWriter, &slog.HandlerOptions{
+		Level: slogLevel,
+	})))
 
 	// ensure keys dir exists and is writable (nobody user in container)
 	if err := os.MkdirAll(cfg.KeysDir, 0700); err != nil {

@@ -334,11 +334,23 @@ var reqIDCounter uint64
 type statusWriter struct {
 	http.ResponseWriter
 	status int
+	wroteHeader bool
 }
 
 func (s *statusWriter) WriteHeader(code int) {
+	if s.wroteHeader {
+		return
+	}
 	s.status = code
+	s.wroteHeader = true
 	s.ResponseWriter.WriteHeader(code)
+}
+
+func (s *statusWriter) Write(b []byte) (int, error) {
+	if !s.wroteHeader {
+		s.WriteHeader(http.StatusOK)
+	}
+	return s.ResponseWriter.Write(b)
 }
 
 func requestID(r *http.Request) string {
@@ -346,6 +358,12 @@ func requestID(r *http.Request) string {
 		return id
 	}
 	return "-"
+}
+
+// logf logs with the request ID prepended so handler errors can be correlated
+// with structured request logs emitted by the withAuth middleware.
+func (s *Server) logf(r *http.Request, format string, v ...interface{}) {
+	log.Printf("[%s] %s", requestID(r), fmt.Sprintf(format, v...))
 }
 
 func (s *Server) withAuth(next http.HandlerFunc) http.HandlerFunc {

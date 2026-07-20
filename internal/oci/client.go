@@ -43,24 +43,54 @@ type Client struct {
 	mu sync.Mutex // guards interceptor mutations on all sub-clients
 }
 
+type pemCacheEntry struct {
+	data    []byte
+	modTime time.Time
+}
+
 var (
-	pemCache   = make(map[string][]byte)
+	pemCache   = make(map[string]pemCacheEntry)
 	pemCacheMu sync.RWMutex
 )
 
-func NewClient(t *db.Tenant, proxyURL string) (*Client, error) {
+func loadPEM(keyFile string) ([]byte, error) {
 	pemCacheMu.RLock()
-	pemData, ok := pemCache[t.KeyFile]
+	entry, ok := pemCache[keyFile]
 	pemCacheMu.RUnlock()
-	if !ok {
-		var err error
-		pemData, err = os.ReadFile(t.KeyFile)
-		if err != nil {
-			return nil, fmt.Errorf("read key file %s: %w", t.KeyFile, err)
+
+	if ok {
+		fi, err := os.Stat(keyFile)
+		if err == nil && fi.ModTime().Equal(entry.modTime) {
+			return entry.data, nil
 		}
-		pemCacheMu.Lock()
-		pemCache[t.KeyFile] = pemData
-		pemCacheMu.Unlock()
+	}
+
+	pemCacheMu.Lock()
+	defer pemCacheMu.Unlock()
+
+	// Double-check: another goroutine may have refreshed while we waited for the write lock.
+	if entry, ok = pemCache[keyFile]; ok {
+		if fi, err := os.Stat(keyFile); err == nil && fi.ModTime().Equal(entry.modTime) {
+			return entry.data, nil
+		}
+	}
+
+	data, err := os.ReadFile(keyFile)
+	if err != nil {
+		return nil, fmt.Errorf("read key file %s: %w", keyFile, err)
+	}
+	fi, err := os.Stat(keyFile)
+	if err != nil {
+		return nil, fmt.Errorf("stat key file %s: %w", keyFile, err)
+	}
+	pemCache[keyFile] = pemCacheEntry{data: data, modTime: fi.ModTime()}
+	return data, nil
+}
+
+func NewClient(t *db.Tenant, proxyURL string) (*Client, error) {
+	pemData, err := loadPEM(t.KeyFile)
+	if err != nil {
+		return nil, err
 	}
 	cfg := common.NewRawConfigurationProvider(
 		t.TenancyOCID, t.UserOCID, t.Region, t.Fingerprint,

@@ -334,8 +334,9 @@ var reqIDCounter uint64
 
 type statusWriter struct {
 	http.ResponseWriter
-	status int
+	status      int
 	wroteHeader bool
+	r           *http.Request
 }
 
 func (s *statusWriter) WriteHeader(code int) {
@@ -390,7 +391,7 @@ func (s *Server) withAuth(next http.HandlerFunc) http.HandlerFunc {
 		reqID := strconv.FormatUint(atomic.AddUint64(&reqIDCounter, 1), 10)
 		ctx := context.WithValue(r.Context(), reqIDKey, reqID)
 		r = r.WithContext(ctx)
-		sw := &statusWriter{ResponseWriter: w, status: 200}
+		sw := &statusWriter{ResponseWriter: w, status: 200, r: r}
 
 		defer func() {
 			slog.Info("request",
@@ -1085,7 +1086,11 @@ func jsonErr(w http.ResponseWriter, msg string) {
 }
 
 func jsonErrStatus(w http.ResponseWriter, msg string, status int) {
-	log.Printf("ERROR: %s", msg)
+	if sw, ok := w.(*statusWriter); ok && sw.r != nil {
+		log.Printf("[%s] ERROR: %s", requestID(sw.r), msg)
+	} else {
+		log.Printf("ERROR: %s", msg)
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(map[string]string{"error": msg})

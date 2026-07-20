@@ -90,14 +90,13 @@ func loadPEM(keyFile string) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("stat key file %s: %w", keyFile, err)
 	}
-	// Defensive copy so callers cannot corrupt the cache by mutating the slice.
+	// Store a defensive copy so callers cannot corrupt the cache.
+	// Return the original data — os.ReadFile allocates uniquely, so the
+	// caller gets an independent reference without a second allocation.
 	cached := make([]byte, len(data))
 	copy(cached, data)
 	pemCache[keyFile] = pemCacheEntry{data: cached, modTime: fi.ModTime()}
-	// Return a fresh copy so the caller's slice is independent.
-	out := make([]byte, len(data))
-	copy(out, data)
-	return out, nil
+	return data, nil
 }
 
 func NewClient(t *db.Tenant, proxyURL string) (*Client, error) {

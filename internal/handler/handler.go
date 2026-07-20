@@ -3,6 +3,7 @@
 package handler
 
 import (
+	"bufio"
 	"context"
 	"crypto/subtle"
 	"embed"
@@ -351,6 +352,23 @@ func (s *statusWriter) Write(b []byte) (int, error) {
 		s.WriteHeader(http.StatusOK)
 	}
 	return s.ResponseWriter.Write(b)
+}
+
+// Flush delegates to the underlying ResponseWriter if it implements http.Flusher
+// (required for SSE streaming routes like /api/ai/chat).
+func (s *statusWriter) Flush() {
+	if f, ok := s.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+// Hijack delegates to the underlying ResponseWriter if it implements http.Hijacker
+// (required for WebSocket upgrade routes like /api/instances/vnc/proxy, /api/logs/ws).
+func (s *statusWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	if hj, ok := s.ResponseWriter.(http.Hijacker); ok {
+		return hj.Hijack()
+	}
+	return nil, nil, fmt.Errorf("hijack not supported")
 }
 
 func requestID(r *http.Request) string {

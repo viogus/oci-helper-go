@@ -28,6 +28,7 @@ import (
 type Session struct {
 	User      string    `json:"user"`
 	Role      string    `json:"role"`
+	CSRFToken string    `json:"csrf"`
 	CreatedAt time.Time `json:"createdAt"`
 	Version   int64     `json:"v"`
 }
@@ -86,7 +87,7 @@ func (s *Service) Login(w http.ResponseWriter, r *http.Request) bool {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return false
 	}
-	sess := Session{User: user, Role: "admin", CreatedAt: time.Now(), Version: atomic.LoadInt64(&s.sessionVersion)}
+	sess := Session{User: user, Role: "admin", CSRFToken: randomToken(), CreatedAt: time.Now(), Version: atomic.LoadInt64(&s.sessionVersion)}
 	data, err := json.Marshal(sess)
 	if err != nil {
 		http.Error(w, "Internal error", http.StatusInternalServerError)
@@ -116,7 +117,7 @@ func (s *Service) CreateSession(user, role string) string {
 	if role == "" {
 		role = "user"
 	}
-	sess := Session{User: user, Role: role, CreatedAt: time.Now(), Version: atomic.LoadInt64(&s.sessionVersion)}
+	sess := Session{User: user, Role: role, CSRFToken: randomToken(), CreatedAt: time.Now(), Version: atomic.LoadInt64(&s.sessionVersion)}
 	data, err := json.Marshal(sess)
 	if err != nil {
 		return ""
@@ -211,7 +212,12 @@ func unsign(token string, key []byte) ([]byte, error) {
 
 // encryptSigned encrypts plaintext with AES-256-GCM using key.
 // Returns salt(16) + nonce(12) + ciphertext||tag.
-// NOTE: The cookie format has changed. All existing sessions are invalidated on deploy.
+//
+// The 16-byte prepended salt is a format artifact retained for wire compatibility.
+// It is generated from crypto/rand but NOT used in key derivation — the key
+// (generated via crypto/rand at server startup) is used directly, not derived
+// from a password. Removing the salt would change the wire format and invalidate
+// all existing session cookies. See decryptSigned for the corresponding skip.
 func encryptSigned(plaintext, key []byte) ([]byte, error) {
 	salt := make([]byte, 16)
 	if _, err := io.ReadFull(rand.Reader, salt); err != nil {
@@ -236,6 +242,7 @@ func encryptSigned(plaintext, key []byte) ([]byte, error) {
 }
 
 // decryptSigned decrypts data produced by encryptSigned.
+// Skips the first 16 bytes (unused KDF-format salt, kept for wire compatibility).
 func decryptSigned(data, key []byte) ([]byte, error) {
 	if len(data) < 28 {
 		return nil, fmt.Errorf("too short")
@@ -252,6 +259,15 @@ func decryptSigned(data, key []byte) ([]byte, error) {
 	nonce := data[16 : 16+nonceSize]
 	ciphertext := data[16+nonceSize:]
 	return gcm.Open(nil, nonce, ciphertext, nil)
+}
+
+// randomToken generates a 32-byte crypto/rand token, base64-encoded.
+func randomToken() string {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		panic("auth: crypto/rand.Read failed for random token: " + err.Error())
+	}
+	return base64.RawURLEncoding.EncodeToString(b)
 }
 
 // GenerateMFA creates a new TOTP secret (base32)

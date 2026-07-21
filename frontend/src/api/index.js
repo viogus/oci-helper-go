@@ -1,6 +1,17 @@
 import axios from 'axios'
 import { getRouter } from '../router/instance.js'
 
+// CSRF token stored in memory only (never persisted to localStorage).
+let csrfToken = null
+
+export function setCSRFToken(token) {
+  csrfToken = token
+}
+
+export function clearCSRFToken() {
+  csrfToken = null
+}
+
 const api = axios.create({
   baseURL: '/api',
   timeout: 30000,
@@ -10,6 +21,14 @@ const api = axios.create({
 // Retry configuration
 const MAX_RETRIES = 3
 const RETRY_DELAY = 1000 // 1 second base
+
+// Request interceptor: inject CSRF token header for state-changing methods.
+api.interceptors.request.use(config => {
+  if (csrfToken && ['post', 'put', 'patch', 'delete'].includes(config.method)) {
+    config.headers['X-CSRF-Token'] = csrfToken
+  }
+  return config
+})
 
 // response interceptor: unwrap data, handle 401, retry on failure
 api.interceptors.response.use(

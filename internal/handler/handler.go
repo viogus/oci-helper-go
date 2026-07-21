@@ -154,6 +154,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/config", s.withAuth(s.handleConfig))
 	s.mux.HandleFunc("/api/oauth/google/login", s.handleGoogleLogin)
 	s.mux.HandleFunc("/api/oauth/google/callback", s.handleGoogleCallback)
+	s.mux.HandleFunc("/api/csrf-token", s.withAuth(s.handleCSRFToken))
 	s.mux.HandleFunc("/api/mfa/setup", s.withAuth(s.handleMFASetup))
 	s.mux.HandleFunc("/api/mfa/verify", s.withAuth(s.handleMFAVerify))
 	s.mux.HandleFunc("/api/mfa/disable", s.withAuth(s.handleMFADisable))
@@ -413,9 +414,26 @@ func (s *Server) withAuth(next http.HandlerFunc) http.HandlerFunc {
 		if r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https" {
 			sw.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
 		}
-		if !s.auth.Authenticate(sw, r) {
+
+		sess := s.auth.GetSession(r)
+		if sess == nil {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
+
+		// CSRF check for state-changing methods. GET/HEAD/OPTIONS are exempt.
+		// Sessions created before CSRF was introduced have an empty CSRFToken
+		// (JSON zero value) — the check is skipped for backward compatibility.
+		if r.Method != http.MethodGet && r.Method != http.MethodHead && r.Method != http.MethodOptions {
+			if r.URL.Path != "/api/csrf-token" && sess.CSRFToken != "" {
+				csrfHeader := r.Header.Get("X-CSRF-Token")
+				if csrfHeader == "" || subtle.ConstantTimeCompare([]byte(csrfHeader), []byte(sess.CSRFToken)) != 1 {
+					http.Error(w, "Invalid CSRF token", http.StatusForbidden)
+					return
+				}
+			}
+		}
+
 		next(sw, r)
 	}
 }
@@ -675,10 +693,25 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// --- csrf token ---
+
+func (s *Server) handleCSRFToken(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	sess := s.auth.GetSession(r)
+	if sess == nil || sess.CSRFToken == "" {
+		http.Error(w, "No CSRF token available", http.StatusNotFound)
+		return
+	}
+	jsonOK(w, map[string]string{"csrf_token": sess.CSRFToken})
+}
+
 // --- mfa ---
 
 func (s *Server) handleMFASetup(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet && r.Method != http.MethodPost {
+	if r.Method != http.MethodPost {
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 		return
 	}

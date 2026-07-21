@@ -189,6 +189,20 @@ var migrations = []struct {
 			`ALTER TABLE instances ADD COLUMN dns_last_ip TEXT DEFAULT ''`,
 		},
 	},
+	{
+		Version: 8,
+		Name:    "add_query_indexes",
+		SQL: []string{
+			`CREATE INDEX IF NOT EXISTS idx_instances_tenant_id ON instances(tenant_id)`,
+			`CREATE INDEX IF NOT EXISTS idx_instances_state ON instances(state)`,
+			`CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status)`,
+			`CREATE INDEX IF NOT EXISTS idx_tasks_parent_task_id ON tasks(parent_task_id)`,
+			`CREATE INDEX IF NOT EXISTS idx_ip_data_tenant_id ON ip_data(tenant_id)`,
+			`CREATE INDEX IF NOT EXISTS idx_ssh_keys_tenant_id ON ssh_keys(tenant_id)`,
+			`CREATE INDEX IF NOT EXISTS idx_stock_alerts_enabled ON stock_alerts(enabled)`,
+			`CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs(created_at)`,
+		},
+	},
 }
 
 func (s *Store) runMigrations() error {
@@ -233,6 +247,10 @@ func (s *Store) runMigrations() error {
 		if _, err := s.db.Exec(`INSERT INTO schema_version (version, name) VALUES (?, ?)`, m.Version, m.Name); err != nil {
 			return fmt.Errorf("record migration v%d: %w", m.Version, err)
 		}
+	}
+	// Update query planner statistics after migrations.
+	if _, err := s.db.Exec(`PRAGMA optimize`); err != nil {
+		log.Printf("[migrate] PRAGMA optimize: %v", err)
 	}
 	return nil
 }

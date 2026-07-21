@@ -56,9 +56,14 @@ func setupTestServer(t *testing.T) (*Server, *db.Store, *httptest.Server, func()
 }
 
 
-// testAuthCookie caches the session cookie so every authedReq call
-// doesn't re-authenticate (avoiding bcrypt overhead per request).
-var testAuthCache = make(map[string]string)
+// testAuthCache caches the session cookie and CSRF token so every authedReq
+// call doesn't re-authenticate (avoiding bcrypt overhead per request).
+type testAuthEntry struct {
+	sessionCookie string
+	csrfToken     string
+}
+
+var testAuthCache = make(map[string]*testAuthEntry)
 var testAuthMu sync.Mutex
 
 // mustLogin performs a Basic-Auth login against the test server and
@@ -88,18 +93,44 @@ func mustLogin(t *testing.T, ts *httptest.Server) string {
 	return ""
 }
 
-// authedReq creates an HTTP request with the session cookie attached and
-// returns the response. Use for GET/POST/DELETE against the test server.
+// fetchCSRFToken gets the CSRF token from /api/csrf-token using the session cookie.
+func fetchCSRFToken(t *testing.T, ts *httptest.Server, sessionCookie string) string {
+	t.Helper()
+	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/api/csrf-token", nil)
+	req.AddCookie(&http.Cookie{Name: "oci_helper_session", Value: sessionCookie})
+
+	resp, err := ts.Client().Do(req)
+	if err != nil {
+		t.Fatalf("csrf token request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("csrf token returned %d, want 200", resp.StatusCode)
+	}
+	var body struct {
+		CSRFToken string `json:"csrf_token"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode csrf token: %v", err)
+	}
+	return body.CSRFToken
+}
+
+// authedReq creates an HTTP request with the session cookie and CSRF token
+// attached (when needed) and returns the response.
 func authedReq(t *testing.T, ts *httptest.Server, method, path, body string) *http.Response {
 	t.Helper()
 
 	testAuthMu.Lock()
-	cookie, ok := testAuthCache[ts.URL]
+	entry, ok := testAuthCache[ts.URL]
 	testAuthMu.Unlock()
 	if !ok {
-		cookie = mustLogin(t, ts)
+		cookie := mustLogin(t, ts)
+		csrf := fetchCSRFToken(t, ts, cookie)
+		entry = &testAuthEntry{sessionCookie: cookie, csrfToken: csrf}
 		testAuthMu.Lock()
-		testAuthCache[ts.URL] = cookie
+		testAuthCache[ts.URL] = entry
 		testAuthMu.Unlock()
 	}
 
@@ -113,7 +144,12 @@ func authedReq(t *testing.T, ts *httptest.Server, method, path, body string) *ht
 		t.Fatalf("new request %s %s: %v", method, path, err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.AddCookie(&http.Cookie{Name: "oci_helper_session", Value: cookie})
+	req.AddCookie(&http.Cookie{Name: "oci_helper_session", Value: entry.sessionCookie})
+
+	// Attach CSRF token for state-changing methods.
+	if method != http.MethodGet && method != http.MethodHead && method != http.MethodOptions {
+		req.Header.Set("X-CSRF-Token", entry.csrfToken)
+	}
 
 	resp, err := ts.Client().Do(req)
 	if err != nil {
@@ -136,6 +172,12 @@ func authedReqNoLogin(t *testing.T, ts *httptest.Server, method, path, body, coo
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.AddCookie(&http.Cookie{Name: "oci_helper_session", Value: cookie})
+
+	// Fetch CSRF token if needed by this session.
+	if method != http.MethodGet && method != http.MethodHead && method != http.MethodOptions {
+		token := fetchCSRFToken(t, ts, cookie)
+		req.Header.Set("X-CSRF-Token", token)
+	}
 
 	resp, err := ts.Client().Do(req)
 	if err != nil {

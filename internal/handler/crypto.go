@@ -8,39 +8,39 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"os"
 )
 
 // getSSHEncryptionKey returns the 32-byte AES key for SSH private key encryption.
-// Priority: 1) OCI_SSH_KEY_ENCRYPTION_KEY env var, 2) persisted key in DB config table,
-// 3) generate new random key and persist to DB.
+// Priority: 1) OCI_SSH_KEY_ENCRYPTION_KEY env var (via s.cfg.SSHEncryptionKey),
+// 2) persisted key in DB config table (backward compat),
+// 3) generate new random key IN-MEMORY ONLY (not persisted to DB).
+// Keys generated via path 3 are ephemeral — SSH keys encrypted with them
+// become unrecoverable after restart unless OCI_SSH_KEY_ENCRYPTION_KEY is set.
 func (s *Server) getSSHEncryptionKey() ([]byte, error) {
-	// 1. Try env var first (explicit override, backward compat)
-	if envKey := os.Getenv("OCI_SSH_KEY_ENCRYPTION_KEY"); envKey != "" {
-		if decoded, err := base64.StdEncoding.DecodeString(envKey); err == nil && len(decoded) == 32 {
+	// 1. Try env var first (explicit, operator-managed).
+	if s.cfg.SSHEncryptionKey != "" {
+		if decoded, err := base64.StdEncoding.DecodeString(s.cfg.SSHEncryptionKey); err == nil && len(decoded) == 32 {
 			return decoded, nil
 		}
 		log.Printf("[crypto] OCI_SSH_KEY_ENCRYPTION_KEY invalid (need 32 base64-decoded bytes); falling back to DB")
 	}
 
-	// 2. Try persisted key in DB config table
+	// 2. Try persisted key in DB config table (from pre-env-var deployments).
 	if dbKey, err := s.store.GetConfig("ssh_key_encryption_key"); err == nil && dbKey != "" {
 		if decoded, err := base64.StdEncoding.DecodeString(dbKey); err == nil && len(decoded) == 32 {
 			return decoded, nil
 		}
-		log.Printf("[crypto] persisted ssh_key_encryption_key invalid; regenerating")
+		log.Printf("[crypto] persisted ssh_key_encryption_key invalid; regenerating in-memory")
 	}
 
-	// 3. Generate new random key and persist to DB
+	// 3. Generate new random key — ephemeral, NOT persisted to DB.
+	//    The key is only valid for this process lifetime. SSH keys encrypted
+	//    with it will become unrecoverable after restart.
 	newKey := make([]byte, 32)
 	if _, err := rand.Read(newKey); err != nil {
 		return nil, fmt.Errorf("generate SSH key encryption key: %w", err)
 	}
-	encoded := base64.StdEncoding.EncodeToString(newKey)
-	if err := s.store.SetConfig("ssh_key_encryption_key", encoded); err != nil {
-		return nil, fmt.Errorf("persist SSH key encryption key: %w", err)
-	}
-	log.Println("[crypto] generated and persisted new SSH key encryption key in DB")
+	log.Println("[crypto] WARNING: auto-generated SSH key encryption key (ephemeral). Set OCI_SSH_KEY_ENCRYPTION_KEY to persist across restarts.")
 	return newKey, nil
 }
 

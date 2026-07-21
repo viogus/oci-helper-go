@@ -12,18 +12,19 @@ import (
 )
 
 type Config struct {
-	Port          string
-	Username      string
-	Password      string
-	MFA           bool
-	MFASecret     string
-	GoogleOAuth   GoogleOAuthConfig
-	DBPath        string
-	KeysDir       string
-	LogLevel      string
-	LogFile       string
-	SecureCookies bool
-	DebugPort     string
+	Port               string
+	Username           string
+	Password           string
+	MFA                bool
+	MFASecret          string
+	GoogleOAuth        GoogleOAuthConfig
+	DBPath             string
+	KeysDir            string
+	LogLevel           string
+	LogFile            string
+	SecureCookies      bool
+	DebugPort          string
+	SSHEncryptionKey   string // base64-encoded 32-byte AES-256 key from OCI_SSH_KEY_ENCRYPTION_KEY
 }
 
 type GoogleOAuthConfig struct {
@@ -62,6 +63,10 @@ func Load() *Config {
 	if v := os.Getenv("OCI_MFA"); strings.ToLower(v) == "true" {
 		c.MFA = true
 		c.MFASecret = os.Getenv("OCI_MFA_SECRET")
+	}
+
+	if v := os.Getenv("OCI_SSH_KEY_ENCRYPTION_KEY"); v != "" {
+		c.SSHEncryptionKey = v
 	}
 
 	if v := os.Getenv("GOOGLE_CLIENT_ID"); v != "" {

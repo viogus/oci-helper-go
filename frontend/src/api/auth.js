@@ -21,8 +21,12 @@ export function saveConfig(key, value) {
   return post('/config', { key, value })
 }
 
+export function getCSRFToken() {
+  return get('/csrf-token')
+}
+
 export function mfaSetup() {
-  return get('/mfa/setup')
+  return post('/mfa/setup')
 }
 
 export function mfaVerify(code) {

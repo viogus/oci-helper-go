@@ -99,6 +99,18 @@ func loadPEM(keyFile string) ([]byte, error) {
 	return data, nil
 }
 
+// sharedTransport is the HTTP transport used by all OCI SDK sub-clients.
+// A single shared transport enables connection reuse and TLS session
+// caching across requests, avoiding the cost of a fresh TLS handshake
+// on every OCI API call. Proxy overrides create their own transport.
+var sharedTransport = &http.Transport{
+	MaxIdleConns:          100,
+	MaxIdleConnsPerHost:   20,
+	IdleConnTimeout:       90 * time.Second,
+	TLSHandshakeTimeout:   10 * time.Second,
+	ExpectContinueTimeout: 1 * time.Second,
+}
+
 func NewClient(t *db.Tenant, proxyURL string) (*Client, error) {
 	pemData, err := loadPEM(t.KeyFile)
 	if err != nil {
@@ -154,25 +166,37 @@ func NewClient(t *db.Tenant, proxyURL string) (*Client, error) {
 		return nil, fmt.Errorf("ospgateway client: %w", err)
 	}
 
-	// Apply proxy transport to all sub-clients if a proxy URL is configured.
+	// Assign a shared HTTP client to all sub-clients for connection reuse.
+	// When a proxy is configured, create a separate transport that routes
+	// through the proxy (still with connection pooling).
+	var httpClient *http.Client
 	if proxyURL != "" {
 		parsed, parseErr := url.Parse(proxyURL)
 		if parseErr != nil {
 			return nil, fmt.Errorf("parse proxy URL %q: %w", proxyURL, parseErr)
 		}
-		proxyHTTPClient := &http.Client{
-			Transport: &http.Transport{Proxy: http.ProxyURL(parsed)},
+		httpClient = &http.Client{
+			Transport: &http.Transport{
+				Proxy:                 http.ProxyURL(parsed),
+				MaxIdleConns:          100,
+				MaxIdleConnsPerHost:   20,
+				IdleConnTimeout:       90 * time.Second,
+				TLSHandshakeTimeout:   10 * time.Second,
+				ExpectContinueTimeout: 1 * time.Second,
+			},
 		}
-		compute.HTTPClient = proxyHTTPClient
-		vcn.HTTPClient = proxyHTTPClient
-		id.HTTPClient = proxyHTTPClient
-		bv.HTTPClient = proxyHTTPClient
-		mon.HTTPClient = proxyHTTPClient
-		lim.HTTPClient = proxyHTTPClient
-		nlb.HTTPClient = proxyHTTPClient
-		usage.HTTPClient = proxyHTTPClient
-		sub.HTTPClient = proxyHTTPClient
+	} else {
+		httpClient = &http.Client{Transport: sharedTransport}
 	}
+	compute.HTTPClient = httpClient
+	vcn.HTTPClient = httpClient
+	id.HTTPClient = httpClient
+	bv.HTTPClient = httpClient
+	mon.HTTPClient = httpClient
+	lim.HTTPClient = httpClient
+	nlb.HTTPClient = httpClient
+	usage.HTTPClient = httpClient
+	sub.HTTPClient = httpClient
 
 	return &Client{
 		tenant:       t,

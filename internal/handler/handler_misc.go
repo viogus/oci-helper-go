@@ -664,6 +664,27 @@ func (s *Server) handleCaptchaSend(w http.ResponseWriter, r *http.Request) {
 // verifyCaptcha checks the in-memory captcha store for a matching code.
 // Returns true and deletes the entry on success; returns false if missing,
 // expired, or mismatched.
+// captchaCleanup periodically removes expired captcha entries.
+func captchaCleanup(stop <-chan struct{}) {
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-ticker.C:
+			captchaStoreMu.Lock()
+			now := time.Now()
+			for k, v := range captchaStore {
+				if now.After(v.ExpiresAt) {
+					delete(captchaStore, k)
+				}
+			}
+			captchaStoreMu.Unlock()
+		}
+	}
+}
+
 func verifyCaptcha(target, code string) bool {
 	captchaStoreMu.Lock()
 	defer captchaStoreMu.Unlock()

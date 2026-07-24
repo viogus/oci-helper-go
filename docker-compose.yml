@@ -16,6 +16,8 @@ services:
       # Without this, SSH keys encrypted this session are lost on restart.
       # - OCI_SSH_KEY_ENCRYPTION_KEY=
       - PORT=8818
+      - GOMEMLIMIT=96MiB
+      - GOMAXPROCS=2
     healthcheck:
       test: ["CMD", "/oci-helper", "health"]
       interval: 30s

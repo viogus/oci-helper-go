@@ -104,6 +104,7 @@ func New(cfg *config.Config, store *db.Store) *Server {
 	go s.startDNSAutoSync()
 	go s.startStockMonitor()
 	go s.conversationCacheCleanup()
+	go captchaCleanup(s.stopping)
 	go s.flushAuditLogs()
 	return s
 }
@@ -455,6 +456,8 @@ func (s *Server) withAuth(next http.HandlerFunc) http.HandlerFunc {
 		sw.Header().Set("X-Content-Type-Options", "nosniff")
 		sw.Header().Set("X-Frame-Options", "DENY")
 		sw.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
+		sw.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+		sw.Header().Set("Cache-Control", "no-store")
 		if s.cfg.SecureCookies {
 			sw.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
 		}

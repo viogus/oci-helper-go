@@ -1498,11 +1498,19 @@ func (c *Client) FetchInstancesTraffic(ctx context.Context, compartmentID, regio
 		return nil, fmt.Errorf("list instances: %w", err)
 	}
 
-	var totalIn, totalOut float64
+	var (
+		totalIn, totalOut float64
+		mu                sync.Mutex
+		wg                sync.WaitGroup
+	)
 	instanceCount := len(instances)
 	totalDuration := endTime.Sub(startTime)
 	intervalStr, step := intervalForDuration(totalDuration)
 	namespace := "oci_vcn"
+
+	// Bounded concurrency for monitoring API calls — avoids overwhelming
+	// the OCI API rate limit while still parallelizing across instances.
+	sem := make(chan struct{}, 10)
 
 	for _, inst := range instances {
 		vnics, err := c.GetInstanceVNICs(ctx, compartmentID, *inst.Id)
@@ -1510,6 +1518,7 @@ func (c *Client) FetchInstancesTraffic(ctx context.Context, compartmentID, regio
 			continue
 		}
 		for _, vnic := range vnics {
+			vnicID := *vnic.Id
 			for _, metric := range []struct {
 				name  string
 				accum *float64
@@ -1517,30 +1526,42 @@ func (c *Client) FetchInstancesTraffic(ctx context.Context, compartmentID, regio
 				{"VnicFromNetworkBytes", &totalIn},
 				{"VnicToNetworkBytes", &totalOut},
 			} {
-				req := monitoring.SummarizeMetricsDataRequest{
-					CompartmentId:          common.String(compartmentID),
-					CompartmentIdInSubtree: common.Bool(true),
-					SummarizeMetricsDataDetails: monitoring.SummarizeMetricsDataDetails{
-						Namespace: common.String(namespace),
-						Query:     common.String(fmt.Sprintf("%s%s{resourceId=\"%s\"}.mean()", metric.name, intervalStr, *vnic.Id)),
-						StartTime: &common.SDKTime{Time: startTime},
-						EndTime:   &common.SDKTime{Time: endTime},
-					},
-				}
-				resp, err := c.monitoring.SummarizeMetricsData(ctx, req)
-				if err != nil {
-					continue
-				}
-				for _, item := range resp.Items {
-					for _, dp := range item.AggregatedDatapoints {
-						if dp.Value != nil {
-							*metric.accum += *dp.Value * step.Minutes()
+				wg.Add(1)
+				sem <- struct{}{}
+				go func(metricName string, accum *float64) {
+					defer wg.Done()
+					defer func() { <-sem }()
+
+					req := monitoring.SummarizeMetricsDataRequest{
+						CompartmentId:          common.String(compartmentID),
+						CompartmentIdInSubtree: common.Bool(true),
+						SummarizeMetricsDataDetails: monitoring.SummarizeMetricsDataDetails{
+							Namespace: common.String(namespace),
+							Query:     common.String(fmt.Sprintf("%s%s{resourceId=\"%s\"}.mean()", metricName, intervalStr, vnicID)),
+							StartTime: &common.SDKTime{Time: startTime},
+							EndTime:   &common.SDKTime{Time: endTime},
+						},
+					}
+					resp, err := c.monitoring.SummarizeMetricsData(ctx, req)
+					if err != nil {
+						return
+					}
+					var localSum float64
+					for _, item := range resp.Items {
+						for _, dp := range item.AggregatedDatapoints {
+							if dp.Value != nil {
+								localSum += *dp.Value * step.Minutes()
+							}
 						}
 					}
-				}
+					mu.Lock()
+					*accum += localSum
+					mu.Unlock()
+				}(metric.name, metric.accum)
 			}
 		}
 	}
+	wg.Wait()
 
 	return &FetchInstancesTrafficResult{
 		InstanceCount:   instanceCount,

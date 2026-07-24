@@ -75,6 +75,7 @@ func (s *Server) handleBatchCreate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		parentTaskID = parentTask.ID
+		s.worker.Notify()
 	}
 
 	// Create one child task per tenant.
@@ -143,6 +144,7 @@ func (s *Server) handleCreateTasks(w http.ResponseWriter, r *http.Request) {
 					jsonErr(w, "update task: "+err.Error())
 					return
 				}
+				s.worker.Notify()
 				s.audit(0, "create-tasks:resume", strconv.FormatInt(taskID, 10), r)
 				jsonOK(w, map[string]string{"status": "ok"})
 			default:
@@ -260,6 +262,7 @@ func (s *Server) handleCreateTasks(w http.ResponseWriter, r *http.Request) {
 						return
 					}
 			}
+			s.worker.Notify()
 			s.audit(0, "create-tasks:resume", strconv.Itoa(len(req.TaskIDs)), r)
 			jsonOK(w, map[string]string{"status": "ok"})
 		case "delete":

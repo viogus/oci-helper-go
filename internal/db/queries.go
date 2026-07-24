@@ -251,6 +251,10 @@ func (s *Store) ListAudit(limit int) ([]AuditLog, error) {
 	return list, rows.Err()
 }
 
+// ListAuditPaginated returns a paginated audit log with keyword search.
+// The COUNT and SELECT run in separate queries without a transaction, so
+// the total count may drift under concurrent writes (phantom reads).
+// This is acceptable for audit logs — eventual consistency.
 func (s *Store) ListAuditPaginated(keyword string, page, size int) ([]AuditLog, int64, error) {
 	kw := "%" + escapeLike(keyword) + "%"
 	var total int64

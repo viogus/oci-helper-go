@@ -62,6 +62,16 @@ type Server struct {
 
 	conversationCache    map[string]conversationEntry
 	conversationCacheMu  sync.Mutex
+
+	mfaCache   mfaCacheEntry
+	mfaCacheMu sync.RWMutex
+
+	auditCh chan *db.AuditLog
+}
+
+type mfaCacheEntry struct {
+	enabled bool
+	secret  string
 }
 
 type conversationEntry struct {
@@ -87,12 +97,24 @@ func New(cfg *config.Config, store *db.Store) *Server {
 		conversationCache:   make(map[string]conversationEntry),
 		conversationCacheMu: sync.Mutex{},
 	}
+	s.auditCh = make(chan *db.AuditLog, 1000)
+	s.refreshMFACache()
 	s.routes()
 	go s.worker.Run()
 	go s.startDNSAutoSync()
 	go s.startStockMonitor()
 	go s.conversationCacheCleanup()
+	go s.flushAuditLogs()
 	return s
+}
+
+// refreshMFACache reloads the MFA config from the DB into the in-memory cache.
+func (s *Server) refreshMFACache() {
+	enabled, _ := s.store.GetConfig("mfa_enabled")
+	secret, _ := s.store.GetConfig("mfa_secret")
+	s.mfaCacheMu.Lock()
+	s.mfaCache = mfaCacheEntry{enabled: enabled == "true", secret: secret}
+	s.mfaCacheMu.Unlock()
 }
 
 // Shutdown gracefully stops background workers.
@@ -100,6 +122,7 @@ func (s *Server) Shutdown() {
 	close(s.stopping)
 	s.worker.Shutdown()
 	s.ratelimit.stop()
+	close(s.auditCh)
 }
 
 // clientForTenant resolves the tenant's key file path (may be relative filename)
@@ -324,7 +347,10 @@ func (s *Server) routes() {
 			}
 			// Set CSP on the HTML document (the SPA shell). CSP is a
 			// document-level policy; setting it on API responses has no effect.
-			w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://*.tile.openstreetmap.org; connect-src 'self'; font-src 'self' data:; frame-src 'self'; object-src 'none'; base-uri 'self'")
+			// CSP: style-src 'unsafe-inline' is required by Element Plus UI library
+	// which injects inline <style> blocks for dynamic theming. Script is
+	// restricted to 'self' (no 'unsafe-inline' for scripts).
+	w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://*.tile.openstreetmap.org; connect-src 'self'; font-src 'self' data:; frame-src 'self'; object-src 'none'; base-uri 'self'")
 			// Try to open the file; if it doesn't exist in the embedded FS,
 			// serve index.html for SPA client-side routing.
 			path := strings.TrimPrefix(r.URL.Path, "/")
@@ -429,7 +455,7 @@ func (s *Server) withAuth(next http.HandlerFunc) http.HandlerFunc {
 		sw.Header().Set("X-Content-Type-Options", "nosniff")
 		sw.Header().Set("X-Frame-Options", "DENY")
 		sw.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
-		if r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https" {
+		if s.cfg.SecureCookies {
 			sw.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
 		}
 
@@ -493,12 +519,14 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	} else {
-		// Fall back to global MFA check
-		mfaEnabled, mfaErr := s.store.GetConfig("mfa_enabled")
-		if mfaErr == nil && mfaEnabled == "true" {
+		// Fall back to global MFA check (cached, refreshed on config write).
+		s.mfaCacheMu.RLock()
+		mfaEnabled := s.mfaCache.enabled
+		mfaSecret := s.mfaCache.secret
+		s.mfaCacheMu.RUnlock()
+		if mfaEnabled {
 			totp := r.Header.Get("X-TOTP")
-			secret, secErr := s.store.GetConfig("mfa_secret")
-			if secErr != nil || !auth.ValidateTOTP(secret, totp) {
+			if mfaSecret == "" || !auth.ValidateTOTP(mfaSecret, totp) {
 				s.ratelimit.allow(ip)
 				http.Error(w, "Unauthorized", http.StatusUnauthorized)
 				return
@@ -530,6 +558,9 @@ func (s *Server) handleGoogleLogin(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, "Google OAuth not configured")
 		return
 	}
+	// auth.GenerateMFA returns a base32-encoded 20-byte random value.
+	// Using a 32-char prefix as an OAuth state token is cryptographically
+	// acceptable — it provides ~158 bits of entropy.
 	state := auth.GenerateMFA()[:32]
 	http.SetCookie(w, &http.Cookie{
 		Name:     "oauth_state",
@@ -638,12 +669,14 @@ func (s *Server) handleGoogleCallback(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	} else {
-		// Fall back to global MFA check
-		mfaEnabled, mfaErr := s.store.GetConfig("mfa_enabled")
-		if mfaErr == nil && mfaEnabled == "true" {
+		// Fall back to global MFA check (cached, refreshed on config write).
+		s.mfaCacheMu.RLock()
+		mfaEnabled := s.mfaCache.enabled
+		mfaSecret := s.mfaCache.secret
+		s.mfaCacheMu.RUnlock()
+		if mfaEnabled {
 			totp := r.URL.Query().Get("totp")
-			secret, secErr := s.store.GetConfig("mfa_secret")
-			if secErr != nil || !auth.ValidateTOTP(secret, totp) {
+			if mfaSecret == "" || !auth.ValidateTOTP(mfaSecret, totp) {
 				http.Error(w, "Unauthorized", http.StatusUnauthorized)
 				return
 			}
@@ -758,7 +791,9 @@ func (s *Server) handleMFAVerify(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, "invalid body: "+err.Error())
 		return
 	}
-	secret, _ := s.store.GetConfig("mfa_secret")
+	s.mfaCacheMu.RLock()
+	secret := s.mfaCache.secret
+	s.mfaCacheMu.RUnlock()
 	if secret == "" {
 		jsonErr(w, "MFA not set up, call /api/mfa/setup first")
 		return
@@ -767,9 +802,7 @@ func (s *Server) handleMFAVerify(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, "invalid code")
 		return
 	}
-	if err := s.store.SetConfig("mfa_enabled", "true"); err != nil {
-		log.Printf("[mfa:verify] set mfa_enabled: %v", err)
-	}
+	s.setConfig("mfa_enabled", "true")
 	s.audit(0, "mfa:enabled", "", r)
 	jsonOK(w, map[string]string{"status": "ok"})
 }
@@ -786,14 +819,14 @@ func (s *Server) handleMFADisable(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, "invalid body: "+err.Error())
 		return
 	}
-	secret, _ := s.store.GetConfig("mfa_secret")
+	s.mfaCacheMu.RLock()
+	secret := s.mfaCache.secret
+	s.mfaCacheMu.RUnlock()
 	if secret == "" || !auth.ValidateTOTP(secret, req.Code) {
 		jsonErr(w, "valid TOTP code required to disable MFA")
 		return
 	}
-	if err := s.store.SetConfig("mfa_enabled", "false"); err != nil {
-		log.Printf("[mfa:disable] set mfa_enabled: %v", err)
-	}
+	s.setConfig("mfa_enabled", "false")
 	s.audit(0, "mfa:disabled", "", r)
 	jsonOK(w, map[string]string{"status": "ok"})
 }
@@ -1072,12 +1105,25 @@ func (s *Server) handleShell(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) audit(tenantID int64, action, detail string, r *http.Request) {
 	ip := extractIP(r)
-	s.store.AddAudit(&db.AuditLog{
+	log := &db.AuditLog{
 		TenantID: tenantID,
 		Action:   action,
 		Detail:   detail,
 		IP:       strings.TrimSpace(ip),
-	})
+	}
+	select {
+	case s.auditCh <- log:
+	default:
+		// Channel full — drop audit entry rather than blocking the request.
+		slog.Warn("audit channel full, dropping entry", "action", action)
+	}
+}
+
+// flushAuditLogs drains the audit channel and writes entries to the DB.
+func (s *Server) flushAuditLogs() {
+	for log := range s.auditCh {
+		s.store.AddAudit(log)
+	}
 }
 
 func isTrustedProxy(addr string) bool {
@@ -1167,6 +1213,9 @@ func (s *Server) clientSafeErr(w http.ResponseWriter, publicMsg string, err erro
 func (s *Server) setConfig(key, value string) {
 	if err := s.store.SetConfig(key, value); err != nil {
 		log.Printf("[config] SetConfig(%s): %v", key, err)
+	}
+	if key == "mfa_enabled" || key == "mfa_secret" {
+		s.refreshMFACache()
 	}
 }
 

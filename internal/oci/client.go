@@ -3104,8 +3104,13 @@ func (c *Client) CostAnalysis(ctx context.Context, params CostAnalysisParams) (*
 		}
 	}
 
-	// Paginated fetch.
-	var allItems []usageapi.UsageSummary
+	// Paginated fetch — transform items inline to avoid holding both raw
+	// SDK types and result types in memory simultaneously.
+	result := &CostAnalysisResult{Currency: "USD"}
+	dateFmt := "2006-01-02"
+	if strings.EqualFold(params.Granularity, "MONTHLY") {
+		dateFmt = "2006-01"
+	}
 	var page *string
 	for {
 		req := usageapi.RequestSummarizedUsagesRequest{
@@ -3116,57 +3121,48 @@ func (c *Client) CostAnalysis(ctx context.Context, params CostAnalysisParams) (*
 		if err != nil {
 			return nil, fmt.Errorf("usage query: %w", err)
 		}
-		allItems = append(allItems, resp.UsageAggregation.Items...)
+		for _, u := range resp.UsageAggregation.Items {
+			item := CostItem{}
+			if u.Service != nil {
+				item.Service = *u.Service
+			}
+			if u.SkuPartNumber != nil {
+				item.Description = *u.SkuPartNumber
+			}
+			if u.SkuName != nil {
+				item.SkuName = *u.SkuName
+			}
+			if u.CompartmentName != nil {
+				item.CompartmentName = *u.CompartmentName
+			}
+			if u.Region != nil {
+				item.Region = *u.Region
+			}
+			if u.Unit != nil {
+				item.Unit = *u.Unit
+			}
+			if u.ComputedQuantity != nil {
+				item.ComputedQuantity = float64(*u.ComputedQuantity)
+			}
+			if u.ComputedAmount != nil {
+				item.Cost = float64(*u.ComputedAmount)
+			}
+			if u.Currency != nil {
+				item.Currency = strings.TrimSpace(*u.Currency)
+			}
+			if u.TimeUsageStarted != nil {
+				item.Date = u.TimeUsageStarted.Format(dateFmt)
+			}
+			if result.Currency == "USD" && item.Currency != "" {
+				result.Currency = item.Currency
+			}
+			result.TotalCost += item.Cost
+			result.Items = append(result.Items, item)
+		}
 		page = resp.OpcNextPage
 		if page == nil || *page == "" {
 			break
 		}
-	}
-
-	// Transform.
-	result := &CostAnalysisResult{Currency: "USD"}
-	dateFmt := "2006-01-02"
-	if strings.EqualFold(params.Granularity, "MONTHLY") {
-		dateFmt = "2006-01"
-	}
-	for _, u := range allItems {
-		item := CostItem{}
-		if u.Service != nil {
-			item.Service = *u.Service
-		}
-		if u.SkuPartNumber != nil {
-			item.Description = *u.SkuPartNumber
-		}
-		if u.SkuName != nil {
-			item.SkuName = *u.SkuName
-		}
-		if u.CompartmentName != nil {
-			item.CompartmentName = *u.CompartmentName
-		}
-		if u.Region != nil {
-			item.Region = *u.Region
-		}
-		if u.Unit != nil {
-			item.Unit = *u.Unit
-		}
-		if u.ComputedQuantity != nil {
-			item.ComputedQuantity = float64(*u.ComputedQuantity)
-		}
-		if u.ComputedAmount != nil {
-			item.Cost = float64(*u.ComputedAmount)
-		}
-		if u.Currency != nil {
-			item.Currency = strings.TrimSpace(*u.Currency)
-		}
-		if u.TimeUsageStarted != nil {
-			item.Date = u.TimeUsageStarted.Format(dateFmt)
-		}
-		// Capture first non-empty currency for summary.
-		if result.Currency == "USD" && item.Currency != "" {
-			result.Currency = item.Currency
-		}
-		result.TotalCost += item.Cost
-		result.Items = append(result.Items, item)
 	}
 	result.Total = len(result.Items)
 

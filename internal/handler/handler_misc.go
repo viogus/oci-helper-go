@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -302,12 +303,32 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 		tail = n
 	}
 
-	// Try to read from configured log file
+	// Try to read from configured log file.
+	// Resolve symlinks and validate the path is within an allowed directory.
 	logFile := s.cfg.LogFile
 	if logFile == "" {
 		logFile = os.Getenv("OCI_LOG_FILE")
 	}
 	if logFile != "" {
+		cleanPath, evalErr := filepath.EvalSymlinks(logFile)
+		if evalErr != nil {
+			cleanPath = filepath.Clean(logFile)
+		}
+		// Restrict to allowed directories to prevent symlink traversal.
+		allowed := []string{"/app/oci-helper/", "/var/log/", "/tmp/"}
+		allowed = append(allowed, filepath.Clean(s.cfg.KeysDir)+"/")
+		allowed = append(allowed, filepath.Dir(filepath.Clean(s.cfg.DBPath))+"/")
+		ok := false
+		for _, prefix := range allowed {
+			if strings.HasPrefix(cleanPath, prefix) {
+				ok = true
+				break
+			}
+		}
+		if !ok {
+			jsonErr(w, "log file outside allowed directories")
+			return
+		}
 		fi, err := os.Stat(logFile)
 		if err == nil && fi.Size() > 10*1024*1024 {
 			f, err := os.Open(logFile)

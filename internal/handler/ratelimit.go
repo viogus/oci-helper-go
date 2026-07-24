@@ -18,6 +18,7 @@ type loginRateLimiter struct {
 	entries         map[string]*rateLimitEntry
 	blockedIPs      map[string]time.Time
 	window          time.Duration
+	blockTTL        time.Duration
 	maxHits         int
 	cleanupInterval time.Duration
 	stopCh          chan struct{}
@@ -28,6 +29,7 @@ func newLoginRateLimiter() *loginRateLimiter {
 		entries:         make(map[string]*rateLimitEntry),
 		blockedIPs:      make(map[string]time.Time),
 		window:          15 * time.Minute,
+		blockTTL:        24 * time.Hour,
 		maxHits:         5,
 		cleanupInterval: 5 * time.Minute,
 		stopCh:          make(chan struct{}),
@@ -103,7 +105,7 @@ func (rl *loginRateLimiter) cleanupLoop() {
 				}
 			}
 			for ip, blockedAt := range rl.blockedIPs {
-				if now.Sub(blockedAt) > rl.window {
+				if now.Sub(blockedAt) > rl.blockTTL {
 					delete(rl.blockedIPs, ip)
 				}
 			}

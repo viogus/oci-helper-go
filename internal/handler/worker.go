@@ -29,6 +29,9 @@ type Worker struct {
 	// so no mutex is needed.
 	restarts int
 	stop     chan struct{}
+	// notify is signalled when a new pending task is created to wake the
+	// worker immediately instead of waiting for the next poll interval.
+	notify chan struct{}
 	// batchSem limits concurrent batch operations to 5 — prevents resource
 	// exhaustion when multiple tenants run batch create/start in parallel.
 	batchSem chan struct{}
@@ -36,7 +39,23 @@ type Worker struct {
 
 // NewWorker creates a Worker with the given store and keys directory.
 func NewWorker(store *db.Store, keysDir string) *Worker {
-	return &Worker{store: store, keysDir: keysDir, stop: make(chan struct{}), batchSem: make(chan struct{}, 5)}
+	return &Worker{
+		store:    store,
+		keysDir:  keysDir,
+		stop:     make(chan struct{}),
+		notify:   make(chan struct{}, 1),
+		batchSem: make(chan struct{}, 5),
+	}
+}
+
+// Notify wakes the worker to check for pending tasks immediately.
+// Non-blocking: drops signal if channel already full (worker picks up
+// the task at the next poll interval anyway).
+func (w *Worker) Notify() {
+	select {
+	case w.notify <- struct{}{}:
+	default:
+	}
 }
 
 // Shutdown signals the worker to stop gracefully. Resets any running tasks
@@ -100,18 +119,10 @@ func (w *Worker) Run() {
 		case <-w.stop:
 			log.Println("[worker] stopped")
 			return
-		default:
-		}
-		w.processNext()
-		// Sleep in small increments so shutdown is responsive.
-		for i := 0; i < 5; i++ {
-			select {
-			case <-w.stop:
-				log.Println("[worker] stopped")
-				return
-			default:
-				time.Sleep(pollInterval / 5)
-			}
+		case <-w.notify:
+			w.processNext()
+		case <-time.After(pollInterval):
+			w.processNext()
 		}
 	}
 }

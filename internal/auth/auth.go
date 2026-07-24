@@ -77,27 +77,43 @@ func (s *Service) ValidatePassword(pw string) bool {
 }
 
 func (s *Service) Login(w http.ResponseWriter, r *http.Request) bool {
+	user, _, ok := s.ValidateCredentials(r)
+	if !ok {
+		return false
+	}
+	s.SetLoginCookie(w, r, user, "admin")
+	return true
+}
+
+// ValidateCredentials validates the BasicAuth header against the configured
+// username and password. Does NOT set a cookie. Returns (username, true) on
+// success, or ("", false) — the caller is responsible for writing the HTTP
+// error response.
+func (s *Service) ValidateCredentials(r *http.Request) (string, string, bool) {
 	user, pass, ok := r.BasicAuth()
 	if !ok {
-		w.Header().Set("WWW-Authenticate", `Basic realm="oci-helper"`)
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
-		return false
+		return "", "", false
 	}
 	if subtle.ConstantTimeCompare([]byte(user), []byte(s.username)) != 1 || !s.ValidatePassword(pass) {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
-		return false
+		return "", "", false
 	}
-	sess := Session{User: user, Role: "admin", CSRFToken: randomToken(), CreatedAt: time.Now(), Version: atomic.LoadInt64(&s.sessionVersion)}
+	return user, pass, true
+}
+
+// SetLoginCookie creates a signed session and writes it as a cookie.
+// Use after credentials (and optionally MFA) have been validated.
+func (s *Service) SetLoginCookie(w http.ResponseWriter, r *http.Request, user, role string) {
+	sess := Session{User: user, Role: role, CSRFToken: randomToken(), CreatedAt: time.Now(), Version: atomic.LoadInt64(&s.sessionVersion)}
 	data, err := json.Marshal(sess)
 	if err != nil {
 		http.Error(w, "Internal error", http.StatusInternalServerError)
-		return false
+		return
 	}
 	signed := sign(data, s.sessionKey)
 	encrypted, err := encryptSigned([]byte(signed), s.sessionKey)
 	if err != nil {
 		http.Error(w, "Internal error", http.StatusInternalServerError)
-		return false
+		return
 	}
 	cookie := &http.Cookie{
 		Name:     sessionCookie,
@@ -109,7 +125,6 @@ func (s *Service) Login(w http.ResponseWriter, r *http.Request) bool {
 		MaxAge:   int(sessionTTL.Seconds()),
 	}
 	http.SetCookie(w, cookie)
-	return true
 }
 
 // CreateSession generates a signed session cookie value for the given user and role.

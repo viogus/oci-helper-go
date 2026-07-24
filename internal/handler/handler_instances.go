@@ -1486,10 +1486,21 @@ func updateTenantRegions(store *db.Store, tenantID int64, regions []string) {
 // buildCloudInit returns a cloud-init script that sets the root password
 // and enables SSH password authentication. Mirrors Java's getPwdShell().
 func buildCloudInit(password string) string {
-	// Wrap password in single quotes in YAML block scalar to avoid
+	// Sanitize the password: strip newlines and other control characters
+	// that could break the YAML block scalar and inject shell commands.
+	// Then wrap in single quotes in the YAML chpasswd list to avoid
 	// injection when password contains ':' or other YAML-significant chars.
 	// Escape any single quotes in the password: ' → '\''.
-	quotedPwd := "'" + strings.ReplaceAll(password, "'", `'\''`) + "'"
+	sanitized := strings.Map(func(r rune) rune {
+		if r == '\n' || r == '\r' || r == '\t' || r == 0 {
+			return -1 // drop
+		}
+		if r < 32 {
+			return -1 // drop other control chars
+		}
+		return r
+	}, password)
+	quotedPwd := "'" + strings.ReplaceAll(sanitized, "'", `'\''`) + "'"
 	return "#cloud-config\n" +
 		"ssh_pwauth: yes\n" +
 		"chpasswd:\n" +

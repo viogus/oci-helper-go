@@ -588,10 +588,10 @@ func (s *Server) runDNSAutoSync() {
 	}
 
 	// Save last sync time and results summary.
-	s.store.SetConfig("dns_auto_sync_last_time", time.Now().UTC().Format(time.RFC3339))
+	s.setConfig("dns_auto_sync_last_time", time.Now().UTC().Format(time.RFC3339))
 	if len(results) > 0 {
 		summary, _ := json.Marshal(results)
-		s.store.SetConfig("dns_auto_sync_last_results", string(summary))
+		s.setConfig("dns_auto_sync_last_results", string(summary))
 	}
 
 	s.dnsSyncState.mu.Lock()

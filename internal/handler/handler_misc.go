@@ -158,14 +158,15 @@ func (s *Server) handleTelegramWebhook(w http.ResponseWriter, r *http.Request) {
 	// Verify secret token header to prevent unauthorized webhook calls.
 	// Set via: https://api.telegram.org/bot<TOKEN>/setWebhook?url=...&secret_token=<value>
 	webhookSecret, _ := s.store.GetConfig("telegram_webhook_secret")
-	if webhookSecret != "" {
-		if r.Header.Get("X-Telegram-Bot-Api-Secret-Token") != webhookSecret {
-			log.Printf("[telegram] webhook: invalid secret token from %s", maskIP(extractIP(r)))
-			http.Error(w, "Unauthorized", http.StatusUnauthorized)
-			return
-		}
-	} else {
-		log.Printf("[SECURITY WARN] telegram_webhook_secret not configured — anyone can call the webhook")
+	if webhookSecret == "" {
+		log.Printf("[telegram] webhook: no secret configured, rejecting request from %s", maskIP(extractIP(r)))
+		http.Error(w, "Service Unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if r.Header.Get("X-Telegram-Bot-Api-Secret-Token") != webhookSecret {
+		log.Printf("[telegram] webhook: invalid secret token from %s", maskIP(extractIP(r)))
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
 	}
 	var update telegram.Update
 	if err := json.NewDecoder(r.Body).Decode(&update); err != nil {

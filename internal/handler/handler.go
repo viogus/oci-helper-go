@@ -37,6 +37,15 @@ var staticFiles embed.FS
 // Defaults to "dev" for local development.
 var version = "dev"
 
+// oauthHTTPClient is shared across all Google OAuth callbacks for connection reuse.
+var oauthHTTPClient = &http.Client{
+	Timeout: 15 * time.Second,
+	Transport: &http.Transport{
+		MaxIdleConnsPerHost: 5,
+		IdleConnTimeout:     90 * time.Second,
+	},
+}
+
 type Server struct {
 	cfg      *config.Config
 	store    *db.Store
@@ -51,9 +60,17 @@ type Server struct {
 	dnsAutoSyncTrigger chan struct{}
 	dnsSyncState        dnsAutoSyncState
 
-	conversationCache   map[string][]ai.ChatMessage
-	conversationCacheMu sync.Mutex
+	conversationCache    map[string]conversationEntry
+	conversationCacheMu  sync.Mutex
 }
+
+type conversationEntry struct {
+	messages   []ai.ChatMessage
+	lastAccess time.Time
+}
+
+const maxConversationEntries = 200
+const conversationTTL = 1 * time.Hour
 
 func New(cfg *config.Config, store *db.Store) *Server {
 	s := &Server{
@@ -67,13 +84,14 @@ func New(cfg *config.Config, store *db.Store) *Server {
 		stopping:           make(chan struct{}),
 		dnsAutoSyncTrigger: make(chan struct{}, 1),
 		dnsSyncState:         dnsAutoSyncState{},
-		conversationCache:   make(map[string][]ai.ChatMessage),
+		conversationCache:   make(map[string]conversationEntry),
 		conversationCacheMu: sync.Mutex{},
 	}
 	s.routes()
 	go s.worker.Run()
 	go s.startDNSAutoSync()
 	go s.startStockMonitor()
+	go s.conversationCacheCleanup()
 	return s
 }
 
@@ -126,7 +144,7 @@ func (s *Server) getTenantClient(tenantID int64, w http.ResponseWriter) (*ocicli
 	}
 	client, err := s.clientFor(tenant)
 	if err != nil {
-		jsonErr(w, "oci client: "+err.Error())
+		s.clientSafeErr(w, "OCI client error", err)
 		return nil, nil, false
 	}
 	return client, tenant, true
@@ -252,8 +270,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/mem-tasks/change-ip", s.withAuth(s.handleMemTasksChangeIP))
 	s.mux.HandleFunc("/api/mem-tasks/update-cfg", s.withAuth(s.handleMemTasksUpdateCfg))
 
-	// ip-info (no auth)
-	s.mux.HandleFunc("/api/ip-info", s.handleIPInfo)
+	// ip-info
+	s.mux.HandleFunc("/api/ip-info", s.withAuth(s.handleIPInfo))
 
 	// G9: tenant upload (BEFORE wildcard /api/tenants/)
 	s.mux.HandleFunc("/api/tenants/upload", s.withAuth(s.handleTenantUpload))
@@ -450,15 +468,18 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
-	// Validate password first (prevents MFA status leak).
-	if !s.auth.Login(w, r) {
-		// Record failed attempt; may trigger persistent blacklist.
+
+	// Validate password first (prevents MFA status leak via timing).
+	username, _, ok := s.auth.ValidateCredentials(r)
+	if !ok {
+		w.Header().Set("WWW-Authenticate", `Basic realm="oci-helper"`)
 		s.ratelimit.allow(ip)
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
+
 	// After password validation succeeds, check MFA.
 	// Per-user MFA takes precedence over global MFA.
-	username, _, _ := r.BasicAuth()
 	user, userErr := s.store.GetUserByUsername(username)
 	if userErr != nil {
 		log.Printf("[login] GetUserByUsername(%s): %v", username, userErr)
@@ -468,7 +489,6 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		totp := r.Header.Get("X-TOTP")
 		if totp == "" || !auth.ValidateTOTP(user.MFASecret, totp) {
 			s.ratelimit.allow(ip)
-			s.auth.Logout(w)
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
@@ -480,12 +500,16 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 			secret, secErr := s.store.GetConfig("mfa_secret")
 			if secErr != nil || !auth.ValidateTOTP(secret, totp) {
 				s.ratelimit.allow(ip)
-				s.auth.Logout(w)
 				http.Error(w, "Unauthorized", http.StatusUnauthorized)
 				return
 			}
 		}
 	}
+
+	// Only set the session cookie after password AND MFA pass.
+	// This prevents the browser from receiving a cookie that is immediately
+	// invalidated, which can cause order-dependent behavior.
+	s.auth.SetLoginCookie(w, r, username, "admin")
 	s.ratelimit.reset(ip)
 	jsonOK(w, map[string]string{"status": "ok"})
 }
@@ -555,10 +579,9 @@ func (s *Server) handleGoogleCallback(w http.ResponseWriter, r *http.Request) {
 	v.Set("redirect_uri", s.cfg.GoogleOAuth.RedirectURL)
 	v.Set("grant_type", "authorization_code")
 
-	httpClient := &http.Client{Timeout: 15 * time.Second}
-	resp, err := httpClient.Post(tokenURL, "application/x-www-form-urlencoded", strings.NewReader(v.Encode()))
+	resp, err := oauthHTTPClient.Post(tokenURL, "application/x-www-form-urlencoded", strings.NewReader(v.Encode()))
 	if err != nil {
-		jsonErr(w, "token exchange: "+err.Error())
+			s.clientSafeErr(w, "OAuth token exchange failed", err)
 		return
 	}
 	defer resp.Body.Close()
@@ -567,7 +590,7 @@ func (s *Server) handleGoogleCallback(w http.ResponseWriter, r *http.Request) {
 		AccessToken string `json:"access_token"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&tokenResp); err != nil {
-		jsonErr(w, "token decode: "+err.Error())
+			s.clientSafeErr(w, "OAuth token decode failed", err)
 		return
 	}
 	if tokenResp.AccessToken == "" {
@@ -578,13 +601,13 @@ func (s *Server) handleGoogleCallback(w http.ResponseWriter, r *http.Request) {
 	// get user info
 	userReq, err := http.NewRequest("GET", "https://www.googleapis.com/oauth2/v2/userinfo", nil)
 	if err != nil {
-		jsonErr(w, "userinfo request: "+err.Error())
+			s.clientSafeErr(w, "OAuth userinfo request failed", err)
 		return
 	}
 	userReq.Header.Set("Authorization", "Bearer "+tokenResp.AccessToken)
-	userResp, err := httpClient.Do(userReq)
+	userResp, err := oauthHTTPClient.Do(userReq)
 	if err != nil {
-		jsonErr(w, "userinfo: "+err.Error())
+			s.clientSafeErr(w, "OAuth userinfo failed", err)
 		return
 	}
 	defer userResp.Body.Close()
@@ -593,7 +616,7 @@ func (s *Server) handleGoogleCallback(w http.ResponseWriter, r *http.Request) {
 		Email string `json:"email"`
 	}
 	if err := json.NewDecoder(userResp.Body).Decode(&userInfo); err != nil {
-		jsonErr(w, "userinfo decode: "+err.Error())
+			s.clientSafeErr(w, "OAuth userinfo decode failed", err)
 		return
 	}
 
@@ -716,12 +739,8 @@ func (s *Server) handleMFASetup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	secret := auth.GenerateMFA()
-	if err := s.store.SetConfig("mfa_secret", secret); err != nil {
-		log.Printf("[mfa:setup] set mfa_secret: %v", err)
-	}
-	if err := s.store.SetConfig("mfa_enabled", "false"); err != nil {
-		log.Printf("[mfa:setup] set mfa_enabled: %v", err)
-	}
+	s.setConfig("mfa_secret", secret)
+	s.setConfig("mfa_enabled", "false")
 	uri := auth.TOTPURI(secret, s.cfg.Username, "oci-helper")
 	s.audit(0, "mfa:setup", "generated new secret", r)
 	jsonOK(w, map[string]string{"secret": secret, "uri": uri})
@@ -1111,7 +1130,9 @@ func checkTCPPort(ip string, port int, timeout time.Duration) bool {
 
 func jsonOK(w http.ResponseWriter, v interface{}) {
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(v)
+	if err := json.NewEncoder(w).Encode(v); err != nil {
+		log.Printf("[json] encode response: %v", err)
+	}
 }
 
 func jsonErr(w http.ResponseWriter, msg string) {
@@ -1126,7 +1147,27 @@ func jsonErrStatus(w http.ResponseWriter, msg string, status int) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(map[string]string{"error": msg})
+	if err := json.NewEncoder(w).Encode(map[string]string{"error": msg}); err != nil {
+		log.Printf("[json] encode error response: %v", err)
+	}
+}
+
+// clientSafeErr logs the full error server-side (with request ID) and
+// returns a sanitized message to the client. Use this instead of
+// jsonErr(w, "prefix: "+err.Error()) when err comes from the OCI SDK,
+// OS filesystem, or any external system that may leak paths or tenancy
+// details in its error strings.
+func (s *Server) clientSafeErr(w http.ResponseWriter, publicMsg string, err error) {
+	s.logf(&http.Request{}, "%s: %v", publicMsg, err)
+	jsonErr(w, publicMsg)
+}
+
+// setConfig calls s.store.SetConfig and logs a warning on failure.
+// Use this instead of silently discarding SetConfig errors.
+func (s *Server) setConfig(key, value string) {
+	if err := s.store.SetConfig(key, value); err != nil {
+		log.Printf("[config] SetConfig(%s): %v", key, err)
+	}
 }
 
 // ── G14: AI Chat Cache Clear ────────────────────────────────────────────
@@ -1146,11 +1187,54 @@ func (s *Server) handleAIChatCacheClear(w http.ResponseWriter, r *http.Request) 
 		}
 	} else {
 		cleared = len(s.conversationCache)
-		s.conversationCache = make(map[string][]ai.ChatMessage)
+		s.conversationCache = make(map[string]conversationEntry)
 	}
 	s.conversationCacheMu.Unlock()
 	s.audit(0, "ai:cache-clear", fmt.Sprintf("cleared %d conversations (session=%s)", cleared, sessionID), r)
 	jsonOK(w, map[string]interface{}{"status": "ok", "cleared": cleared})
+}
+
+// conversationCacheCleanup periodically evicts expired conversation entries
+// and enforces the maximum entry cap to prevent unbounded memory growth.
+func (s *Server) conversationCacheCleanup() {
+	ticker := time.NewTicker(30 * time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-s.stopping:
+			return
+		case <-ticker.C:
+			s.conversationCacheMu.Lock()
+			cutoff := time.Now().Add(-conversationTTL)
+			for k, v := range s.conversationCache {
+				if v.lastAccess.Before(cutoff) {
+					delete(s.conversationCache, k)
+				}
+			}
+			// Enforce max entries: evict oldest-accessed if over cap.
+			if len(s.conversationCache) > maxConversationEntries {
+				type kv struct {
+					k string
+					t time.Time
+				}
+				var entries []kv
+				for k, v := range s.conversationCache {
+					entries = append(entries, kv{k, v.lastAccess})
+				}
+				for i := 0; i < len(entries)-1; i++ {
+					for j := i + 1; j < len(entries); j++ {
+						if entries[j].t.Before(entries[i].t) {
+							entries[i], entries[j] = entries[j], entries[i]
+						}
+					}
+				}
+				for i := 0; i < len(entries)-maxConversationEntries; i++ {
+					delete(s.conversationCache, entries[i].k)
+				}
+			}
+			s.conversationCacheMu.Unlock()
+		}
+	}
 }
 
 // ── Admin: IP Blacklist ──────────────────────────────────────────────────

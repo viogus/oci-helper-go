@@ -80,11 +80,11 @@ func (s *Server) handleTenants(w http.ResponseWriter, r *http.Request) {
 		tCopy.KeyFile = keyPath
 		client, err := ociclient.NewClient(&tCopy, "")
 		if err != nil {
-			jsonErr(w, "oci client: "+err.Error())
+			s.clientSafeErr(w, "OCI client error", err)
 			return
 		}
 		if err := client.ValidateCredentials(r.Context(), t.TenancyOCID); err != nil {
-			jsonErr(w, "OCI connectivity check failed: "+err.Error())
+			s.clientSafeErr(w, "OCI connectivity check failed", err)
 			return
 		}
 		if err := s.store.CreateTenant(&t); err != nil {

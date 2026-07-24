@@ -115,16 +115,23 @@ func main() {
 		signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 		<-sig
 		log.Println("shutting down...")
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
+
+		// Shut down background workers first with a timeout.
+		workerCtx, workerCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		done := make(chan struct{})
 		go func() { server.Shutdown(); close(done) }()
 		select {
 		case <-done:
-		case <-ctx.Done():
+		case <-workerCtx.Done():
 			log.Println("background worker shutdown timed out")
 		}
-		if err := srv.Shutdown(ctx); err != nil {
+		workerCancel()
+
+		// Use a fresh context for HTTP server shutdown to avoid racing
+		// with the already-expired worker timeout.
+		httpCtx, httpCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer httpCancel()
+		if err := srv.Shutdown(httpCtx); err != nil {
 			log.Printf("shutdown: %v", err)
 		}
 	}()

@@ -95,15 +95,15 @@ func (s *Server) handleDefenseEnable(w http.ResponseWriter, r *http.Request) {
 		origKey := defenseOriginalRulesPrefix + req.VcnID + "_" + *sl.Id
 		if origStr, _ := s.store.GetConfig(origKey); origStr == "" {
 			origJSON, _ := json.Marshal(sl.IngressSecurityRules)
-			s.store.SetConfig(origKey, string(origJSON))
+			s.setConfig(origKey, string(origJSON))
 		}
 	}
 
 	scope := strconv.FormatInt(req.TenantID, 10) + "_" + req.VcnID
-	s.store.SetConfig("defense_enabled_"+scope, "true")
-	s.store.SetConfig("defense_tenant_"+scope, strconv.FormatInt(req.TenantID, 10))
-	s.store.SetConfig("defense_vcn_"+scope, req.VcnID)
-	s.store.SetConfig("defense_cidrs_"+scope, strings.Join(req.Blacklist, ","))
+	s.setConfig("defense_enabled_"+scope, "true")
+	s.setConfig("defense_tenant_"+scope, strconv.FormatInt(req.TenantID, 10))
+	s.setConfig("defense_vcn_"+scope, req.VcnID)
+	s.setConfig("defense_cidrs_"+scope, strings.Join(req.Blacklist, ","))
 	s.audit(req.TenantID, "defense:enable", strconv.Itoa(len(req.Blacklist))+" IPs blocked", r)
 	jsonOK(w, map[string]interface{}{"status": "ok", "blocked": len(req.Blacklist)})
 }
@@ -195,15 +195,15 @@ func (s *Server) handleDefenseDisable(w http.ResponseWriter, r *http.Request) {
 	}
 
 	scope := strconv.FormatInt(req.TenantID, 10) + "_" + req.VcnID
-	s.store.SetConfig("defense_enabled_"+scope, "false")
-	s.store.SetConfig("defense_tenant_"+scope, "")
-	s.store.SetConfig("defense_vcn_"+scope, "")
-	s.store.SetConfig("defense_cidrs_"+scope, "")
+	s.setConfig("defense_enabled_"+scope, "false")
+	s.setConfig("defense_tenant_"+scope, "")
+	s.setConfig("defense_vcn_"+scope, "")
+	s.setConfig("defense_cidrs_"+scope, "")
 	for _, sl := range slResp.Items {
 		if sl.Id == nil {
 			continue
 		}
-		s.store.SetConfig(defenseOriginalRulesPrefix+req.VcnID+"_"+*sl.Id, "")
+		s.setConfig(defenseOriginalRulesPrefix+req.VcnID+"_"+*sl.Id, "")
 	}
 	s.audit(req.TenantID, "defense:disable", req.VcnID, r)
 	jsonOK(w, map[string]string{"status": "ok"})

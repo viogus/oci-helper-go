@@ -50,6 +50,12 @@ func (s *Server) handleNetbootRescue(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Minute)
 	defer cancel()
 
+	// This flow runs synchronously for up to 10 minutes; the server's 60s
+	// WriteTimeout would otherwise kill the response mid-flow.
+	if rc := http.NewResponseController(w); rc != nil {
+		_ = rc.SetWriteDeadline(time.Time{})
+	}
+
 	// Step 1: Get current instance details.
 	inst, err := client.GetInstance(ctx, ocid)
 	if err != nil {

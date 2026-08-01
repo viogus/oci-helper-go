@@ -3276,7 +3276,13 @@ func (c *Client) CreateBootVolumeFromImage(ctx context.Context, compartmentID, a
 	if err != nil {
 		return "", fmt.Errorf("launch temp instance: %w", err)
 	}
-	tempID := *resp.Id
+	tempID := ""
+	if resp.Id != nil {
+		tempID = *resp.Id
+	}
+	if tempID == "" {
+		return "", fmt.Errorf("launch temp instance: nil id")
+	}
 
 	// Step 2: Wait for temp instance to be RUNNING.
 	if !c.WaitForState(ctx, tempID, "RUNNING", 5*time.Minute) {
@@ -3301,7 +3307,14 @@ func (c *Client) CreateBootVolumeFromImage(ctx context.Context, compartmentID, a
 		c.TerminateInstance(context.Background(), tempID, false, false)
 		return "", fmt.Errorf("get boot volume attachment for temp: %w", err)
 	}
-	bvID := *attach.BootVolumeId
+	bvID := ""
+	if attach != nil && attach.BootVolumeId != nil {
+		bvID = *attach.BootVolumeId
+	}
+	if bvID == "" {
+		c.TerminateInstance(context.Background(), tempID, false, false)
+		return "", fmt.Errorf("get boot volume attachment for temp: nil boot volume id")
+	}
 
 	// Step 5: Detach boot volume from temp instance.
 	if err := c.DetachBootVolume(ctx, *attach.Id); err != nil {

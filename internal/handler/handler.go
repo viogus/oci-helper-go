@@ -426,6 +426,12 @@ func (s *statusWriter) Flush() {
 	}
 }
 
+// Unwrap lets http.ResponseController (used to clear per-route write deadlines
+// on long-running/streaming handlers) reach the underlying ResponseWriter.
+func (s *statusWriter) Unwrap() http.ResponseWriter {
+	return s.ResponseWriter
+}
+
 // Hijack delegates to the underlying ResponseWriter if it implements http.Hijacker
 // (required for WebSocket upgrade routes like /api/instances/vnc/proxy, /api/logs/ws).
 func (s *statusWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
@@ -525,7 +531,9 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		w.Header().Set("WWW-Authenticate", `Basic realm="oci-helper"`)
 		if !s.ratelimit.allow(ip) {
-			_ = s.store.AddLoginBlacklist(ip, "repeated login failures")
+			if err := s.store.AddLoginBlacklist(ip, "repeated login failures"); err != nil {
+				log.Printf("[auth] AddLoginBlacklist %s: %v", ip, err)
+			}
 		}
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
@@ -1088,6 +1096,12 @@ func (s *Server) handleAIChat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if stream {
+		// The server's 60s WriteTimeout would hard-cut long streamed replies
+		// (deep reasoning models can stream for minutes); clear the write
+		// deadline for this response — disconnects are driven by the client.
+		if rc := http.NewResponseController(w); rc != nil {
+			_ = rc.SetWriteDeadline(time.Time{})
+		}
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-cache")
 		w.Header().Set("Connection", "keep-alive")

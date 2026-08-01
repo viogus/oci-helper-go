@@ -352,7 +352,11 @@ func (w *Worker) saveCheckpoint(task *db.Task, payload interface{}, index int) {
 		p.CompletedIndex = index
 	}
 	if data, err := json.Marshal(payload); err == nil {
-		w.store.UpdateTaskPayload(task.ID, string(data))
+		if err := w.store.UpdateTaskPayload(task.ID, string(data)); err != nil {
+			log.Printf("[worker] saveCheckpoint: update payload for task %d: %v", task.ID, err)
+		}
+	} else {
+		log.Printf("[worker] saveCheckpoint: marshal payload for task %d: %v", task.ID, err)
 	}
 }
 

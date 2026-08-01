@@ -53,7 +53,13 @@ func (c *Client) GetSubscriptionInfo(ctx context.Context) (*ospgateway.Subscript
 	}
 
 	// Get the first subscription's details.
-	subscriptionID := *listResp.SubscriptionCollection.Items[0].Id
+	items := listResp.SubscriptionCollection.Items
+	if len(items) == 0 || items[0].Id == nil {
+		log.Printf("[subscription] no subscription id for tenant %d", c.tenant.ID)
+		c.subscription.BaseClient = baseClient
+		return nil, nil
+	}
+	subscriptionID := *items[0].Id
 	getReq := ospgateway.GetSubscriptionRequest{
 		SubscriptionId: common.String(subscriptionID),
 		CompartmentId:  common.String(c.tenant.TenancyOCID),

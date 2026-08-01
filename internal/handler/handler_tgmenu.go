@@ -568,14 +568,14 @@ func (s *Server) tgCreateRespond(bot *telegram.Bot, chatID int64, text string) {
 			Disk: st.Disk, Architecture: st.Architecture, IntervalSeconds: st.Interval,
 			CreateNumbers: st.Count, OperationSystem: st.OS, RootPassword: st.Password,
 		}
+		// Drop the state BEFORE creating the task so two rapid messages
+		// cannot both pass the "password" step and double-create it.
+		delete(tgCreateStates, chatID)
 		tgCreateMu.Unlock()
 		if err := s.store.CreateCreateTask(task); err != nil {
 			bot.SendMessage(chatID, "创建定时任务失败: "+err.Error())
 			return
 		}
-		tgCreateMu.Lock()
-		delete(tgCreateStates, chatID)
-		tgCreateMu.Unlock()
 		bot.SendMessage(chatID, fmt.Sprintf("定时开机任务已创建 (ID=%d)", task.ID))
 	}
 }

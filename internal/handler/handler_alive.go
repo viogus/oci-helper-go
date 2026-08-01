@@ -3,6 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 
@@ -21,7 +22,11 @@ func (s *Server) handleTenantAliveCheck(w http.ResponseWriter, r *http.Request) 
 	var req struct {
 		TenantIDs []int64 `json:"tenant_ids"`
 	}
-	_ = json.NewDecoder(r.Body).Decode(&req)
+	// A malformed body must not silently fall through to checking ALL tenants.
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonErr(w, "invalid body: "+err.Error())
+		return
+	}
 
 	var tenants []db.Tenant
 	var err error
@@ -58,16 +63,22 @@ func (s *Server) handleTenantAliveCheck(w http.ResponseWriter, r *http.Request) 
 		if err != nil {
 			res.Status = "INACTIVE"
 			res.Error = err.Error()
-			_ = s.store.SetTenantAccountStatus(t.ID, "INACTIVE")
+			if err := s.store.SetTenantAccountStatus(t.ID, "INACTIVE"); err != nil {
+				log.Printf("[alive] SetTenantAccountStatus: %v", err)
+			}
 			failNames = append(failNames, t.Name)
 		} else if err := client.ValidateCredentials(r.Context(), t.TenancyOCID); err != nil {
 			res.Status = "INACTIVE"
 			res.Error = err.Error()
-			_ = s.store.SetTenantAccountStatus(t.ID, "INACTIVE")
+			if err := s.store.SetTenantAccountStatus(t.ID, "INACTIVE"); err != nil {
+				log.Printf("[alive] SetTenantAccountStatus: %v", err)
+			}
 			failNames = append(failNames, t.Name)
 		} else {
 			res.Status = "ACTIVE"
-			_ = s.store.SetTenantAccountStatus(t.ID, "ACTIVE")
+			if err := s.store.SetTenantAccountStatus(t.ID, "ACTIVE"); err != nil {
+				log.Printf("[alive] SetTenantAccountStatus: %v", err)
+			}
 		}
 		results = append(results, res)
 	}

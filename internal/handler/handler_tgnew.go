@@ -237,14 +237,22 @@ func (s *Server) tgRestoreRespond(bot *telegram.Bot, chatID int64, text string) 
 		bot.SendMessage(chatID, "请粘贴备份数据（备份时返回的 base64 字符串）。")
 	case "data":
 		password := st.Password
-		delete(tgRestoreStates, chatID)
 		tgRestoreMu.Unlock()
 		bot.SendMessage(chatID, "⏳ 正在恢复，请稍候...")
 		nT, nI, err := s.restoreData(password, text)
 		if err != nil {
-			bot.SendMessage(chatID, "❌ 恢复失败: "+err.Error())
+			// Keep the state (password retained) so the user can re-send the
+			// backup payload without re-entering the password.
+			tgRestoreMu.Lock()
+			st.Step = "data"
+			tgRestoreStates[chatID] = st
+			tgRestoreMu.Unlock()
+			bot.SendMessage(chatID, "❌ 恢复失败: "+err.Error()+"\n请重新发送备份数据。")
 			return
 		}
+		tgRestoreMu.Lock()
+		delete(tgRestoreStates, chatID)
+		tgRestoreMu.Unlock()
 		s.audit(0, "backup:restore", fmt.Sprintf("%d tenants, %d instances", nT, nI), nil)
 		bot.SendMessage(chatID, fmt.Sprintf("✅ 恢复成功: %d 租户, %d 实例。", nT, nI))
 	}
@@ -315,6 +323,24 @@ var tgInteractiveCommands = []string{
 	"python", "node", "irb", "php -a",
 }
 
+// tgSSHValidateCommand returns an error message if the command must be
+// rejected, or "" if it is allowed. Blocks interactive commands and
+// chaining/injection operators so the blocklist cannot be bypassed
+// (e.g. "echo x; top", "cmd && reboot", "$(rm -rf /)").
+func tgSSHValidateCommand(command string) string {
+	for _, ic := range tgInteractiveCommands {
+		if strings.HasPrefix(command, ic) {
+			return "❌ 不支持交互式命令（如 vi, top, tail -f 等），请使用非交互式命令。"
+		}
+	}
+	for _, op := range []string{";", "&&", "||", "`", "$("} {
+		if strings.Contains(command, op) {
+			return "❌ 不支持命令链或注入操作符（; && || 反引号 $()），请使用单条命令。"
+		}
+	}
+	return ""
+}
+
 func (s *Server) tgSSHExec(bot *telegram.Bot, chatID int64, text string) {
 	sshConnsMu.Lock()
 	conn := tgSSHConnections[chatID]
@@ -328,25 +354,23 @@ func (s *Server) tgSSHExec(bot *telegram.Bot, chatID int64, text string) {
 		bot.SendMessage(chatID, "用法: /ssh <命令>，例如 /ssh ls -la")
 		return
 	}
-	for _, ic := range tgInteractiveCommands {
-		if strings.HasPrefix(command, ic) {
-			bot.SendMessage(chatID, "❌ 不支持交互式命令（如 vi, top, tail -f 等），请使用非交互式命令。")
-			return
-		}
+	if errMsg := tgSSHValidateCommand(command); errMsg != "" {
+		bot.SendMessage(chatID, errMsg)
+		return
 	}
 
 	bot.SendMessage(chatID, "⏳ 正在执行: "+command)
 
-	// Password auth over SSH.
-	cfg := &gossh.ClientConfig{
-		User: conn.Username,
-		Auth: []gossh.AuthMethod{gossh.Password(conn.Password)},
-		HostKeyCallback: func(hostname string, remote net.Addr, key gossh.PublicKey) error {
-			return nil // TG SSH is convenience tooling; same trust model as Java's jsch
-		},
-		Timeout: 10 * time.Second,
-	}
+	// Password auth over SSH with TOFU host-key verification (same trust
+	// model as the web shell): first connection pins the key, mismatches
+	// after that are rejected.
 	addr := net.JoinHostPort(conn.Host, strconv.Itoa(conn.Port))
+	cfg := &gossh.ClientConfig{
+		User:            conn.Username,
+		Auth:            []gossh.AuthMethod{gossh.Password(conn.Password)},
+		HostKeyCallback: tofuHostKeyCallback(addr),
+		Timeout:         10 * time.Second,
+	}
 	client, err := gossh.Dial("tcp", addr, cfg)
 	if err != nil {
 		bot.SendMessage(chatID, "❌ SSH 连接失败: "+err.Error())
@@ -460,9 +484,20 @@ func (s *Server) tgDefenseVcnList(bot *telegram.Bot, chatID int64, messageID int
 		if i >= 15 {
 			break
 		}
-		name := strOr(v.DisplayName, *v.Id)
+		name := ""
+		if v.DisplayName != nil {
+			name = *v.DisplayName
+		} else if v.Id != nil {
+			name = *v.Id
+		}
+		if name == "" {
+			continue
+		}
 		if len(name) > 30 {
 			name = name[:30] + "…"
+		}
+		if v.Id == nil {
+			continue
 		}
 		rows = append(rows, []telegram.InlineKeyboardButton{{
 			Text: name, CallbackData: fmt.Sprintf("%s:%d:%s", prefix, tenantID, *v.Id),

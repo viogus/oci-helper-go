@@ -209,10 +209,10 @@ func (s *Server) handleTenantByID(w http.ResponseWriter, r *http.Request) {
 		}
 		jsonOK(w, t)
 	case http.MethodDelete:
-			if err := s.store.DeleteTenantCascade(id); err != nil {
-				jsonErr(w, "delete tenant: "+err.Error())
-				return
-			}
+		if err := s.store.DeleteTenantCascade(id); err != nil {
+			jsonErr(w, "delete tenant: "+err.Error())
+			return
+		}
 		s.audit(id, "tenant:delete", fmt.Sprintf("id=%d", id), r)
 		jsonOK(w, map[string]string{"status": "ok"})
 	default:
@@ -400,20 +400,20 @@ func (s *Server) handleTenantInfo(w http.ResponseWriter, r *http.Request) {
 	subscription := interface{}(subscriptionResult)
 
 	resp := map[string]interface{}{
-		"tenant":                     t,
-		"regions":                    regionNames,
-		"instanceList":               instances,
-		"nlbList":                    nlbList,
-		"cfCfgList":                  cfCfgList,
-		"instanceStats":              stats,
-		"totalOCPU":                  totalOCPU,
-		"totalMemoryGB":              totalMem,
-		"users":                      userList,
-		"passwordExpiresAfter":       passwordExpiresAfter,
-		"notificationRecipients":     notificationRecipients,
+		"tenant":                      t,
+		"regions":                     regionNames,
+		"instanceList":                instances,
+		"nlbList":                     nlbList,
+		"cfCfgList":                   cfCfgList,
+		"instanceStats":               stats,
+		"totalOCPU":                   totalOCPU,
+		"totalMemoryGB":               totalMem,
+		"users":                       userList,
+		"passwordExpiresAfter":        passwordExpiresAfter,
+		"notificationRecipients":      notificationRecipients,
 		"notificationTestModeEnabled": notificationTestModeEnabled,
-		"subscription":               subscription,
-		"accountCreationTime":        accountCreationTime,
+		"subscription":                subscription,
+		"accountCreationTime":         accountCreationTime,
 	}
 
 	// Store in cache with 10-minute TTL.
@@ -917,9 +917,13 @@ func (s *Server) handleRefreshPlanType(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[refresh-plan-type] client for tenant %d: %v", id, err)
 	} else {
 		if err := client.ValidateCredentials(r.Context(), t.TenancyOCID); err == nil {
-			_ = s.store.SetTenantAccountStatus(id, "ACTIVE")
+			if err := s.store.SetTenantAccountStatus(id, "ACTIVE"); err != nil {
+				log.Printf("[tenants] SetTenantAccountStatus: %v", err)
+			}
 		} else {
-			_ = s.store.SetTenantAccountStatus(id, "INACTIVE")
+			if err := s.store.SetTenantAccountStatus(id, "INACTIVE"); err != nil {
+				log.Printf("[tenants] SetTenantAccountStatus: %v", err)
+			}
 		}
 		sub, err := client.GetSubscriptionInfo(r.Context())
 		if err != nil {
@@ -998,7 +1002,9 @@ func (s *Server) handleRefreshPlanTypeBatch(w http.ResponseWriter, r *http.Reque
 		if err := client.ValidateCredentials(r.Context(), t.TenancyOCID); err != nil {
 			res.Status = "INACTIVE"
 		}
-		_ = s.store.SetTenantAccountStatus(tenantID, res.Status)
+		if err := s.store.SetTenantAccountStatus(tenantID, res.Status); err != nil {
+			log.Printf("[tenants] SetTenantAccountStatus: %v", err)
+		}
 		sub, err := client.GetSubscriptionInfo(r.Context())
 		if err != nil {
 			res.Error = "subscription: " + err.Error()

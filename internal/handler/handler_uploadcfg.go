@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"io"
+	"log"
 	"mime/multipart"
 	"net/http"
 	"os"
@@ -79,7 +81,11 @@ func (s *Server) handleTenantUploadBatch(w http.ResponseWriter, r *http.Request,
 				continue
 			}
 			buf := make([]byte, h.Size)
-			_, _ = f.Read(buf)
+			if _, err := io.ReadFull(f, buf); err != nil {
+				f.Close()
+				log.Printf("[uploadcfg] short read on %s: %v", h.Filename, err)
+				continue
+			}
 			f.Close()
 			keyFiles[filepath.Base(h.Filename)] = buf
 		}
@@ -99,7 +105,11 @@ func (s *Server) handleTenantUploadBatch(w http.ResponseWriter, r *http.Request,
 			continue
 		}
 		buf := make([]byte, h.Size)
-		_, _ = f.Read(buf)
+		if _, err := io.ReadFull(f, buf); err != nil {
+			f.Close()
+			results = append(results, itemResult{Name: h.Filename, Status: "failed", Error: "read file: " + err.Error()})
+			continue
+		}
 		f.Close()
 		for _, cfg := range parseOciConfigText(string(buf)) {
 			if cfg.Name == "" || cfg.UserOCID == "" || cfg.TenancyOCID == "" || cfg.Fingerprint == "" || cfg.Region == "" || cfg.KeyFile == "" {
@@ -150,7 +160,9 @@ func (s *Server) handleTenantUploadBatch(w http.ResponseWriter, r *http.Request,
 				if err != nil {
 					return
 				}
-				_ = s.store.SetTenantAccountStatus(t.ID, "ACTIVE")
+				if err := s.store.SetTenantAccountStatus(t.ID, "ACTIVE"); err != nil {
+					log.Printf("[uploadcfg] SetTenantAccountStatus: %v", err)
+				}
 				if sub, err := client.GetSubscriptionInfo(ctx); err == nil && sub != nil && sub.PlanType != "" {
 					_ = s.store.SetConfig(fmt.Sprintf("tenant_plan_type_%d", t.ID), string(sub.PlanType))
 				}

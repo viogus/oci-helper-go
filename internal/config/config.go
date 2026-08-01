@@ -43,7 +43,11 @@ func Load() *Config {
 		KeysDir:       envOr("OCI_KEYS_DIR", "/app/oci-helper/keys"),
 		LogLevel:      envOr("OCI_LOG_LEVEL", "info"),
 		LogFile:       envOr("OCI_LOG_FILE", "/app/oci-helper/oci-helper.log"),
-		SecureCookies: envOr("OCI_SECURE_COOKIES", "false") == "true",
+		// Secure cookies by default: the flag only takes effect behind TLS /
+		// trusted HTTPS proxy (auth.go checks r.TLS / X-Forwarded-Proto), so
+		// plain-HTTP deployments are unaffected while HTTPS deployments get
+		// the Secure attribute automatically.
+		SecureCookies: envOr("OCI_SECURE_COOKIES", "true") != "false",
 		DebugPort:     envOr("OCI_DEBUG_PORT", ""),
 	}
 

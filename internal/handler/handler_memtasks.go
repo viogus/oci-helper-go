@@ -13,27 +13,27 @@ import (
 )
 
 type memTask struct {
-	ID           string   `json:"id"`
-	TenantID     int64    `json:"tenant_id"`
-	InstanceID   string   `json:"instance_id"`
-	InstanceName string   `json:"instance_name"`
-	Username     string   `json:"username"`
-	Region       string   `json:"region"`
-	CidrList     []string `json:"cidr_list"`
-	Ocpus        string   `json:"ocpus"`
-	Memory       string   `json:"memory"`
-	Shape        string   `json:"shape"`
-	ChangeCfDNS  bool     `json:"change_cf_dns"`
-	SelectedDomainCfgID int64 `json:"selected_domain_cfg_id"`
-	DomainPrefix string   `json:"domain_prefix"`
-	EnableProxy  *bool    `json:"enable_proxy"`
-	TTL          int      `json:"ttl"`
-	Remark       string   `json:"remark"`
-	TaskType     string   `json:"task_type"` // "change_ip" or "update_cfg"
-	Paused       bool     `json:"paused"`
-	Attempts     int64    `json:"attempts"`
-	CreatedAt    string   `json:"created_at"`
-	Cancel       chan struct{} `json:"-"`
+	ID                  string        `json:"id"`
+	TenantID            int64         `json:"tenant_id"`
+	InstanceID          string        `json:"instance_id"`
+	InstanceName        string        `json:"instance_name"`
+	Username            string        `json:"username"`
+	Region              string        `json:"region"`
+	CidrList            []string      `json:"cidr_list"`
+	Ocpus               string        `json:"ocpus"`
+	Memory              string        `json:"memory"`
+	Shape               string        `json:"shape"`
+	ChangeCfDNS         bool          `json:"change_cf_dns"`
+	SelectedDomainCfgID int64         `json:"selected_domain_cfg_id"`
+	DomainPrefix        string        `json:"domain_prefix"`
+	EnableProxy         *bool         `json:"enable_proxy"`
+	TTL                 int           `json:"ttl"`
+	Remark              string        `json:"remark"`
+	TaskType            string        `json:"task_type"` // "change_ip" or "update_cfg"
+	Paused              bool          `json:"paused"`
+	Attempts            int64         `json:"attempts"`
+	CreatedAt           string        `json:"created_at"`
+	Cancel              chan struct{} `json:"-"`
 }
 
 var (
@@ -52,11 +52,14 @@ func (s *Server) handleMemTasksUpdateCfg(w http.ResponseWriter, r *http.Request)
 func (s *Server) handleMemTasks(w http.ResponseWriter, r *http.Request, taskType string) {
 	switch r.Method {
 	case http.MethodGet:
+		// Copy values while holding the lock: worker goroutines mutate
+		// Paused/Attempts on the live *memTask, so marshaling the pointers
+		// after unlock would race with them.
 		memTasksMu.Lock()
-		var all []*memTask
+		var all []memTask
 		for _, t := range memTasks {
 			if t.TaskType == taskType {
-				all = append(all, t)
+				all = append(all, *t)
 			}
 		}
 		memTasksMu.Unlock()
@@ -80,7 +83,7 @@ func (s *Server) handleMemTasks(w http.ResponseWriter, r *http.Request, taskType
 		}
 		list := all[start:end]
 		if list == nil {
-			list = []*memTask{}
+			list = []memTask{}
 		}
 
 		jsonOK(w, map[string]interface{}{
@@ -92,20 +95,20 @@ func (s *Server) handleMemTasks(w http.ResponseWriter, r *http.Request, taskType
 
 	case http.MethodPost:
 		var req struct {
-			Action     string   `json:"action"`
-			TenantID   int64    `json:"tenant_id"`
-			InstanceID string   `json:"instance_id"`
-			TaskIDs    []string `json:"task_ids"`
-			CidrList   []string `json:"cidr_list"`
-			Ocpus      string   `json:"ocpus"`
-			Memory     string   `json:"memory"`
-			Shape      string   `json:"shape"`
-			ChangeCfDNS bool     `json:"change_cf_dns"`
-			SelectedDomainCfgID int64 `json:"selected_domain_cfg_id"`
-			DomainPrefix string   `json:"domain_prefix"`
-			EnableProxy *bool    `json:"enable_proxy"`
-			TTL        int      `json:"ttl"`
-			Remark     string   `json:"remark"`
+			Action              string   `json:"action"`
+			TenantID            int64    `json:"tenant_id"`
+			InstanceID          string   `json:"instance_id"`
+			TaskIDs             []string `json:"task_ids"`
+			CidrList            []string `json:"cidr_list"`
+			Ocpus               string   `json:"ocpus"`
+			Memory              string   `json:"memory"`
+			Shape               string   `json:"shape"`
+			ChangeCfDNS         bool     `json:"change_cf_dns"`
+			SelectedDomainCfgID int64    `json:"selected_domain_cfg_id"`
+			DomainPrefix        string   `json:"domain_prefix"`
+			EnableProxy         *bool    `json:"enable_proxy"`
+			TTL                 int      `json:"ttl"`
+			Remark              string   `json:"remark"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			jsonErr(w, "invalid body: "+err.Error())
@@ -116,22 +119,22 @@ func (s *Server) handleMemTasks(w http.ResponseWriter, r *http.Request, taskType
 		case "add":
 			id := generateID()
 			task := &memTask{
-				ID:         id,
-				TenantID:   req.TenantID,
-				InstanceID: req.InstanceID,
-				CidrList:   req.CidrList,
-				Ocpus:      req.Ocpus,
-				Memory:     req.Memory,
-				Shape:      req.Shape,
-				ChangeCfDNS: req.ChangeCfDNS,
+				ID:                  id,
+				TenantID:            req.TenantID,
+				InstanceID:          req.InstanceID,
+				CidrList:            req.CidrList,
+				Ocpus:               req.Ocpus,
+				Memory:              req.Memory,
+				Shape:               req.Shape,
+				ChangeCfDNS:         req.ChangeCfDNS,
 				SelectedDomainCfgID: req.SelectedDomainCfgID,
-				DomainPrefix: req.DomainPrefix,
-				EnableProxy: req.EnableProxy,
-				TTL: req.TTL,
-				Remark: req.Remark,
-				TaskType:   taskType,
-				CreatedAt:  time.Now().Format("2006-01-02 15:04:05"),
-				Cancel:     make(chan struct{}),
+				DomainPrefix:        req.DomainPrefix,
+				EnableProxy:         req.EnableProxy,
+				TTL:                 req.TTL,
+				Remark:              req.Remark,
+				TaskType:            taskType,
+				CreatedAt:           time.Now().Format("2006-01-02 15:04:05"),
+				Cancel:              make(chan struct{}),
 			}
 			// Get tenant info for display
 			if tenant, err := s.store.GetTenant(req.TenantID); err == nil && tenant != nil {

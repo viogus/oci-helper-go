@@ -51,22 +51,22 @@ func (s *Server) handleInstances(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) createInstance(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		TenantID            int64   `json:"tenantId"`
-		DisplayName         string  `json:"displayName"`
-		ImageID             string  `json:"imageId"`
-		Shape               string  `json:"shape"`
-		SubnetID            string  `json:"subnetId"`
-		AvailabilityDomain  string  `json:"availabilityDomain"`
-		BootVolumeSizeGB    *int64  `json:"bootVolumeSizeGB"`
-		OCPUs               *float32 `json:"ocpus"`
-			Region              string   `json:"region"`
-		MemoryGB            *float32 `json:"memoryGB"`
-		SSHKeyID            int64   `json:"sshKeyId"`
-		RootPassword        string  `json:"rootPassword"`
-		IntervalSeconds     int     `json:"intervalSeconds"`
-		CreateNumbers       int     `json:"createNumbers"`
-		Architecture        string  `json:"architecture"`
-		OperationSystem     string  `json:"operationSystem"`
+		TenantID           int64    `json:"tenantId"`
+		DisplayName        string   `json:"displayName"`
+		ImageID            string   `json:"imageId"`
+		Shape              string   `json:"shape"`
+		SubnetID           string   `json:"subnetId"`
+		AvailabilityDomain string   `json:"availabilityDomain"`
+		BootVolumeSizeGB   *int64   `json:"bootVolumeSizeGB"`
+		OCPUs              *float32 `json:"ocpus"`
+		Region             string   `json:"region"`
+		MemoryGB           *float32 `json:"memoryGB"`
+		SSHKeyID           int64    `json:"sshKeyId"`
+		RootPassword       string   `json:"rootPassword"`
+		IntervalSeconds    int      `json:"intervalSeconds"`
+		CreateNumbers      int      `json:"createNumbers"`
+		Architecture       string   `json:"architecture"`
+		OperationSystem    string   `json:"operationSystem"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonErr(w, "invalid body: "+err.Error())
@@ -115,10 +115,10 @@ func (s *Server) createInstance(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-		// If a region is specified, use it; otherwise use tenant's default.
-		if req.Region != "" {
-			client.SetRegion(req.Region)
-		}
+	// If a region is specified, use it; otherwise use tenant's default.
+	if req.Region != "" {
+		client.SetRegion(req.Region)
+	}
 
 	launchReq := core.LaunchInstanceRequest{
 		LaunchInstanceDetails: core.LaunchInstanceDetails{
@@ -234,12 +234,12 @@ func (s *Server) handleInstanceAction(w http.ResponseWriter, r *http.Request) {
 	_ = parts // instanceID already extracted above
 
 	var req struct {
-		Action               string `json:"action"`
-		TenantID             int64  `json:"tenantId"`
-		PreserveBootVolume   bool   `json:"preserveBootVolume"`
-		PreserveDataVolumes  bool   `json:"preserveDataVolumes"`
-		CaptchaCode          string `json:"captchaCode"`
-		CaptchaTarget        string `json:"captchaTarget"`
+		Action              string `json:"action"`
+		TenantID            int64  `json:"tenantId"`
+		PreserveBootVolume  bool   `json:"preserveBootVolume"`
+		PreserveDataVolumes bool   `json:"preserveDataVolumes"`
+		CaptchaCode         string `json:"captchaCode"`
+		CaptchaTarget       string `json:"captchaTarget"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonErr(w, "invalid body: "+err.Error())
@@ -266,43 +266,53 @@ func (s *Server) handleInstanceAction(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := s.store.UpdateInstanceState(instanceID, "TERMINATING"); err != nil {
-				log.Printf("[instances] UpdateInstanceState %s: %v", instanceID, err)
-			}
-		case "start":
+			log.Printf("[instances] UpdateInstanceState %s: %v", instanceID, err)
+		}
+	case "start":
 		_, err := client.InstanceAction(ctx, bareOCID(instanceID), core.InstanceActionActionStart)
 		if err != nil {
 			jsonErr(w, "start: "+err.Error())
 			return
 		}
-		s.store.UpdateInstanceState(instanceID, "STARTING")
+		if err := s.store.UpdateInstanceState(instanceID, "STARTING"); err != nil {
+			log.Printf("[instances] UpdateInstanceState %s (start): %v", instanceID, err)
+		}
 	case "stop":
 		_, err := client.InstanceAction(ctx, bareOCID(instanceID), core.InstanceActionActionStop)
 		if err != nil {
 			jsonErr(w, "stop: "+err.Error())
 			return
 		}
-		s.store.UpdateInstanceState(instanceID, "STOPPING")
+		if err := s.store.UpdateInstanceState(instanceID, "STOPPING"); err != nil {
+			log.Printf("[instances] UpdateInstanceState %s (stop): %v", instanceID, err)
+		}
 	case "reboot":
 		_, err := client.InstanceAction(ctx, bareOCID(instanceID), core.InstanceActionActionReset)
 		if err != nil {
 			jsonErr(w, "reboot: "+err.Error())
 			return
 		}
-		s.store.UpdateInstanceState(instanceID, "STARTING")
+		if err := s.store.UpdateInstanceState(instanceID, "STARTING"); err != nil {
+			log.Printf("[instances] UpdateInstanceState %s (reboot): %v", instanceID, err)
+		}
 	case "softstop":
 		_, err := client.InstanceAction(ctx, bareOCID(instanceID), core.InstanceActionActionSoftstop)
 		if err != nil {
 			jsonErr(w, "softstop: "+err.Error())
 			return
 		}
-		s.store.UpdateInstanceState(instanceID, "STOPPING")
+		if err := s.store.UpdateInstanceState(instanceID, "STOPPING"); err != nil {
+			log.Printf("[instances] UpdateInstanceState %s (softstop): %v", instanceID, err)
+		}
 	case "softreset":
 		_, err := client.InstanceAction(ctx, bareOCID(instanceID), core.InstanceActionActionSoftreset)
 		if err != nil {
 			jsonErr(w, "softreset: "+err.Error())
 			return
 		}
-		s.store.UpdateInstanceState(instanceID, "STARTING")
+		if err := s.store.UpdateInstanceState(instanceID, "STARTING"); err != nil {
+			log.Printf("[instances] UpdateInstanceState %s (softreset): %v", instanceID, err)
+		}
 	case "stopChangeIp":
 		memTasksMu.Lock()
 		for id, t := range memTasks {
@@ -444,19 +454,19 @@ func ociToDB(i core.Instance, tenantID int64, region string) *db.Instance {
 		fd = *i.FaultDomain
 	}
 	return &db.Instance{
-		ID:       fmt.Sprintf("%d:%s", tenantID, strOr(i.Id, "")),
-		TenantID: tenantID,
-		Name:     strOr(i.DisplayName, ""),
-		OCID:     strOr(i.Id, ""),
-		Shape:    strOr(i.Shape, ""),
-		State:    string(i.LifecycleState),
-		OCPU:       ocpu,
-		MemoryGB:   memGB,
-		BootVolumeGB: bootVolGB,
-		ImageID:    imageID,
+		ID:                 fmt.Sprintf("%d:%s", tenantID, strOr(i.Id, "")),
+		TenantID:           tenantID,
+		Name:               strOr(i.DisplayName, ""),
+		OCID:               strOr(i.Id, ""),
+		Shape:              strOr(i.Shape, ""),
+		State:              string(i.LifecycleState),
+		OCPU:               ocpu,
+		MemoryGB:           memGB,
+		BootVolumeGB:       bootVolGB,
+		ImageID:            imageID,
 		AvailabilityDomain: ad,
-		FaultDomain: fd,
-		Region:     region,
+		FaultDomain:        fd,
+		Region:             region,
 	}
 }
 
@@ -603,6 +613,7 @@ func (s *Server) handleChangeBootVolume(w http.ResponseWriter, r *http.Request) 
 	s.audit(req.TenantID, "instance:change-boot-volume", req.InstanceID, r)
 	jsonOK(w, map[string]string{"status": "ok"})
 }
+
 // bareOCID strips a leading "tenantID:" prefix from a composite instance id,
 // returning the raw OCID that OCI APIs expect. Bare OCIDs pass through unchanged
 // (an OCID never contains a colon).
@@ -1205,9 +1216,9 @@ func (s *Server) handleAutoRescue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		TenantID          int64  `json:"tenant_id"`
-		InstanceID        string `json:"instance_id"`
-		KeepBackupVolume  bool   `json:"keep_backup_volume"`
+		TenantID         int64  `json:"tenant_id"`
+		InstanceID       string `json:"instance_id"`
+		KeepBackupVolume bool   `json:"keep_backup_volume"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonErr(w, "invalid body: "+err.Error())
@@ -1391,6 +1402,7 @@ func (s *Server) runAutoRescue(ctx context.Context, tenantID int64, instanceID, 
 	s.notify(tenantID, fmt.Sprintf("【自动救援/缩小硬盘任务】\n用户：%s\n区域：%s\n实例：%s\n公网IP：%s\nSSH端口：22\nSSH账号：root\nSSH密码：ocihelper2024",
 		tenant.Name, tenant.Region, instanceID, publicIP))
 }
+
 // ── G6: Direct Instance Config Update ───────────────────────────────────
 
 func (s *Server) handleInstanceConfigUpdate(w http.ResponseWriter, r *http.Request) {
@@ -1529,11 +1541,11 @@ func (s *Server) handleStartVNC(w http.ResponseWriter, r *http.Request) {
 	}()
 	s.audit(req.TenantID, "instance:vnc:start", req.InstanceID, r)
 	jsonOK(w, map[string]interface{}{
-		"status":             "creating",
-		"connection_id":      strOr(conn.Id, ""),
-		"connection_string":  strOr(conn.ConnectionString, ""),
+		"status":                "creating",
+		"connection_id":         strOr(conn.Id, ""),
+		"connection_string":     strOr(conn.ConnectionString, ""),
 		"vnc_connection_string": strOr(conn.VncConnectionString, ""),
-		"fingerprint":        strOr(conn.Fingerprint, ""),
+		"fingerprint":           strOr(conn.Fingerprint, ""),
 	})
 }
 
@@ -1572,11 +1584,11 @@ func (s *Server) handleInstanceConfigInfo(w http.ResponseWriter, r *http.Request
 	if len(vnics) > 0 {
 		v := vnics[0]
 		vnicInfo = map[string]interface{}{
-			"id":        strOr(v.Id, ""),
-			"public_ip": strOr(v.PublicIp, ""),
+			"id":         strOr(v.Id, ""),
+			"public_ip":  strOr(v.PublicIp, ""),
 			"private_ip": strOr(v.PrivateIp, ""),
-			"subnet_id": strOr(v.SubnetId, ""),
-			"mac":       strOr(v.MacAddress, ""),
+			"subnet_id":  strOr(v.SubnetId, ""),
+			"mac":        strOr(v.MacAddress, ""),
 		}
 	}
 	// Get boot volume info
@@ -1591,10 +1603,20 @@ func (s *Server) handleInstanceConfigInfo(w http.ResponseWriter, r *http.Request
 			bv, err := client.GetBootVolume(ctx, *bvID)
 			if err == nil {
 				bootVolumeInfo = map[string]interface{}{
-					"id":       strOr(bv.Id, ""),
-					"size_gb":  func() int64 { if bv.SizeInGBs != nil { return *bv.SizeInGBs }; return 0 }(),
-					"vpus_per_gb": func() int64 { if bv.VpusPerGB != nil { return *bv.VpusPerGB }; return 0 }(),
-					"state":    string(bv.LifecycleState),
+					"id": strOr(bv.Id, ""),
+					"size_gb": func() int64 {
+						if bv.SizeInGBs != nil {
+							return *bv.SizeInGBs
+						}
+						return 0
+					}(),
+					"vpus_per_gb": func() int64 {
+						if bv.VpusPerGB != nil {
+							return *bv.VpusPerGB
+						}
+						return 0
+					}(),
+					"state": string(bv.LifecycleState),
 				}
 			}
 		}
@@ -1602,21 +1624,36 @@ func (s *Server) handleInstanceConfigInfo(w http.ResponseWriter, r *http.Request
 	// Get shape config
 	shapeCfg := map[string]interface{}{}
 	if inst.ShapeConfig != nil {
-		shapeCfg["ocpus"] = func() float32 { if inst.ShapeConfig.Ocpus != nil { return *inst.ShapeConfig.Ocpus }; return 0 }()
-		shapeCfg["memory_gb"] = func() float32 { if inst.ShapeConfig.MemoryInGBs != nil { return *inst.ShapeConfig.MemoryInGBs }; return 0 }()
+		shapeCfg["ocpus"] = func() float32 {
+			if inst.ShapeConfig.Ocpus != nil {
+				return *inst.ShapeConfig.Ocpus
+			}
+			return 0
+		}()
+		shapeCfg["memory_gb"] = func() float32 {
+			if inst.ShapeConfig.MemoryInGBs != nil {
+				return *inst.ShapeConfig.MemoryInGBs
+			}
+			return 0
+		}()
 	}
 	jsonOK(w, map[string]interface{}{
-		"id":            strOr(inst.Id, ""),
-		"display_name":  strOr(inst.DisplayName, ""),
-		"shape":         strOr(inst.Shape, ""),
-		"state":         string(inst.LifecycleState),
-		"region":        strOr(inst.Region, ""),
+		"id":                  strOr(inst.Id, ""),
+		"display_name":        strOr(inst.DisplayName, ""),
+		"shape":               strOr(inst.Shape, ""),
+		"state":               string(inst.LifecycleState),
+		"region":              strOr(inst.Region, ""),
 		"availability_domain": strOr(inst.AvailabilityDomain, ""),
-		"fault_domain":  strOr(inst.FaultDomain, ""),
-		"time_created":  func() string { if inst.TimeCreated != nil { return inst.TimeCreated.Format(time.RFC3339) }; return "" }(),
-		"shape_config":  shapeCfg,
-		"vnic":          vnicInfo,
-		"boot_volume":   bootVolumeInfo,
+		"fault_domain":        strOr(inst.FaultDomain, ""),
+		"time_created": func() string {
+			if inst.TimeCreated != nil {
+				return inst.TimeCreated.Format(time.RFC3339)
+			}
+			return ""
+		}(),
+		"shape_config": shapeCfg,
+		"vnic":         vnicInfo,
+		"boot_volume":  bootVolumeInfo,
 	})
 }
 

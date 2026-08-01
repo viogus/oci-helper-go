@@ -68,7 +68,7 @@ func (c *Client) ResetPasswordViaDomain(ctx context.Context, classicUserID, doma
 	if err != nil {
 		return "", fmt.Errorf("identity domains list users by ocid: %w", err)
 	}
-	if listResp.Resources == nil || len(listResp.Resources) == 0 {
+	if listResp.Resources == nil || len(listResp.Resources) == 0 || listResp.Resources[0].Id == nil {
 		return "", fmt.Errorf("user %s not found in identity domain", classicUserID)
 	}
 	scimUserID := *listResp.Resources[0].Id

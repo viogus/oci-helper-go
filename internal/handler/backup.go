@@ -136,12 +136,32 @@ func (s *Server) handleBackup(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	data.CfCfgs, _ = s.store.ListCfCfgs()
-	data.IpData, _ = s.store.ListIpData(0, "")
-	data.SSHKeys, _ = s.store.ListSSHKeys(0)
-	data.InstancePlans, _ = s.store.ListInstancePlans(0)
-	data.StockAlerts, _ = s.store.ListStockAlerts(0)
-	data.Tasks, _ = s.store.ListTasks()
+	// A failed table read must abort the backup — silently exporting an
+	// empty table produces a backup that restores as partial data loss.
+	if data.CfCfgs, err = s.store.ListCfCfgs(); err != nil {
+		jsonErr(w, "list cf configs: "+err.Error())
+		return
+	}
+	if data.IpData, err = s.store.ListIpData(0, ""); err != nil {
+		jsonErr(w, "list ip data: "+err.Error())
+		return
+	}
+	if data.SSHKeys, err = s.store.ListSSHKeys(0); err != nil {
+		jsonErr(w, "list ssh keys: "+err.Error())
+		return
+	}
+	if data.InstancePlans, err = s.store.ListInstancePlans(0); err != nil {
+		jsonErr(w, "list instance plans: "+err.Error())
+		return
+	}
+	if data.StockAlerts, err = s.store.ListStockAlerts(0); err != nil {
+		jsonErr(w, "list stock alerts: "+err.Error())
+		return
+	}
+	if data.Tasks, err = s.store.ListTasks(); err != nil {
+		jsonErr(w, "list tasks: "+err.Error())
+		return
+	}
 	if entries, err := os.ReadDir(s.cfg.KeysDir); err == nil {
 		for _, e := range entries {
 			if e.IsDir() {
@@ -280,6 +300,10 @@ func (s *Server) restoreData(password, data string) (int, int, error) {
 	if err := tx.Commit(); err != nil {
 		return 0, 0, fmt.Errorf("commit: %w", err)
 	}
+	// Restored config may enable MFA (or change the secret); refresh the
+	// in-memory cache so login enforcement matches the restored DB instead
+	// of the pre-restore state until restart.
+	s.refreshMFACache()
 	if err := os.MkdirAll(s.cfg.KeysDir, 0700); err != nil {
 		return 0, 0, fmt.Errorf("create keys dir: %w", err)
 	}

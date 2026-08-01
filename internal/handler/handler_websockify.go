@@ -92,7 +92,14 @@ func (s *Server) handleVNCProxy(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, "create console connection: "+err.Error())
 		return
 	}
-	consoleID := *conn.Id
+	consoleID := ""
+	if conn != nil && conn.Id != nil {
+		consoleID = *conn.Id
+	}
+	if consoleID == "" {
+		jsonErr(w, "create console connection: nil id")
+		return
+	}
 
 	// Always clean up the console connection when this handler exits.
 	// Uses a background context so cleanup still works if the request context

@@ -4,10 +4,10 @@ go 1.26.4
 
 require (
 	github.com/gorilla/websocket v1.5.3
-	github.com/oracle/oci-go-sdk/v65 v65.118.1
+	github.com/oracle/oci-go-sdk/v65 v65.122.0
 	github.com/shirou/gopsutil/v3 v3.24.5
-	golang.org/x/crypto v0.53.0
-	modernc.org/sqlite v1.52.0
+	golang.org/x/crypto v0.54.0
+	modernc.org/sqlite v1.55.0
 )
 
 require (
@@ -26,8 +26,8 @@ require (
 	github.com/tklauser/numcpus v0.6.1 // indirect
 	github.com/youmark/pkcs8 v0.0.0-20240726163527-a2c0da244d78 // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
-	golang.org/x/sys v0.46.0 // indirect
-	modernc.org/libc v1.72.3 // indirect
+	golang.org/x/sys v0.47.0 // indirect
+	modernc.org/libc v1.74.1 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
 )

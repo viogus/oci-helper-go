@@ -26,20 +26,26 @@ oci-helper-go/
 │   ├── config/config.go           # Environment → Config struct
 │   ├── db/
 │   │   ├── models.go              # Data models (Tenant, Instance, Task, User, ...)
-│   │   ├── sqlite.go              # SQLite connection + auto-migration (pure Go, no CGO)
+│   │   ├── sqlite.go              # SQLite connection (pure Go, no CGO, WAL)
 │   │   ├── queries.go             # Full CRUD operations
-│   │   └── migrate.go             # Schema versioning (v1 → v2)
-│   ├── oci/client.go              # OCI Go SDK v65 wrapper (compute, VCN, identity,
-│   │                              #   block storage, monitoring, limits, NLB)
-│   ├── auth/auth.go               # bcrypt + AES-GCM session cookie + TOTP MFA
+│   │   └── migrate.go             # Schema versioning (v1 → v9)
+│   ├── oci/                       # OCI Go SDK v65 wrapper (compute, VCN, identity,
+│   │   │                          #   block storage, monitoring, limits, NLB, ...)
+│   │   ├── client.go
+│   │   ├── client_create.go       # Instance creation helpers
+│   │   ├── client_domain.go       # Identity Domains SCIM fallback
+│   │   └── client_subscription.go # OSP Gateway subscription
+│   ├── auth/auth.go               # bcrypt + session cookie + TOTP MFA
+│   ├── system/metrics.go          # Host CPU/mem/disk/network metrics (gopsutil)
 │   ├── cloudflare/client.go       # Cloudflare DNS API v4 client
 │   ├── telegram/bot.go            # Telegram Bot API client
 │   ├── dingtalk/bot.go            # DingTalk webhook bot client
+│   ├── geoip/geoip.go             # IP geolocation (ip-api.com)
 │   ├── ai/assistant.go            # SiliconFlow AI chat client (OpenAI-compatible)
-│   ├── i18n/i18n.go               # Chinese/English locale messages
-│   ├── middleware/                 # HTTP middleware
-│   └── handler/
-│       ├── handler.go             # REST API routes + embedded SPA frontend
+│   ├── task/                      # Background task definitions
+│   ├── middleware/                # HTTP middleware
+│   └── handler/                   # REST handlers + embedded SPA
+│       ├── handler.go             # Server struct, routes, auth, SSE, audit
 │       ├── worker.go              # Background task queue
 │       ├── backup.go              # AES-256-GCM encrypted backup/restore
 │       ├── handler_tenants.go     # Tenant CRUD
@@ -52,15 +58,21 @@ oci-helper-go/
 │       ├── handler_vcn.go         # VCN operations
 │       ├── handler_cloudflare.go  # Cloudflare DNS integration
 │       ├── handler_ssh.go         # SSH key management
+│       ├── handler_shell.go       # Web SSH terminal (xterm.js)
 │       ├── handler_ipdata.go      # IP data / CIDR management
 │       ├── handler_instanceplans.go # Launch templates
 │       ├── handler_memtasks.go    # In-memory recurring tasks
 │       ├── handler_defense.go     # Security defense rules
-│       ├── handler_misc.go        # Tasks, audit, updates, notifications
 │       ├── handler_tgmenu.go      # Telegram bot inline menus
+│       ├── handler_tgnew.go       # TG: sys metrics, AI model, terminate, SSH, defense
+│       ├── handler_system.go      # Host system metrics endpoint
+│       ├── handler_misc.go        # Tasks, audit, updates, notifications, TG webhook
 │       ├── handler_keys.go        # PEM key file management
 │       ├── handler_users.go       # Multi-user management
-│       └── dist/index.html        # Full SPA frontend (embedded in binary)
+│       ├── handler_cost.go        # Cost analysis
+│       ├── handler_netboot.go     # Netboot rescue
+│       ├── handler_alive.go       # Tenant aliveness check
+│       └── dist/                  # Full SPA frontend (embedded in binary)
 ├── frontend/                      # Vue 3 + Element Plus SPA source
 │   ├── index.html
 │   ├── src/
@@ -107,6 +119,7 @@ oci-helper-go/
 - [x] VCN operations (list, delete, manage security lists)
 - [x] Security rules: view, add, remove, batch update, defense blacklisting
 - [x] Real-time CPU/memory/network metrics (OCI Monitoring)
+- [x] Host system metrics dashboard (`/system-metrics`: CPU/mem/disk/network of the host running oci-helper)
 - [x] VNIC traffic monitoring over time range
 - [x] OCI Limits viewer
 - [x] IPv6 attachment
@@ -120,6 +133,12 @@ oci-helper-go/
 - [x] Saved instance plans (launch templates)
 - [x] In-memory recurring tasks (automatic IP rotation, config updates)
 - [x] Telegram Bot with inline keyboard menus
+  - Instance list/actions + terminate with preserve-boot-volume confirm
+  - AI chat with model selection (DeepSeek-R1 / DeepSeek-V3 / Qwen-2.5)
+  - Host system metrics, traffic, logs, check-alive, volumes, plans, configs
+  - Defense mode enable/disable (tenant → VCN → CIDRs → confirm)
+  - Backup & restore, SSH key generation, MFA management
+  - SSH remote command execution (`/ssh_config` + `/ssh <cmd>`, TOFU host-key pinning)
 - [x] DingTalk webhook notifications
 - [x] AI assistant (SiliconFlow API, OpenAI-compatible, streaming)
 - [x] Encrypted backup/restore (AES-256-GCM + PBKDF2)
@@ -213,6 +232,7 @@ volumes:
 | `OCI_LOG_LEVEL` | `info` | Log level |
 | `OCI_MFA` | `false` | Enable TOTP MFA (`true` / `false`) |
 | `OCI_MFA_SECRET` | — | Pre-configured TOTP secret |
+| `OCI_SECURE_COOKIES` | `true` | Mark session cookies `Secure`. Only takes effect behind TLS / HTTPS reverse proxy (checked via `r.TLS` / `X-Forwarded-Proto`), so plain-HTTP deployments are unaffected |
 | `GOOGLE_CLIENT_ID` | — | Google OAuth 2.0 client ID |
 | `GOOGLE_CLIENT_SECRET` | — | Google OAuth 2.0 client secret |
 | `GOOGLE_REDIRECT_URL` | — | Google OAuth redirect URI |
@@ -259,6 +279,8 @@ All API routes return JSON. Most require a valid session cookie obtained via `/a
 | POST | `/api/tenants` | ✓ | Create tenant |
 | GET | `/api/tenants/{id}` | ✓ | Get tenant details |
 | DELETE | `/api/tenants/{id}` | ✓ | Delete tenant |
+| POST | `/api/tenants/upload` | ✓ | Bulk-import `.ini`/`.txt` OCI configs |
+| POST | `/api/tenants/check-alive` | ✓ | Verify tenant API credentials (updates `account_status`) |
 
 ### Instances
 
@@ -279,6 +301,10 @@ All API routes return JSON. Most require a valid session cookie obtained via `/a
 | POST | `/api/instances/one-click-close-500m` | ✓ | Delete the NLB |
 | POST | `/api/instances/auto-rescue` | ✓ | Auto-rescue mode operations |
 | POST | `/api/instances/update-shape` | ✓ | Update shape (alias for change-shape) |
+| POST | `/api/instances/check-alive-batch` | ✓ | Batch TCP aliveness check |
+| POST | `/api/instances/netboot-rescue` | ✓ | Netboot rescue flow (up to 10 min, synchronous) |
+| POST | `/api/instances/netboot-rescue/stop` | ✓ | Stop netboot rescue |
+| POST | `/api/instances/disable-ipv6` | ✓ | Disable instance IPv6 |
 | GET | `/api/instances/vnc` | ✓ | Start VNC console connection |
 | GET | `/api/instances/config-info` | ✓ | Get instance configuration info |
 | POST | `/api/instances/update-password` | ✓ | Update instance OS password |
@@ -338,6 +364,7 @@ All API routes return JSON. Most require a valid session cookie obtained via `/a
 |--------|------|:---:|-------------|
 | GET | `/api/tasks` | ✓ | List background tasks (?keyword=&page=&size=) |
 | POST | `/api/create-tasks` | ✓ | Create custom tasks |
+| GET/POST | `/api/create-tasks/recurring` | ✓ | List/create recurring create-tasks |
 | GET | `/api/audit` | ✓ | Audit log (?keyword=&page=&size=) |
 
 ### Sync
@@ -418,6 +445,7 @@ All API routes return JSON. Most require a valid session cookie obtained via `/a
 | Method | Path | Auth | Description |
 |--------|------|:---:|-------------|
 | POST | `/api/ai/chat` | ✓ | Chat with AI (?stream=true for SSE streaming) |
+| GET | `/api/ai/chat/cache` | ✓ | Clear server-side conversation cache (?session_id=) |
 
 ### Notifications
 
@@ -440,6 +468,8 @@ All API routes return JSON. Most require a valid session cookie obtained via `/a
 | Method | Path | Auth | Description |
 |--------|------|:---:|-------------|
 | GET | `/api/shell/{instanceId}` | ✓ | Get console connection info |
+| GET | `/api/shell/ws` | ✓ | WebSocket SSH terminal (xterm.js) |
+| GET | `/api/logs/ws` | ✓ | WebSocket live log streaming |
 
 ### System
 
@@ -472,6 +502,10 @@ docker buildx build --platform linux/amd64,linux/arm64 -t oci-helper .
 
 # Healthcheck mode (used by Docker HEALTHCHECK)
 ./oci-helper health
+
+# Tests
+go test ./...
+go test -race ./...
 ```
 
 ## Development

@@ -166,6 +166,55 @@ A fresh comparison against the Java source found and closed these gaps:
   `internal/handler/handler_tg_test.go` (composite-ID parsing, CIDR list,
   model mapping).
 
+---
+
+## 2026-08-02 Code Audit & Hardening Update
+
+Two independent code reviews (concurrency/panic/error-handling audit + a
+follow-up review of that commit) produced 16 + 5 fixes. Behavior-neutral,
+robustness & security hardening:
+
+**Concurrency**
+- `memTasks` GET no longer marshals live task pointers outside the lock —
+  values are copied under `memTasksMu` (was a data race with worker writes).
+- `audit()` is nil-`*http.Request` safe (TG-originated actions pass `nil`).
+
+**Correctness**
+- Restore now calls `refreshMFACache()` after commit — previously a restored
+  DB enabling MFA was ignored by login until restart (MFA bypass window).
+- Backup aborts if any table read fails instead of silently exporting empty
+  tables (tenants/instances/config/users/plans/keys/tasks/cfgs/ip-data...).
+- OCI SDK nil-pointer guards on 7 dereferences (console connection id,
+  subscription id, launched-instance id, boot-volume attachment id, SCIM
+  user id, VCN id in TG menu) — panic risk on malformed API responses.
+- `statusWriter.Unwrap()` lets `http.ResponseController` clear the 60s
+  `WriteTimeout` for the AI SSE stream and the 10-minute netboot-rescue flow
+  (previously hard-cut mid-stream).
+
+**Telegram bot security**
+- TG SSH now uses the shared TOFU host-key pinning (was: accept-any-key) and
+  rejects command chaining/injection (`;`, `&&`, `||`, backticks, `$(`, `\n`,
+  `\r`) plus shells smuggled through pipes (`echo x | bash`).
+- `telegram_chat_id` (when set) now also acts as a webhook chat allowlist —
+  only that chat may drive the bot (protects `/ssh`, terminate, restore).
+- Backup-restore key file names validated against path traversal.
+- TG restore/terminate actions write audit entries.
+
+**HTTP hardening**
+- `OCI_SECURE_COOKIES` now defaults to `true` (Secure attribute applied only
+  behind TLS / HTTPS proxy, so plain-HTTP deployments are unaffected).
+- Login blacklist, tenant account-status, instance-state and worker
+  checkpoint DB errors are now logged instead of silently dropped.
+- Aliveness check rejects malformed bodies (previously checked ALL tenants);
+  config upload uses `io.ReadFull` to avoid truncated key files.
+
+**Dependencies**: oci-go-sdk `v65.122.0`, x/crypto `v0.54.0`,
+modernc.org/sqlite `v1.55.0`.
+
+**Tests added**: `handler_audit_test.go` — memTasks race under `-race`,
+SSH command filter (interactive/chaining/pipe/newline bypass cases), MFA
+cache refresh after restore, key-file traversal rejection.
+
 
 
 ## 2. Architecture Parity — All Java Patterns Have Go Equivalents

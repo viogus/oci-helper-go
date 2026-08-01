@@ -99,6 +99,7 @@ func TestTGSSHValidateCommand(t *testing.T) {
 	blocked := []string{
 		"top", "vi /etc/hosts", "tail -f /var/log/syslog", "htop",
 		"echo x; top", "cmd && reboot", "a || b", "ls `id`", "echo $(rm -rf /)",
+		"ls\nreboot", "echo hi\rrm -rf /", "echo x | bash", "sudo reboot",
 	}
 	for _, c := range blocked {
 		if msg := tgSSHValidateCommand(c); msg == "" {

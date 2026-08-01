@@ -3317,6 +3317,11 @@ func (c *Client) CreateBootVolumeFromImage(ctx context.Context, compartmentID, a
 	}
 
 	// Step 5: Detach boot volume from temp instance.
+	// Step 5: Detach boot volume from temp instance.
+	if attach == nil || attach.Id == nil {
+		c.TerminateInstance(context.Background(), tempID, true, false)
+		return "", fmt.Errorf("detach boot volume from temp: nil attachment id")
+	}
 	if err := c.DetachBootVolume(ctx, *attach.Id); err != nil {
 		c.TerminateInstance(context.Background(), tempID, true, false)
 		return "", fmt.Errorf("detach boot volume from temp: %w", err)

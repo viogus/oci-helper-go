@@ -320,22 +320,34 @@ func (s *Server) tgSSHConfig(bot *telegram.Bot, chatID int64, text string) {
 var tgInteractiveCommands = []string{
 	"vi", "vim", "nano", "emacs", "top", "htop", "less", "more",
 	"tail -f", "watch", "ssh", "telnet", "ftp", "mysql", "psql",
-	"python", "node", "irb", "php -a",
+	"python", "node", "irb", "php -a", "bash", "sh", "su", "sudo",
 }
 
 // tgSSHValidateCommand returns an error message if the command must be
-// rejected, or "" if it is allowed. Blocks interactive commands and
+// rejected, or "" if it is allowed. Blocks interactive/shell commands and
 // chaining/injection operators so the blocklist cannot be bypassed
-// (e.g. "echo x; top", "cmd && reboot", "$(rm -rf /)").
+// (e.g. "echo x; top", "cmd && reboot", "echo x | bash", "$(rm -rf /)").
 func tgSSHValidateCommand(command string) string {
-	for _, ic := range tgInteractiveCommands {
-		if strings.HasPrefix(command, ic) {
-			return "❌ 不支持交互式命令（如 vi, top, tail -f 等），请使用非交互式命令。"
+	for _, op := range []string{";", "&&", "||", "`", "$(", "\n", "\r"} {
+		if strings.Contains(command, op) {
+			return "❌ 不支持命令链或注入操作符（; && || 反引号 $() 换行），请使用单条命令。"
 		}
 	}
-	for _, op := range []string{";", "&&", "||", "`", "$("} {
-		if strings.Contains(command, op) {
-			return "❌ 不支持命令链或注入操作符（; && || 反引号 $()），请使用单条命令。"
+	// Check the first one/two words of every pipe segment so "echo x | bash"
+	// cannot smuggle an interactive/shell command past the blocklist, while
+	// "tail -f ..." (two-word entry) is still caught.
+	for _, seg := range strings.Split(command, "|") {
+		fields := strings.Fields(seg)
+		if len(fields) == 0 {
+			continue
+		}
+		for _, ic := range tgInteractiveCommands {
+			if fields[0] == ic {
+				return "❌ 不支持交互式命令（如 vi, top, tail -f 等），请使用非交互式命令。"
+			}
+			if len(fields) >= 2 && fields[0]+" "+fields[1] == ic {
+				return "❌ 不支持交互式命令（如 vi, top, tail -f 等），请使用非交互式命令。"
+			}
 		}
 	}
 	return ""

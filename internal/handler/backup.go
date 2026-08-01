@@ -119,21 +119,23 @@ func (s *Server) handleBackup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	users, err := s.store.ListUsers()
-	if err == nil {
-		for _, u := range users {
-			// Re-read full rows so password hashes and MFA secrets survive
-			// backup/restore.
-			full, err := s.store.GetUserByUsername(u.Username)
-			if err == nil && full != nil {
-				data.Users = append(data.Users, dbUser{
-					Username:     full.Username,
-					PasswordHash: full.PasswordHash,
-					Role:         full.Role,
-					MFASecret:    full.MFASecret,
-					Email:        full.Email,
-					MFAEnabled:   full.MFAEnabled,
-				})
-			}
+	if err != nil {
+		jsonErr(w, "list users: "+err.Error())
+		return
+	}
+	for _, u := range users {
+		// Re-read full rows so password hashes and MFA secrets survive
+		// backup/restore.
+		full, err := s.store.GetUserByUsername(u.Username)
+		if err == nil && full != nil {
+			data.Users = append(data.Users, dbUser{
+				Username:     full.Username,
+				PasswordHash: full.PasswordHash,
+				Role:         full.Role,
+				MFASecret:    full.MFASecret,
+				Email:        full.Email,
+				MFAEnabled:   full.MFAEnabled,
+			})
 		}
 	}
 	// A failed table read must abort the backup — silently exporting an

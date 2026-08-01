@@ -55,6 +55,7 @@
             <span>{{ $t('menu.tasks') }}</span>
           </template>
           <el-menu-item index="/create-tasks">{{ $t('menu.createTasks') }}</el-menu-item>
+          <el-menu-item index="/scheduled-tasks">{{ $t('menu.scheduledTasks') }}</el-menu-item>
           <el-menu-item index="/mem-tasks">{{ $t('menu.memTasks') }}</el-menu-item>
         </el-sub-menu>
 

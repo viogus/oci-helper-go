@@ -23,6 +23,12 @@ type memTask struct {
 	Ocpus        string   `json:"ocpus"`
 	Memory       string   `json:"memory"`
 	Shape        string   `json:"shape"`
+	ChangeCfDNS  bool     `json:"change_cf_dns"`
+	SelectedDomainCfgID int64 `json:"selected_domain_cfg_id"`
+	DomainPrefix string   `json:"domain_prefix"`
+	EnableProxy  *bool    `json:"enable_proxy"`
+	TTL          int      `json:"ttl"`
+	Remark       string   `json:"remark"`
 	TaskType     string   `json:"task_type"` // "change_ip" or "update_cfg"
 	Paused       bool     `json:"paused"`
 	Attempts     int64    `json:"attempts"`
@@ -94,6 +100,12 @@ func (s *Server) handleMemTasks(w http.ResponseWriter, r *http.Request, taskType
 			Ocpus      string   `json:"ocpus"`
 			Memory     string   `json:"memory"`
 			Shape      string   `json:"shape"`
+			ChangeCfDNS bool     `json:"change_cf_dns"`
+			SelectedDomainCfgID int64 `json:"selected_domain_cfg_id"`
+			DomainPrefix string   `json:"domain_prefix"`
+			EnableProxy *bool    `json:"enable_proxy"`
+			TTL        int      `json:"ttl"`
+			Remark     string   `json:"remark"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			jsonErr(w, "invalid body: "+err.Error())
@@ -111,6 +123,12 @@ func (s *Server) handleMemTasks(w http.ResponseWriter, r *http.Request, taskType
 				Ocpus:      req.Ocpus,
 				Memory:     req.Memory,
 				Shape:      req.Shape,
+				ChangeCfDNS: req.ChangeCfDNS,
+				SelectedDomainCfgID: req.SelectedDomainCfgID,
+				DomainPrefix: req.DomainPrefix,
+				EnableProxy: req.EnableProxy,
+				TTL: req.TTL,
+				Remark: req.Remark,
 				TaskType:   taskType,
 				CreatedAt:  time.Now().Format("2006-01-02 15:04:05"),
 				Cancel:     make(chan struct{}),
@@ -173,6 +191,9 @@ func (s *Server) handleMemTasks(w http.ResponseWriter, r *http.Request, taskType
 }
 
 func (s *Server) runChangeIPLoop(task *memTask) {
+	if s.runChangeIPAttempt(task) {
+		return
+	}
 	ticker := time.NewTicker(60 * time.Second)
 	defer ticker.Stop()
 	for {
@@ -182,41 +203,57 @@ func (s *Server) runChangeIPLoop(task *memTask) {
 		case <-s.stopping:
 			return
 		case <-ticker.C:
-			memTasksMu.Lock()
-			if task.Paused {
-				memTasksMu.Unlock()
-				continue
-			}
-			task.Attempts++
-			memTasksMu.Unlock()
-
-			tenant, err := s.store.GetTenant(task.TenantID)
-			if err != nil || tenant == nil {
-				log.Printf("[mem-task] change-ip: tenant %d not found, removing task %s", task.TenantID, task.ID)
-				memTasksMu.Lock()
-				delete(memTasks, task.ID)
-				memTasksMu.Unlock()
+			if s.runChangeIPAttempt(task) {
 				return
-			}
-			client, err := s.clientFor(tenant)
-			if err != nil {
-				continue
-			}
-			ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
-			newIP, err := client.ChangeInstanceIP(ctx, task.InstanceID, task.CidrList)
-			cancel()
-			if err == nil {
-				log.Printf("[mem-task] change-ip done: %s -> %s", task.InstanceID, newIP)
-				memTasksMu.Lock()
-				delete(memTasks, task.ID)
-				memTasksMu.Unlock()
-				return // success, exit loop
 			}
 		}
 	}
 }
 
+func (s *Server) runChangeIPAttempt(task *memTask) bool {
+	memTasksMu.Lock()
+	if task.Paused {
+		memTasksMu.Unlock()
+		return false
+	}
+	task.Attempts++
+	memTasksMu.Unlock()
+
+	tenant, err := s.store.GetTenant(task.TenantID)
+	if err != nil || tenant == nil {
+		log.Printf("[mem-task] change-ip: tenant %d not found, removing task %s", task.TenantID, task.ID)
+		memTasksMu.Lock()
+		delete(memTasks, task.ID)
+		memTasksMu.Unlock()
+		return true
+	}
+	client, err := s.clientFor(tenant)
+	if err != nil {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	newIP, err := client.ChangeInstanceIP(ctx, task.InstanceID, task.CidrList)
+	cancel()
+	if err != nil {
+		return false
+	}
+	log.Printf("[mem-task] change-ip done: %s -> %s", task.InstanceID, newIP)
+	if task.ChangeCfDNS {
+		if err := s.updateCfDNSAfterChangeIP(task.TenantID, task.SelectedDomainCfgID, task.DomainPrefix, newIP, task.EnableProxy, task.TTL, task.Remark); err != nil {
+			log.Printf("[mem-task] change-ip dns: %v", err)
+		}
+	}
+	s.notify(task.TenantID, fmt.Sprintf("【更换公共IP】实例 %s 新公网IP: %s", task.InstanceID, newIP))
+	memTasksMu.Lock()
+	delete(memTasks, task.ID)
+	memTasksMu.Unlock()
+	return true
+}
+
 func (s *Server) runUpdateCfgLoop(task *memTask) {
+	if s.runUpdateCfgAttempt(task) {
+		return
+	}
 	ticker := time.NewTicker(60 * time.Second)
 	defer ticker.Stop()
 	for {
@@ -226,59 +263,67 @@ func (s *Server) runUpdateCfgLoop(task *memTask) {
 		case <-s.stopping:
 			return
 		case <-ticker.C:
-			memTasksMu.Lock()
-			if task.Paused {
-				memTasksMu.Unlock()
-				continue
-			}
-			task.Attempts++
-			memTasksMu.Unlock()
-
-			tenant, err := s.store.GetTenant(task.TenantID)
-			if err != nil || tenant == nil {
-				log.Printf("[mem-task] update-cfg: tenant %d not found, removing task %s", task.TenantID, task.ID)
-				memTasksMu.Lock()
-				delete(memTasks, task.ID)
-				memTasksMu.Unlock()
-				return
-			}
-			client, err := s.clientFor(tenant)
-			if err != nil {
-				continue
-			}
-			var ocpu, mem float32
-			var parseFail bool
-			if task.Ocpus != "" {
-				o, err := strconv.ParseFloat(task.Ocpus, 32)
-				if err != nil || o <= 0 {
-					parseFail = true
-				} else {
-					ocpu = float32(o)
-				}
-			}
-			if task.Memory != "" {
-				m, err := strconv.ParseFloat(task.Memory, 32)
-				if err != nil || m <= 0 {
-					parseFail = true
-				} else {
-					mem = float32(m)
-				}
-			}
-			if parseFail {
-				continue
-			}
-			ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
-			err = client.UpdateInstance(ctx, task.InstanceID, task.Shape, ocpu, mem)
-			cancel()
-			if err == nil {
-				log.Printf("[mem-task] update-cfg done: %s", task.InstanceID)
-				memTasksMu.Lock()
-				delete(memTasks, task.ID)
-				memTasksMu.Unlock()
+			if s.runUpdateCfgAttempt(task) {
 				return
 			}
 		}
 	}
+}
+
+func (s *Server) runUpdateCfgAttempt(task *memTask) bool {
+	memTasksMu.Lock()
+	if task.Paused {
+		memTasksMu.Unlock()
+		return false
+	}
+	task.Attempts++
+	memTasksMu.Unlock()
+
+	tenant, err := s.store.GetTenant(task.TenantID)
+	if err != nil || tenant == nil {
+		log.Printf("[mem-task] update-cfg: tenant %d not found, removing task %s", task.TenantID, task.ID)
+		memTasksMu.Lock()
+		delete(memTasks, task.ID)
+		memTasksMu.Unlock()
+		return true
+	}
+	client, err := s.clientFor(tenant)
+	if err != nil {
+		return false
+	}
+	var ocpu, mem float32
+	var parseFail bool
+	if task.Ocpus != "" {
+		o, err := strconv.ParseFloat(task.Ocpus, 32)
+		if err != nil || o <= 0 {
+			parseFail = true
+		} else {
+			ocpu = float32(o)
+		}
+	}
+	if task.Memory != "" {
+		m, err := strconv.ParseFloat(task.Memory, 32)
+		if err != nil || m <= 0 {
+			parseFail = true
+		} else {
+			mem = float32(m)
+		}
+	}
+	if parseFail {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	err = client.UpdateInstance(ctx, task.InstanceID, task.Shape, ocpu, mem)
+	cancel()
+	if err != nil {
+		return false
+	}
+	log.Printf("[mem-task] update-cfg done: %s", task.InstanceID)
+	s.notify(task.TenantID, fmt.Sprintf("【修改配置任务】实例 %s 修改配置成功 (ocpus=%s memory=%s)", task.InstanceID, task.Ocpus, task.Memory))
+	memTasksMu.Lock()
+	delete(memTasks, task.ID)
+	memTasksMu.Unlock()
+	return true
 }
 
 func generateID() string {

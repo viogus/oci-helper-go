@@ -26,6 +26,7 @@ const routes = [
       { path: 'instances/create', name: 'InstanceCreate', component: () => import('../views/InstanceCreate.vue'), meta: { titleKey: 'route.instanceCreate', icon: 'Plus' } },
       { path: 'instances/batch-create', name: 'InstanceBatchCreate', component: () => import('../views/InstanceBatchCreate.vue'), meta: { titleKey: 'route.instanceBatchCreate', icon: 'Grid' } },
       { path: 'create-tasks', name: 'CreateTasks', component: () => import('../views/CreateTasks.vue'), meta: { titleKey: 'route.createTasks', icon: 'List' } },
+      { path: 'scheduled-tasks', name: 'ScheduledTasks', component: () => import('../views/ScheduledTasks.vue'), meta: { titleKey: 'route.scheduledTasks', icon: 'Timer' } },
       { path: 'security-rules', name: 'SecurityRules', component: () => import('../views/SecurityRules.vue'), meta: { titleKey: 'route.securityRules', icon: 'Lock' } },
       { path: 'traffic', name: 'Traffic', component: () => import('../views/Traffic.vue'), meta: { titleKey: 'route.traffic', icon: 'TrendCharts' } },
       { path: 'limits', name: 'Limits', component: () => import('../views/Limits.vue'), meta: { titleKey: 'route.limits', icon: 'DataAnalysis' } },

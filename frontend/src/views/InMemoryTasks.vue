@@ -261,6 +261,28 @@
               style="width: 100%"
             />
           </el-form-item>
+          <el-form-item label="更换后同步 Cloudflare DNS">
+            <el-switch v-model="form.change_cf_dns" />
+          </el-form-item>
+          <template v-if="form.change_cf_dns">
+            <el-form-item label="CF 配置">
+              <el-select v-model="form.selected_domain_cfg_id" style="width:100%">
+                <el-option v-for="c in cfConfigs" :key="c.id" :label="c.name" :value="c.id" />
+              </el-select>
+            </el-form-item>
+            <el-form-item label="域名前缀">
+              <el-input v-model="form.domain_prefix" placeholder="sub" />
+            </el-form-item>
+            <el-form-item label="代理">
+              <el-switch v-model="form.enable_proxy" />
+            </el-form-item>
+            <el-form-item label="TTL">
+              <el-input-number v-model="form.ttl" :min="1" />
+            </el-form-item>
+            <el-form-item label="备注">
+              <el-input v-model="form.remark" />
+            </el-form-item>
+          </template>
         </template>
 
         <!-- Update Config fields -->
@@ -327,11 +349,18 @@ const dialogVisible = ref(false)
 const tenants = ref([])
 const instances = ref([])
 const loadingInstances = ref(false)
+const cfConfigs = ref([])
 
 const form = reactive({
   tenant_id: 0,
   instance_id: '',
   cidr_list: '',
+  change_cf_dns: false,
+  selected_domain_cfg_id: null,
+  domain_prefix: '',
+  enable_proxy: false,
+  ttl: 120,
+  remark: '',
   ocpus: null,
   memory: null,
   shape: ''
@@ -421,6 +450,12 @@ function openAddDialog() {
   form.tenant_id = 0
   form.instance_id = ''
   form.cidr_list = ''
+  form.change_cf_dns = false
+  form.selected_domain_cfg_id = null
+  form.domain_prefix = ''
+  form.enable_proxy = false
+  form.ttl = 120
+  form.remark = ''
   form.ocpus = null
   form.memory = null
   form.shape = ''
@@ -465,6 +500,12 @@ async function handleAdd() {
       if (form.cidr_list) {
         payload.cidr_list = form.cidr_list.split(/[,\n]/).map(s => s.trim()).filter(Boolean)
       }
+      payload.change_cf_dns = form.change_cf_dns
+      payload.selected_domain_cfg_id = form.selected_domain_cfg_id
+      payload.domain_prefix = form.domain_prefix
+      payload.enable_proxy = form.enable_proxy
+      payload.ttl = form.ttl
+      payload.remark = form.remark
     } else {
       if (form.ocpus !== null && form.ocpus !== undefined) {
         payload.ocpus = String(form.ocpus)
@@ -543,6 +584,7 @@ function formatDate(dateStr) {
 onMounted(() => {
   loadTenants()
   loadTasks()
+  get('/cloudflare/cfgs').then(r => { cfConfigs.value = r?.data || [] }).catch(() => {})
   refreshTimer = setInterval(() => {
     loadTasks()
   }, 5000)

@@ -57,6 +57,9 @@
       <el-button @click="showVncInfo">
         {{ $t('instanceDetail.vnc') }}
       </el-button>
+      <el-button @click="rootPasswordDialog = true">
+        Root 密码
+      </el-button>
     </div>
 
     <el-card v-loading="loading" style="margin-top:12px">
@@ -109,7 +112,7 @@
     </el-card>
 
     <!-- Change IP dialog -->
-    <el-dialog v-model="changeIpDialog" :title="$t('instanceDetail.changeIpTitle')" width="420px" @closed="changeIpResult = ''">
+    <el-dialog v-model="changeIpDialog" :title="$t('instanceDetail.changeIpTitle')" width="520px" @closed="changeIpResult = ''">
       <p>{{ $t('instanceDetail.changeIpDesc', { ip: inst.publicIp || inst.privateIp }) }}</p>
       <div style="display:flex; gap:8px; align-items:center">
         <el-input v-model="changeIpCidr" placeholder="e.g. 10.0.0.0/24" />
@@ -117,6 +120,43 @@
           {{ $t('instanceDetail.startChange') }}
         </el-button>
       </div>
+      <el-form label-position="top" style="margin-top:12px">
+        <el-form-item label="更换后同步 Cloudflare DNS">
+          <el-switch v-model="changeCfDns" />
+        </el-form-item>
+        <template v-if="changeCfDns">
+          <el-form-item label="CF 配置">
+            <el-select v-model="selectedDomainCfgId" style="width:100%">
+              <el-option v-for="c in cfConfigs" :key="c.id" :label="c.name" :value="c.id" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="域名前缀">
+            <el-input v-model="domainPrefix" placeholder="sub" />
+          </el-form-item>
+          <el-form-item label="代理">
+            <el-switch v-model="enableProxy" />
+          </el-form-item>
+          <el-form-item label="TTL">
+            <el-input-number v-model="ttl" :min="1" :max="2147483647" />
+          </el-form-item>
+          <el-form-item label="备注">
+            <el-input v-model="remark" />
+          </el-form-item>
+        </template>
+      </el-form>
+    </el-dialog>
+
+    <el-dialog v-model="rootPasswordDialog" title="更新 Root 密码标签" width="420px">
+      <el-input
+        v-model="rootPassword"
+        type="password"
+        show-password
+        placeholder="留空则删除 root-password 标签"
+      />
+      <template #footer>
+        <el-button @click="rootPasswordDialog = false">取消</el-button>
+        <el-button type="primary" :loading="savingRootPassword" @click="saveRootPassword">保存</el-button>
+      </template>
     </el-dialog>
 
     <!-- VNC info dialog -->
@@ -173,6 +213,18 @@ const changeIpDialog = ref(false)
 const changeIpCidr = ref('')
 const changingIp = ref(false)
 const changeIpResult = ref('')
+const changeCfDns = ref(false)
+const selectedDomainCfgId = ref(null)
+const domainPrefix = ref('')
+const enableProxy = ref(false)
+const ttl = ref(120)
+const remark = ref('')
+const cfConfigs = ref([])
+
+// Root password
+const rootPasswordDialog = ref(false)
+const rootPassword = ref('')
+const savingRootPassword = ref(false)
 
 // VNC
 const vncDialog = ref(false)
@@ -198,6 +250,8 @@ onMounted(async () => {
         regionName.value = tRes?.region || tRes?.homeRegion || ''
       } catch {}
     }
+    const cfRes = await get('/cloudflare/cfgs')
+    cfConfigs.value = cfRes?.data || []
   } catch {}
   loading.value = false
 })
@@ -233,7 +287,13 @@ async function doChangeIp() {
     const res = await post('/instances/change-ip', {
       instance_id: decodeURIComponent(route.params.id),
       tenant_id: inst.value.tenantId,
-      cidr: changeIpCidr.value,
+      cidr_list: [changeIpCidr.value],
+      change_cf_dns: changeCfDns.value,
+      selected_domain_cfg_id: selectedDomainCfgId.value,
+      domain_prefix: domainPrefix.value,
+      enable_proxy: enableProxy.value,
+      ttl: ttl.value,
+      remark: remark.value
     })
     ElMessage.success(res?.message || 'Change IP task created')
     changeIpDialog.value = false
@@ -241,6 +301,23 @@ async function doChangeIp() {
     ElMessage.error(e.response?.data?.error || 'Change IP failed')
   }
   changingIp.value = false
+}
+
+async function saveRootPassword() {
+  savingRootPassword.value = true
+  try {
+    await post('/instances/update-password', {
+      instance_id: decodeURIComponent(route.params.id),
+      tenant_id: inst.value.tenantId,
+      password: rootPassword.value
+    })
+    ElMessage.success('已更新 root 密码标签')
+    rootPasswordDialog.value = false
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || '更新失败')
+  } finally {
+    savingRootPassword.value = false
+  }
 }
 
 async function showVncInfo() {

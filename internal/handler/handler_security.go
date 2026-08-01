@@ -29,6 +29,11 @@ func (s *Server) handleSecurityRules(w http.ResponseWriter, r *http.Request) {
 	Source   string   `json:"source"`
 	Dest     string   `json:"dest"`
 	RuleIDs  []string `json:"rule_ids"`
+	SourcePort string `json:"source_port"`
+	ICMPType  int      `json:"icmp_type"`
+	ICMPCode  int      `json:"icmp_code"`
+	Stateless bool     `json:"stateless"`
+	Description string `json:"description"`
 	// for batch update
 	IngressRules []json.RawMessage `json:"ingress_rules"`
 	EgressRules  []json.RawMessage `json:"egress_rules"`
@@ -58,14 +63,34 @@ func (s *Server) handleSecurityRules(w http.ResponseWriter, r *http.Request) {
 		}
 		jsonOK(w, map[string]interface{}{"data": rules, "total": total, "page": req.Page, "size": req.Size})
 	case "addIngress":
-		if err := client.AddIngressRule(r.Context(), req.VcnID, req.Protocol, req.Port, req.Source); err != nil {
+		var err error
+		if req.SourcePort != "" || req.ICMPType > 0 || req.Stateless || req.Description != "" {
+			err = client.AddIngressRuleAdvanced(r.Context(), req.VcnID, ociclient.SecurityRuleOptions{
+				Protocol: req.Protocol, Port: req.Port, SourceOrDest: req.Source,
+				SourcePort: req.SourcePort, ICMPType: req.ICMPType, ICMPCode: req.ICMPCode,
+				Stateless: req.Stateless, Description: req.Description,
+			})
+		} else {
+			err = client.AddIngressRule(r.Context(), req.VcnID, req.Protocol, req.Port, req.Source)
+		}
+		if err != nil {
 			jsonErr(w, "add ingress: "+err.Error())
 			return
 		}
 		s.audit(req.TenantID, "security-rule:add-ingress", req.VcnID, r)
 		jsonOK(w, map[string]string{"status": "ok"})
 	case "addEgress":
-		if err := client.AddEgressRule(r.Context(), req.VcnID, req.Protocol, req.Port, req.Dest); err != nil {
+		var err error
+		if req.SourcePort != "" || req.ICMPType > 0 || req.Stateless || req.Description != "" {
+			err = client.AddEgressRuleAdvanced(r.Context(), req.VcnID, ociclient.SecurityRuleOptions{
+				Protocol: req.Protocol, Port: req.Port, SourceOrDest: req.Dest,
+				SourcePort: req.SourcePort, ICMPType: req.ICMPType, ICMPCode: req.ICMPCode,
+				Stateless: req.Stateless, Description: req.Description,
+			})
+		} else {
+			err = client.AddEgressRule(r.Context(), req.VcnID, req.Protocol, req.Port, req.Dest)
+		}
+		if err != nil {
 			jsonErr(w, "add egress: "+err.Error())
 			return
 		}

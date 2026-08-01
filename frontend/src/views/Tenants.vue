@@ -5,6 +5,7 @@
       <el-button type="primary" @click="handleAdd">
         <el-icon><Plus /></el-icon> {{ $t('tenant.add') }}
       </el-button>
+      <el-button @click="batchDialogVisible = true">批量导入配置</el-button>
     </div>
 
     <div class="search-bar">
@@ -35,6 +36,14 @@
           </el-tag>
         </template>
       </el-table-column>
+      <el-table-column label="API 状态" width="100">
+        <template #default="{ row }">
+          <el-tag v-if="row.accountStatus" :type="row.accountStatus === 'ACTIVE' ? 'success' : 'danger'" size="small">
+            {{ row.accountStatus }}
+          </el-tag>
+          <span v-else>—</span>
+        </template>
+      </el-table-column>
       <el-table-column :label="$t('tenant.actions')" width="180" fixed="right">
         <template #default="{ row }">
           <el-button
@@ -49,6 +58,9 @@
           </el-button>
           <el-button type="danger" link size="small" @click="handleDelete(row.id)">
             {{ $t('common.delete') }}
+          </el-button>
+          <el-button type="warning" link size="small" :loading="aliveId === row.id" @click="checkAlive(row.id)">
+            测活
           </el-button>
         </template>
       </el-table-column>
@@ -169,6 +181,28 @@ key_file=~/.oci/key.pem"
         <el-button type="primary" :loading="saving" @click="handleSave">{{ $t('tenant.save') }}</el-button>
       </template>
     </el-dialog>
+
+    <el-dialog v-model="batchDialogVisible" title="批量导入 OCI 配置" width="520px">
+      <el-form label-position="top">
+        <el-form-item label="配置文件 (.ini/.txt，可多选)">
+          <input type="file" multiple accept=".ini,.txt" @change="onBatchConfigChange" />
+        </el-form-item>
+        <el-form-item label="密钥文件 (.pem，可多选)">
+          <input type="file" multiple accept=".pem" @change="onBatchKeyChange" />
+        </el-form-item>
+        <el-alert
+          v-if="batchResult"
+          :title="'成功 ' + batchResult.success + '，失败 ' + batchResult.failed"
+          type="info"
+          :closable="false"
+          style="margin-top:8px"
+        />
+      </el-form>
+      <template #footer>
+        <el-button @click="batchDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="batchSaving" @click="submitBatch">导入</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -177,6 +211,7 @@ import { ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Search } from '@element-plus/icons-vue'
 import { useI18n } from 'vue-i18n'
+import { post } from '../api/index.js'
 const { t } = useI18n()
 import {
   listTenants,
@@ -184,7 +219,8 @@ import {
   deleteTenant,
   syncTenant,
   listKeys,
-  uploadKeys
+  uploadKeys,
+  uploadTenants
 } from '../api/tenants.js'
 
 
@@ -196,10 +232,16 @@ const size = ref(20)
 const keyword = ref('')
 const loading = ref(false)
 const syncingId = ref(null)
+const aliveId = ref(null)
 const saving = ref(false)
 
 // --- dialog state ---
 const dialogVisible = ref(false)
+const batchDialogVisible = ref(false)
+const batchConfigFiles = ref([])
+const batchKeyFiles = ref([])
+const batchSaving = ref(false)
+const batchResult = ref(null)
 const form = reactive({
   name: '',
   tenancyOcid: '',
@@ -361,6 +403,36 @@ async function uploadKeyFile(file) {
   }
 }
 
+function onBatchConfigChange(e) {
+  batchConfigFiles.value = Array.from(e.target.files || [])
+}
+
+function onBatchKeyChange(e) {
+  batchKeyFiles.value = Array.from(e.target.files || [])
+}
+
+async function submitBatch() {
+  if (batchConfigFiles.value.length === 0) {
+    ElMessage.warning('请选择至少一个配置文件')
+    return
+  }
+  batchSaving.value = true
+  batchResult.value = null
+  try {
+    const fd = new FormData()
+    for (const f of batchConfigFiles.value) fd.append('files', f)
+    for (const f of batchKeyFiles.value) fd.append('key_file', f)
+    const res = await uploadTenants(fd)
+    batchResult.value = res
+    ElMessage.success('批量导入完成')
+    loadTenants()
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || '批量导入失败')
+  } finally {
+    batchSaving.value = false
+  }
+}
+
 async function handleDrop(e) {
   dragOver.value = false
   const file = e.dataTransfer.files[0]
@@ -428,6 +500,20 @@ async function handleSync(id) {
     ElMessage.error(e.response?.data?.error || 'Sync failed')
   }
   syncingId.value = null
+}
+
+async function checkAlive(id) {
+  aliveId.value = id
+  try {
+    const res = await post('/tenants/check-alive', { tenant_ids: [id] })
+    const r = res.results?.[0]
+    ElMessage.success('API 状态: ' + (r?.status || '未知'))
+    loadTenants()
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || '测活失败')
+  } finally {
+    aliveId.value = null
+  }
 }
 </script>
 

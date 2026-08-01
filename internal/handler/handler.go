@@ -67,6 +67,8 @@ type Server struct {
 	mfaCacheMu sync.RWMutex
 
 	auditCh chan *db.AuditLog
+
+	createTaskRunning sync.Map
 }
 
 type mfaCacheEntry struct {
@@ -104,6 +106,11 @@ func New(cfg *config.Config, store *db.Store) *Server {
 	go s.startDNSAutoSync()
 	go s.startStockMonitor()
 	go s.conversationCacheCleanup()
+	go s.startCreateTaskScheduler()
+	go s.startDailyBroadcast()
+	go s.startVersionUpdateNotify()
+	go s.startupNotify()
+	go s.cleanLogTask()
 	go captchaCleanup(s.stopping)
 	go s.flushAuditLogs()
 	return s
@@ -290,6 +297,10 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/create-tasks", s.withAuth(s.handleCreateTasks))
 	s.mux.HandleFunc("/api/create-tasks/", s.withAuth(s.handleCreateTasks))
 
+	// Recurring instance-creation schedules (Java oci_create_task parity).
+	s.mux.HandleFunc("/api/create-tasks/recurring", s.withAuth(s.handleRecurringTasks))
+	s.mux.HandleFunc("/api/create-tasks/recurring/", s.withAuth(s.handleRecurringTaskByID))
+
 	// in-memory tasks
 	s.mux.HandleFunc("/api/mem-tasks/change-ip", s.withAuth(s.handleMemTasksChangeIP))
 	s.mux.HandleFunc("/api/mem-tasks/update-cfg", s.withAuth(s.handleMemTasksUpdateCfg))
@@ -305,6 +316,12 @@ func (s *Server) routes() {
 
 	// G11: captcha send
 	s.mux.HandleFunc("/api/captcha/send", s.withAuth(s.handleCaptchaSend))
+
+	// API credential aliveness check (Java /api/oci/checkAlive parity).
+	s.mux.HandleFunc("/api/tenants/check-alive", s.withAuth(s.handleTenantAliveCheck))
+
+	// Root password tag update.
+	s.mux.HandleFunc("/api/instances/update-password", s.withAuth(s.handleUpdateRootPassword))
 
 	// G14: AI chat cache clear (BEFORE wildcards)
 	s.mux.HandleFunc("/api/ai/chat/cache", s.withAuth(s.handleAIChatCacheClear))
@@ -492,6 +509,11 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	// Check persistent blacklist and rate limit before any auth processing.
 	ip := extractIP(r)
+	if blocked, _ := s.store.IsIPBlacklisted(ip); blocked {
+		log.Printf("[login] persistently blocked IP: %s", maskIP(ip))
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
 	if s.ratelimit.isBlocked(ip) {
 		log.Printf("[login] blocked IP: %s", maskIP(ip))
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
@@ -502,7 +524,9 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	username, _, ok := s.auth.ValidateCredentials(r)
 	if !ok {
 		w.Header().Set("WWW-Authenticate", `Basic realm="oci-helper"`)
-		s.ratelimit.allow(ip)
+		if !s.ratelimit.allow(ip) {
+			_ = s.store.AddLoginBlacklist(ip, "repeated login failures")
+		}
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
@@ -517,7 +541,9 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		// Per-user MFA is enabled — require TOTP
 		totp := r.Header.Get("X-TOTP")
 		if totp == "" || !auth.ValidateTOTP(user.MFASecret, totp) {
-			s.ratelimit.allow(ip)
+			if !s.ratelimit.allow(ip) {
+				_ = s.store.AddLoginBlacklist(ip, "repeated login failures")
+			}
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
@@ -530,7 +556,9 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		if mfaEnabled {
 			totp := r.Header.Get("X-TOTP")
 			if mfaSecret == "" || !auth.ValidateTOTP(mfaSecret, totp) {
-				s.ratelimit.allow(ip)
+				if !s.ratelimit.allow(ip) {
+					_ = s.store.AddLoginBlacklist(ip, "repeated login failures")
+				}
 				http.Error(w, "Unauthorized", http.StatusUnauthorized)
 				return
 			}
@@ -709,7 +737,10 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		keys := []string{
 			"mfa_enabled", "telegram_token", "dingtalk_webhook",
 			"google_client_id", "google_client_secret",
-			"cloudflare_token", "siliconflow_key",
+			"cloudflare_token", "siliconflow_key", "siliconflow_model",
+			"ai_search_enabled", "telegram_chat_id",
+			"daily_broadcast_enabled", "daily_broadcast_cron",
+			"version_update_notifications_enabled", "update_repo", "panel_url",
 		}
 		secretKeys := map[string]bool{
 			"telegram_token": true, "cloudflare_token": true,
@@ -1011,19 +1042,43 @@ func (s *Server) handleAIChat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Messages []ai.ChatMessage `json:"messages"`
+		SessionID      string           `json:"session_id"`
+		Model          string           `json:"model"`
+		EnableInternet *bool            `json:"enable_internet"`
+		Message        string           `json:"message"`
+		Messages       []ai.ChatMessage `json:"messages"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonErr(w, "invalid body: "+err.Error())
 		return
 	}
 
-	model, _ := s.store.GetConfig("siliconflow_model")
+	model := req.Model
+	if model == "" {
+		model, _ = s.store.GetConfig("siliconflow_model")
+	}
 	client := ai.New(apiKey, model)
 
 	// Optionally search DuckDuckGo for context
 	searchEnabled, _ := s.store.GetConfig("ai_search_enabled")
-	if searchEnabled == "true" && len(req.Messages) > 0 {
+	useInternet := req.EnableInternet != nil && *req.EnableInternet
+	if req.EnableInternet == nil {
+		useInternet = searchEnabled == "true"
+	}
+	// Session mode: server-side history, like the Java original.
+	if req.SessionID != "" && req.Message != "" {
+		s.conversationCacheMu.Lock()
+		entry, ok := s.conversationCache[req.SessionID]
+		if !ok {
+			entry = conversationEntry{messages: []ai.ChatMessage{}}
+		}
+		entry.messages = append(entry.messages, ai.ChatMessage{Role: "user", Content: req.Message})
+		req.Messages = append([]ai.ChatMessage{}, entry.messages...)
+		entry.lastAccess = time.Now()
+		s.conversationCache[req.SessionID] = entry
+		s.conversationCacheMu.Unlock()
+	}
+	if useInternet && len(req.Messages) > 0 {
 		lastMsg := req.Messages[len(req.Messages)-1].Content
 		if searchResults, err := ai.Search(lastMsg); err == nil && len(searchResults) > 0 {
 			req.Messages = append([]ai.ChatMessage{
@@ -1048,9 +1103,20 @@ func (s *Server) handleAIChat(w http.ResponseWriter, r *http.Request) {
 			flusher.Flush()
 			return
 		}
+		var streamText strings.Builder
 		for token := range ch {
+			streamText.WriteString(token)
 			fmt.Fprintf(w, "data: %s\n\n", token)
 			flusher.Flush()
+		}
+		if req.SessionID != "" && streamText.Len() > 0 {
+			s.conversationCacheMu.Lock()
+			if entry, ok := s.conversationCache[req.SessionID]; ok {
+				entry.messages = append(entry.messages, ai.ChatMessage{Role: "assistant", Content: streamText.String()})
+				entry.lastAccess = time.Now()
+				s.conversationCache[req.SessionID] = entry
+			}
+			s.conversationCacheMu.Unlock()
 		}
 		fmt.Fprintf(w, "data: [DONE]\n\n")
 		flusher.Flush()
@@ -1061,6 +1127,15 @@ func (s *Server) handleAIChat(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		jsonErr(w, "ai: "+err.Error())
 		return
+	}
+	if req.SessionID != "" {
+		s.conversationCacheMu.Lock()
+		if entry, ok := s.conversationCache[req.SessionID]; ok {
+			entry.messages = append(entry.messages, ai.ChatMessage{Role: "assistant", Content: resp})
+			entry.lastAccess = time.Now()
+			s.conversationCache[req.SessionID] = entry
+		}
+		s.conversationCacheMu.Unlock()
 	}
 	jsonOK(w, map[string]string{"reply": resp})
 }
@@ -1167,6 +1242,20 @@ func maskIP(s string) string {
 
 func strOr(p *string, fallback string) string {
 	if p != nil { return *p }
+	return fallback
+}
+
+func ptrFloat(p *float32, fallback float32) float32 {
+	if p != nil {
+		return *p
+	}
+	return fallback
+}
+
+func ptrInt64(p *int64, fallback int64) int64 {
+	if p != nil {
+		return *p
+	}
 	return fallback
 }
 
@@ -1306,11 +1395,19 @@ func (s *Server) handleAdminBlacklistClear(w http.ResponseWriter, r *http.Reques
 	var removed bool
 	if req.IP == "" {
 		s.ratelimit.clearBlockedIP("")
+		entries, _ := s.store.ListLoginBlacklist()
+		for _, e := range entries {
+			_, _ = s.store.RemoveLoginBlacklist(e.IP)
+		}
 		s.audit(0, "blacklist:clear-all", "all blocked IPs cleared", r)
 		jsonOK(w, map[string]interface{}{"status": "ok", "cleared": "all"})
 		return
 	}
 	removed = s.ratelimit.clearBlockedIP(req.IP)
+	dbRemoved, _ := s.store.RemoveLoginBlacklist(req.IP)
+	if dbRemoved {
+		removed = true
+	}
 	if removed {
 		s.audit(0, "blacklist:clear", req.IP, r)
 		jsonOK(w, map[string]interface{}{"status": "ok", "ip": req.IP})

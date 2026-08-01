@@ -267,6 +267,28 @@
       </template>
     </el-dialog>
 
+    <el-dialog v-model="networkDialogVisible" title="500Mbps" width="420px">
+      <el-form label-position="top">
+        <template v-if="networkEnabling">
+          <el-form-item label="SSH 端口">
+            <el-input-number v-model="networkForm.ssh_port" :min="1" :max="65535" />
+          </el-form-item>
+        </template>
+        <template v-else>
+          <el-form-item label="保留 NLB">
+            <el-switch v-model="networkForm.retain_bl" />
+          </el-form-item>
+          <el-form-item label="保留 NAT 网关">
+            <el-switch v-model="networkForm.retain_nat_gw" />
+          </el-form-item>
+        </template>
+      </el-form>
+      <template #footer>
+        <el-button @click="networkDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="!!netBusy[networkRow?.id]" @click="do500M">确认</el-button>
+      </template>
+    </el-dialog>
+
     <!-- Update Name Dialog -->
     <el-dialog v-model="nameDialogVisible" title="Update Name" width="420px" :close-on-click-modal="false">
       <el-form :model="nameForm" label-width="80px">
@@ -366,6 +388,10 @@ const metricsVisible = ref(false)
 const checkAliveVisible = ref(false)
 const checkAliveResults = ref([])
 const checkAliveLoading = ref(false)
+const networkDialogVisible = ref(false)
+const networkEnabling = ref(true)
+const networkRow = ref(null)
+const networkForm = reactive({ ssh_port: 22, retain_bl: false, retain_nat_gw: false })
 const currentInstance = ref(null)
 
 // Per-instance network status (500M/IPv6) and in-flight toggle marker.
@@ -473,32 +499,35 @@ async function loadNetworkStatus() {
 // the toggle should commit. Returns false on cancel or failure (switch reverts).
 async function confirm500M(row) {
   const enabling = !netStatus[row.id]?.nlb_enabled
-  try {
-    await ElMessageBox.confirm(
-      enabling ? t('instance.confirm500MEnable') : t('instance.confirm500MDisable'),
-      t('instance.networkBoost'),
-      { type: 'warning' }
-    )
-  } catch {
-    return false // cancelled
-  }
+  networkEnabling.value = enabling
+  networkRow.value = row
+  networkForm.ssh_port = 22
+  networkForm.retain_bl = false
+  networkForm.retain_nat_gw = false
+  networkDialogVisible.value = true
+  return false // switch reverts; dialog drives the actual state
+}
+
+async function do500M() {
+  const row = networkRow.value
+  if (!row) return
+  const enabling = networkEnabling.value
+  networkDialogVisible.value = false
   netBusy[row.id] = '500m'
   try {
     if (enabling) {
       const res = await post('/instances/one-click-500m',
-        { tenant_id: row.tenantId, instance_id: row.id }, { timeout: 360000 })
+        { tenant_id: row.tenantId, instance_id: row.id, ssh_port: networkForm.ssh_port }, { timeout: 360000 })
       netStatus[row.id] = { ...netStatus[row.id], nlb_enabled: true, nlb_ip: res?.nlb_ip || '' }
       ElMessage.success(t('instance.enabled500M') + (res?.nlb_ip ? ` (${res.nlb_ip})` : ''))
     } else {
       await post('/instances/one-click-close-500m',
-        { tenant_id: row.tenantId, instance_id: row.id }, { timeout: 180000 })
+        { tenant_id: row.tenantId, instance_id: row.id, retain_bl: networkForm.retain_bl, retain_nat_gw: networkForm.retain_nat_gw }, { timeout: 180000 })
       netStatus[row.id] = { ...netStatus[row.id], nlb_enabled: false, nlb_ip: '' }
       ElMessage.success(t('instance.disabled500M'))
     }
-    return true
   } catch (e) {
     ElMessage.error(e.response?.data?.error || '500M operation failed')
-    return false
   } finally {
     netBusy[row.id] = ''
   }

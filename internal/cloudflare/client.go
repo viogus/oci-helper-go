@@ -33,6 +33,7 @@ type DNSRecord struct {
 	Content string `json:"content,omitempty"`
 	Proxied *bool  `json:"proxied,omitempty"`
 	TTL     int    `json:"ttl,omitempty"`
+	Comment string `json:"comment,omitempty"`
 }
 
 type apiResponse[T any] struct {

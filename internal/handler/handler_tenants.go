@@ -355,6 +355,26 @@ func (s *Server) handleTenantInfo(w http.ResponseWriter, r *http.Request) {
 		totalMem += inst.MemoryGB
 	}
 
+	// Java details parity: instance list, NLB list, and Cloudflare configs.
+	nlbList, nlbErr := client.ListNLBs(r.Context(), t.TenancyOCID)
+	if nlbErr != nil {
+		log.Printf("[tenant-info] list NLBs for tenant %d: %v", id, nlbErr)
+	}
+	if nlbList == nil {
+		nlbList = []ociclient.NLBInfo{}
+	}
+	cfCfgs, cfErr := s.store.ListCfCfgs()
+	if cfErr != nil {
+		log.Printf("[tenant-info] list cf configs: %v", cfErr)
+	}
+	cfCfgList := make([]map[string]interface{}, 0, len(cfCfgs))
+	for _, c := range cfCfgs {
+		cfCfgList = append(cfCfgList, map[string]interface{}{
+			"id":     c.ID,
+			"domain": c.Name,
+		})
+	}
+
 	// Password policy from config table.
 	passwordExpiresAfter := 0
 	if v, err := s.store.GetConfig(fmt.Sprintf("tenant_pwdexp_%d", id)); err == nil {
@@ -382,6 +402,9 @@ func (s *Server) handleTenantInfo(w http.ResponseWriter, r *http.Request) {
 	resp := map[string]interface{}{
 		"tenant":                     t,
 		"regions":                    regionNames,
+		"instanceList":               instances,
+		"nlbList":                    nlbList,
+		"cfCfgList":                  cfCfgList,
 		"instanceStats":              stats,
 		"totalOCPU":                  totalOCPU,
 		"totalMemoryGB":              totalMem,
@@ -792,6 +815,10 @@ func (s *Server) handleTenantUpload(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, "parse multipart form: "+err.Error())
 		return
 	}
+	if files := r.MultipartForm.File["files"]; len(files) > 0 {
+		s.handleTenantUploadBatch(w, r, files)
+		return
+	}
 	keyFile, handler, err := r.FormFile("key_file")
 	if err != nil {
 		jsonErr(w, "key_file required: "+err.Error())
@@ -889,6 +916,11 @@ func (s *Server) handleRefreshPlanType(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Printf("[refresh-plan-type] client for tenant %d: %v", id, err)
 	} else {
+		if err := client.ValidateCredentials(r.Context(), t.TenancyOCID); err == nil {
+			_ = s.store.SetTenantAccountStatus(id, "ACTIVE")
+		} else {
+			_ = s.store.SetTenantAccountStatus(id, "INACTIVE")
+		}
 		sub, err := client.GetSubscriptionInfo(r.Context())
 		if err != nil {
 			log.Printf("[refresh-plan-type] subscription for tenant %d: %v", id, err)
@@ -937,6 +969,7 @@ func (s *Server) handleRefreshPlanTypeBatch(w http.ResponseWriter, r *http.Reque
 	type result struct {
 		TenantID int64  `json:"tenant_id"`
 		PlanType string `json:"plan_type"`
+		Status   string `json:"status"`
 		Error    string `json:"error"`
 	}
 	results := make([]result, 0, len(req.TenantIDs))
@@ -961,6 +994,11 @@ func (s *Server) handleRefreshPlanTypeBatch(w http.ResponseWriter, r *http.Reque
 			results = append(results, res)
 			continue
 		}
+		res.Status = "ACTIVE"
+		if err := client.ValidateCredentials(r.Context(), t.TenancyOCID); err != nil {
+			res.Status = "INACTIVE"
+		}
+		_ = s.store.SetTenantAccountStatus(tenantID, res.Status)
 		sub, err := client.GetSubscriptionInfo(r.Context())
 		if err != nil {
 			res.Error = "subscription: " + err.Error()
@@ -1006,4 +1044,3 @@ func timeStr(t *common.SDKTime) string {
 	}
 	return t.Format(time.RFC3339)
 }
-

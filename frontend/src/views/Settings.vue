@@ -81,6 +81,22 @@
             </el-button>
           </div>
         </el-form-item>
+        <el-form-item label="Telegram Chat ID">
+          <div class="setting-row">
+            <el-input
+              v-model="config.telegram_chat_id"
+              placeholder="Personal Telegram chat id for notifications"
+              :disabled="saving"
+            />
+            <el-button
+              type="primary"
+              :loading="saving"
+              @click="saveSetting('telegram_chat_id', config.telegram_chat_id)"
+            >
+              Save
+            </el-button>
+          </div>
+        </el-form-item>
       </el-form>
     </el-card>
 
@@ -182,6 +198,68 @@
             >
               Save
             </el-button>
+          </div>
+        </el-form-item>
+        <el-form-item label="SiliconFlow Model">
+          <div class="setting-row">
+            <el-input
+              v-model="config.siliconflow_model"
+              placeholder="deepseek-ai/DeepSeek-R1-0528-Qwen3-8B"
+              :disabled="saving"
+            />
+            <el-button
+              type="primary"
+              :loading="saving"
+              @click="saveSetting('siliconflow_model', config.siliconflow_model)"
+            >
+              Save
+            </el-button>
+          </div>
+        </el-form-item>
+        <el-form-item label="AI 联网搜索">
+          <el-switch
+            :model-value="config.ai_search_enabled === 'true'"
+            @change="v => saveSetting('ai_search_enabled', v ? 'true' : 'false')"
+          />
+        </el-form-item>
+      </el-form>
+    </el-card>
+
+    <el-card shadow="never" class="settings-card">
+      <template #header>
+        <div class="card-header">
+          <span>Scheduled Notifications</span>
+        </div>
+      </template>
+      <el-form label-position="top" @submit.prevent>
+        <el-form-item label="每日播报">
+          <el-switch
+            :model-value="config.daily_broadcast_enabled === 'true'"
+            @change="v => saveSetting('daily_broadcast_enabled', v ? 'true' : 'false')"
+          />
+        </el-form-item>
+        <el-form-item label="每日播报时间 (HH:MM)">
+          <div class="setting-row">
+            <el-input v-model="config.daily_broadcast_cron" placeholder="08:00" :disabled="saving" />
+            <el-button type="primary" :loading="saving" @click="saveSetting('daily_broadcast_cron', config.daily_broadcast_cron)">Save</el-button>
+          </div>
+        </el-form-item>
+        <el-form-item label="版本更新通知">
+          <el-switch
+            :model-value="config.version_update_notifications_enabled === 'true'"
+            @change="v => saveSetting('version_update_notifications_enabled', v ? 'true' : 'false')"
+          />
+        </el-form-item>
+        <el-form-item label="更新仓库 (owner/repo)">
+          <div class="setting-row">
+            <el-input v-model="config.update_repo" placeholder="viogus/oci-helper-go" :disabled="saving" />
+            <el-button type="primary" :loading="saving" @click="saveSetting('update_repo', config.update_repo)">Save</el-button>
+          </div>
+        </el-form-item>
+        <el-form-item label="面板地址 (panel_url)">
+          <div class="setting-row">
+            <el-input v-model="config.panel_url" placeholder="https://panel.example.com" :disabled="saving" />
+            <el-button type="primary" :loading="saving" @click="saveSetting('panel_url', config.panel_url)">Save</el-button>
           </div>
         </el-form-item>
       </el-form>

@@ -100,6 +100,38 @@
 
 ---
 
+## 2026-08-01 Gap Closure Update
+
+The July 2026 "100%" claim predates a fresh audit against the Java source.
+The following gaps found in that audit are now implemented:
+
+- Recurring create-task subsystem (`create_tasks` table, scheduler,
+  pause/resume/stop, restart-safe; auto-select shape/image/public subnet).
+- Tenant API aliveness check + `account_status` (ACTIVE/INACTIVE),
+  including `refreshCfgBatch` parity and daily broadcast.
+- Instance root-password freeform tag update endpoint.
+- 9-step auto-rescue flow (backup, detach/delete, AMD temp instance,
+  boot-volume clone, reattach, notify).
+- Change-IP Cloudflare DNS update (manual + in-memory recurring tasks).
+- 500Mbps `ssh_port`/AMD validation and NAT cleanup on disable.
+- AI chat server-side multi-turn sessions and Telegram AI chat.
+- Full-table encrypted backup/restore including key files.
+- Bulk `.ini/.txt` OCI config import.
+- Extended security-rule editor (ICMP, stateless, description, port ranges).
+- Global async OCI IP-data sync (type `oracle`).
+- Actual update trigger flag instead of an instructions-only stub.
+- Login IP blacklist persistence, startup/daily/version notifications,
+  periodic log cleanup, and tenant detail NLB/CF lists.
+
+Telegram bot: AI chat, MFA management, SSH key generation, recurring
+create-task wizard, VNC instance selection (with `panel_url` web-console
+links), boot-volume terminate/update, defense, blacklist, traffic, plans,
+logs, and config lists are all covered. The Go rewrite intentionally uses the
+embedded Web VNC/console proxy instead of spawning a host-side SSH tunnel like
+the Java process did.
+
+---
+
 ## 2. Architecture Parity — All Java Patterns Have Go Equivalents
 
 | Java Pattern | Go Equivalent | File |

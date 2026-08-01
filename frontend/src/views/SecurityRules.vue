@@ -168,11 +168,29 @@
           </el-select>
         </el-form-item>
 
-        <el-form-item label="端口" required>
+        <el-form-item label="目标端口" :required="ruleForm.protocol === 'TCP' || ruleForm.protocol === 'UDP'">
           <el-input
             v-model="ruleForm.port"
-            placeholder="e.g. 80, 443, or 3000-4000"
+            placeholder="e.g. 80 or 3000-4000"
           />
+        </el-form-item>
+
+        <el-form-item v-if="ruleForm.protocol === 'TCP' || ruleForm.protocol === 'UDP'" label="源端口">
+          <el-input v-model="ruleForm.source_port" placeholder="可选，例如 1024-65535" />
+        </el-form-item>
+
+        <el-form-item v-if="ruleForm.protocol === 'ICMP'" label="ICMP Type">
+          <el-input-number v-model="ruleForm.icmp_type" :min="0" :max="255" />
+        </el-form-item>
+        <el-form-item v-if="ruleForm.protocol === 'ICMP'" label="ICMP Code">
+          <el-input-number v-model="ruleForm.icmp_code" :min="0" :max="255" />
+        </el-form-item>
+
+        <el-form-item label="无状态">
+          <el-switch v-model="ruleForm.stateless" />
+        </el-form-item>
+        <el-form-item label="描述">
+          <el-input v-model="ruleForm.description" />
         </el-form-item>
 
         <el-form-item v-if="ruleForm.type === 'ingress'" label="来源" required>
@@ -237,7 +255,12 @@ const ruleForm = reactive({
   protocol: 'TCP',
   port: '',
   source: '0.0.0.0/0',
-  dest: '0.0.0.0/0'
+  dest: '0.0.0.0/0',
+  source_port: '',
+  icmp_type: 0,
+  icmp_code: 0,
+  stateless: false,
+  description: ''
 })
 
 // ---------------------------------------------------------------------------
@@ -368,11 +391,16 @@ function onDialogClosed() {
   ruleForm.port = ''
   ruleForm.source = '0.0.0.0/0'
   ruleForm.dest = '0.0.0.0/0'
+  ruleForm.source_port = ''
+  ruleForm.icmp_type = 0
+  ruleForm.icmp_code = 0
+  ruleForm.stateless = false
+  ruleForm.description = ''
 }
 
 async function handleAdd() {
   // Validation
-  if (!ruleForm.port.trim()) {
+  if ((ruleForm.protocol === 'TCP' || ruleForm.protocol === 'UDP') && !ruleForm.port.trim()) {
     ElMessage.warning('Port is required')
     return
   }
@@ -391,7 +419,12 @@ async function handleAdd() {
       tenant_id: tenantId.value,
       vcn_id: vcnId.value,
       protocol: ruleForm.protocol === 'all' ? '' : ruleForm.protocol,
-      port: ruleForm.port
+      port: ruleForm.port,
+      source_port: ruleForm.source_port,
+      icmp_type: ruleForm.icmp_type,
+      icmp_code: ruleForm.icmp_code,
+      stateless: ruleForm.stateless,
+      description: ruleForm.description
     }
 
     if (ruleForm.type === 'ingress') {

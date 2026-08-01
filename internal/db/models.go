@@ -12,6 +12,7 @@ type Tenant struct {
 	Fingerprint   string    `json:"fingerprint"`
 	KeyFile       string    `json:"keyFile"`
 	Status        string    `json:"status"`
+	AccountStatus string    `json:"accountStatus,omitempty"`
 	HomeRegion    string    `json:"homeRegion,omitempty"`
 	Subscribed    string    `json:"subscribed,omitempty"`
 	CreatedAt     time.Time `json:"createdAt"`
@@ -56,6 +57,36 @@ type Task struct {
 	CreatedAt    time.Time  `json:"createdAt"`
 	StartedAt    *time.Time `json:"startedAt,omitempty"`
 	FinishedAt   *time.Time `json:"finishedAt,omitempty"`
+}
+
+// CreateTask is a persisted recurring instance-creation schedule. It mirrors
+// the Java original's oci_create_task table: a task runs every interval
+// seconds, tries to create up to create_numbers instances, and is removed or
+// paused by the operator once done.
+type CreateTask struct {
+	ID              int64      `json:"id"`
+	TenantID        int64      `json:"tenantId"`
+	Region          string     `json:"region"`
+	OCPUs           float64    `json:"ocpus"`
+	MemoryGB        float64    `json:"memoryGB"`
+	Disk            int64      `json:"disk"`
+	Architecture    string     `json:"architecture"`
+	IntervalSeconds int        `json:"intervalSeconds"`
+	CreateNumbers   int        `json:"createNumbers"`
+	OperationSystem string     `json:"operationSystem"`
+	RootPassword    string     `json:"rootPassword"`
+	Paused          bool       `json:"paused"`
+	LastRunAt       *time.Time `json:"lastRunAt,omitempty"`
+	CreatedAt       time.Time  `json:"createdAt"`
+	UpdatedAt       time.Time  `json:"updatedAt"`
+}
+
+// LoginBlacklist persists IPs auto-blocked after repeated login failures so
+// the block survives a server restart.
+type LoginBlacklist struct {
+	IP        string    `json:"ip"`
+	Reason    string    `json:"reason"`
+	CreatedAt time.Time `json:"createdAt"`
 }
 
 // AuditLog records an auditable action performed through the panel.

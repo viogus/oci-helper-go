@@ -63,9 +63,50 @@ func (s *Server) createInstance(w http.ResponseWriter, r *http.Request) {
 		MemoryGB            *float32 `json:"memoryGB"`
 		SSHKeyID            int64   `json:"sshKeyId"`
 		RootPassword        string  `json:"rootPassword"`
+		IntervalSeconds     int     `json:"intervalSeconds"`
+		CreateNumbers       int     `json:"createNumbers"`
+		Architecture        string  `json:"architecture"`
+		OperationSystem     string  `json:"operationSystem"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonErr(w, "invalid body: "+err.Error())
+		return
+	}
+
+	// Java createInstance parity: when an interval is supplied, persist a
+	// recurring create task instead of launching a one-shot instance.
+	if req.IntervalSeconds > 0 {
+		if req.RootPassword == "" {
+			jsonErr(w, "rootPassword required for recurring create task")
+			return
+		}
+		if req.CreateNumbers <= 0 {
+			req.CreateNumbers = 1
+		}
+		if req.Architecture == "" {
+			req.Architecture = "AMD"
+		}
+		if req.OperationSystem == "" {
+			req.OperationSystem = "Ubuntu"
+		}
+		task := &db.CreateTask{
+			TenantID:        req.TenantID,
+			Region:          req.Region,
+			OCPUs:           float64(ptrFloat(req.OCPUs, 1)),
+			MemoryGB:        float64(ptrFloat(req.MemoryGB, 1)),
+			Disk:            ptrInt64(req.BootVolumeSizeGB, 50),
+			Architecture:    req.Architecture,
+			IntervalSeconds: req.IntervalSeconds,
+			CreateNumbers:   req.CreateNumbers,
+			OperationSystem: req.OperationSystem,
+			RootPassword:    req.RootPassword,
+		}
+		if err := s.store.CreateCreateTask(task); err != nil {
+			jsonErr(w, "create recurring task: "+err.Error())
+			return
+		}
+		s.audit(req.TenantID, "instance:create-task", fmt.Sprintf("schedule %d instances every %ds", task.CreateNumbers, task.IntervalSeconds), r)
+		jsonOK(w, task)
 		return
 	}
 
@@ -279,6 +320,9 @@ func (s *Server) handleInstanceAction(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.audit(req.TenantID, "instance:"+req.Action, instanceID, r)
+	if req.Action != "stopChangeIp" {
+		s.notify(req.TenantID, fmt.Sprintf("【实例操作】实例 %s %s 命令已下发", instanceID, req.Action))
+	}
 	jsonOK(w, map[string]string{"status": "ok", "action": req.Action, "instanceId": instanceID})
 }
 
@@ -656,9 +700,15 @@ func (s *Server) handleChangeIP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		TenantID   int64    `json:"tenant_id"`
-		InstanceID string   `json:"instance_id"`
-		CidrList   []string `json:"cidr_list"`
+		TenantID            int64    `json:"tenant_id"`
+		InstanceID          string   `json:"instance_id"`
+		CidrList            []string `json:"cidr_list"`
+		ChangeCfDNS         bool     `json:"change_cf_dns"`
+		SelectedDomainCfgID int64    `json:"selected_domain_cfg_id"`
+		DomainPrefix        string   `json:"domain_prefix"`
+		EnableProxy         *bool    `json:"enable_proxy"`
+		TTL                 int      `json:"ttl"`
+		Remark              string   `json:"remark"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonErr(w, "invalid body: "+err.Error())
@@ -674,8 +724,16 @@ func (s *Server) handleChangeIP(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, "change ip: "+err.Error())
 		return
 	}
+	dnsErr := ""
+	if req.ChangeCfDNS {
+		if err := s.updateCfDNSAfterChangeIP(req.TenantID, req.SelectedDomainCfgID, req.DomainPrefix, newIP, req.EnableProxy, req.TTL, req.Remark); err != nil {
+			dnsErr = err.Error()
+			log.Printf("[change-ip] cloudflare dns update: %v", err)
+		}
+	}
 	s.audit(req.TenantID, "instance:change-ip", req.InstanceID+" → "+maskIP(newIP), r)
-	jsonOK(w, map[string]string{"new_ip": newIP, "status": "ok"})
+	s.notify(req.TenantID, fmt.Sprintf("【更换公共IP】实例 %s 新公网IP: %s", req.InstanceID, newIP))
+	jsonOK(w, map[string]string{"new_ip": newIP, "status": "ok", "dns_error": dnsErr})
 }
 func (s *Server) handleCheckAlive(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -814,8 +872,10 @@ func (s *Server) handleShrinkDisk(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		TenantID   int64  `json:"tenant_id"`
-		InstanceID string `json:"instance_id"`
+		TenantID    int64  `json:"tenant_id"`
+		InstanceID  string `json:"instance_id"`
+		RetainBL    bool   `json:"retain_bl"`
+		RetainNatGW bool   `json:"retain_nat_gw"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonErr(w, "invalid body: "+err.Error())
@@ -1035,6 +1095,7 @@ func (s *Server) handleOneClick500M(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		TenantID   int64  `json:"tenant_id"`
 		InstanceID string `json:"instance_id"`
+		SSHPort    int    `json:"ssh_port"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonErr(w, "invalid body: "+err.Error())
@@ -1044,12 +1105,25 @@ func (s *Server) handleOneClick500M(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	nlbIP, err := client.Enable500Mbps(r.Context(), bareOCID(req.InstanceID))
+	if req.SSHPort <= 0 {
+		req.SSHPort = 22
+	}
+	inst, err := client.GetInstance(r.Context(), bareOCID(req.InstanceID))
+	if err != nil {
+		jsonErr(w, "get instance: "+err.Error())
+		return
+	}
+	if inst.Shape == nil || !strings.Contains(strings.ToLower(*inst.Shape), "vm.standard.e") {
+		jsonErr(w, "该实例不支持一键开启下行500Mbps")
+		return
+	}
+	nlbIP, err := client.Enable500Mbps(r.Context(), bareOCID(req.InstanceID), req.SSHPort)
 	if err != nil {
 		jsonErr(w, "enable 500M: "+err.Error())
 		return
 	}
 	s.audit(req.TenantID, "instance:500m-enable", req.InstanceID, r)
+	s.notify(req.TenantID, fmt.Sprintf("【一键开启下行500Mbps】实例 %s 已开启，NLB IP: %s", req.InstanceID, nlbIP))
 	jsonOK(w, map[string]string{"status": "ok", "nlb_ip": nlbIP})
 }
 
@@ -1059,8 +1133,10 @@ func (s *Server) handleOneClickClose500M(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	var req struct {
-		TenantID   int64  `json:"tenant_id"`
-		InstanceID string `json:"instance_id"`
+		TenantID    int64  `json:"tenant_id"`
+		InstanceID  string `json:"instance_id"`
+		RetainBL    bool   `json:"retain_bl"`
+		RetainNatGW bool   `json:"retain_nat_gw"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonErr(w, "invalid body: "+err.Error())
@@ -1070,11 +1146,12 @@ func (s *Server) handleOneClickClose500M(w http.ResponseWriter, r *http.Request)
 	if !ok {
 		return
 	}
-	if err := client.Disable500Mbps(r.Context(), bareOCID(req.InstanceID)); err != nil {
+	if err := client.Disable500Mbps(r.Context(), bareOCID(req.InstanceID), req.RetainBL, req.RetainNatGW); err != nil {
 		jsonErr(w, "disable 500M: "+err.Error())
 		return
 	}
 	s.audit(req.TenantID, "instance:500m-disable", req.InstanceID, r)
+	s.notify(req.TenantID, fmt.Sprintf("【关闭下行500Mbps】实例 %s 已关闭", req.InstanceID))
 	jsonOK(w, map[string]string{"status": "ok"})
 }
 func (s *Server) handleNetworkStatus(w http.ResponseWriter, r *http.Request) {
@@ -1128,8 +1205,9 @@ func (s *Server) handleAutoRescue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		TenantID   int64  `json:"tenant_id"`
-		InstanceID string `json:"instance_id"`
+		TenantID          int64  `json:"tenant_id"`
+		InstanceID        string `json:"instance_id"`
+		KeepBackupVolume  bool   `json:"keep_backup_volume"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonErr(w, "invalid body: "+err.Error())
@@ -1144,71 +1222,174 @@ func (s *Server) handleAutoRescue(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, "instance not found in DB — sync first")
 		return
 	}
-	if inst.PublicIP == "" {
-		jsonErr(w, "instance has no public IP")
-		return
-	}
-
-	// Quick TCP check — if already alive, respond immediately.
-	if checkTCPPort(inst.PublicIP, 22, 5*time.Second) {
-		jsonOK(w, map[string]interface{}{"status": "ok", "alive": true})
-		return
-	}
-
-	// Run rescue steps in background goroutine to avoid blocking HTTP handler.
+	// Run the full rescue sequence in a background goroutine so the HTTP call
+	// returns immediately, matching the Java original.
 	ocid := bareOCID(req.InstanceID)
 	instanceID := req.InstanceID
-	publicIP := inst.PublicIP
+	keepBackup := req.KeepBackupVolume
 
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 		defer cancel()
-
-		checkAlive := func() bool {
-			return checkTCPPort(publicIP, 22, 5*time.Second)
-		}
-
-		// Step 2: SOFTRESET
-		if _, err := client.InstanceAction(ctx, ocid, core.InstanceActionActionSoftreset); err != nil {
-			log.Printf("[autoRescue] softreset %s: %v", instanceID, err)
-		} else {
-			time.Sleep(30 * time.Second)
-			if checkAlive() {
-				log.Printf("[autoRescue] %s recovered via softreset", instanceID)
-				return
-			}
-		}
-
-		// Step 3: RESET
-		if _, err := client.InstanceAction(ctx, ocid, core.InstanceActionActionReset); err != nil {
-			log.Printf("[autoRescue] reset %s: %v", instanceID, err)
-		} else {
-			time.Sleep(60 * time.Second)
-			if checkAlive() {
-				log.Printf("[autoRescue] %s recovered via reset", instanceID)
-				return
-			}
-		}
-
-		// Step 4: STOP then START
-		if _, err := client.InstanceAction(ctx, ocid, core.InstanceActionActionStop); err != nil {
-			log.Printf("[autoRescue] stop %s: %v", instanceID, err)
-		} else {
-			time.Sleep(30 * time.Second)
-			if _, err := client.InstanceAction(ctx, ocid, core.InstanceActionActionStart); err != nil {
-				log.Printf("[autoRescue] start %s: %v", instanceID, err)
-			} else {
-				time.Sleep(60 * time.Second)
-				alive := checkAlive()
-				log.Printf("[autoRescue] %s stop+start done, alive=%v", instanceID, alive)
-			}
-		}
-
-		log.Printf("[autoRescue] %s rescue sequence complete", instanceID)
+		s.runAutoRescue(ctx, req.TenantID, instanceID, ocid, client, keepBackup)
 	}()
 
 	s.audit(req.TenantID, "instance:auto-rescue:started", req.InstanceID, r)
 	jsonOK(w, map[string]interface{}{"status": "running", "instance_id": req.InstanceID})
+}
+
+func (s *Server) runAutoRescue(ctx context.Context, tenantID int64, instanceID, ocid string, client *ociclient.Client, keepBackup bool) {
+	tenant, err := s.store.GetTenant(tenantID)
+	if err != nil || tenant == nil {
+		log.Printf("[autoRescue] tenant %d not found", tenantID)
+		return
+	}
+	fail := func(step string, err error) {
+		log.Printf("[autoRescue] %s: %v", step, err)
+		s.notify(tenantID, fmt.Sprintf("【自动救援/缩小硬盘任务】用户:[%s] 步骤[%s]失败：%v", tenant.Name, step, err))
+	}
+	inst, err := client.GetInstance(ctx, ocid)
+	if err != nil {
+		fail("获取实例", err)
+		return
+	}
+	compartmentID := strOr(inst.CompartmentId, tenant.TenancyOCID)
+	ad := strOr(inst.AvailabilityDomain, "")
+	if ad == "" {
+		fail("获取可用域", fmt.Errorf("instance has no availability domain"))
+		return
+	}
+
+	// (1) Stop the instance.
+	initialState := string(inst.LifecycleState)
+	if initialState == "RUNNING" || initialState == "STARTING" {
+		if _, err := client.InstanceAction(ctx, ocid, core.InstanceActionActionStop); err != nil {
+			fail("关机", err)
+			return
+		}
+		if !client.WaitForState(ctx, ocid, "STOPPED", 5*time.Minute) {
+			fail("等待关机", fmt.Errorf("timeout waiting for STOPPED"))
+			return
+		}
+	}
+	attachments, err := client.ListBootVolumeAttachments(ctx, compartmentID, ocid)
+	if err != nil || len(attachments) == 0 {
+		fail("获取引导卷", fmt.Errorf("no boot volume attachment: %w", err))
+		return
+	}
+	oldBV := strOr(attachments[0].BootVolumeId, "")
+	attachmentID := strOr(attachments[0].Id, "")
+	if oldBV == "" || attachmentID == "" {
+		fail("获取引导卷", fmt.Errorf("missing boot volume or attachment id"))
+		return
+	}
+
+	// (2) Backup the old boot volume.
+	backup, err := client.CreateBootVolumeBackup(ctx, oldBV, "Old-BootVolume-Backup")
+	if err != nil {
+		fail("备份引导卷", err)
+		return
+	}
+	backupID := strOr(backup.Id, "")
+	for i := 0; i < 60; i++ {
+		b, err := client.GetBootVolumeBackup(ctx, backupID)
+		if err == nil && b.LifecycleState == core.BootVolumeBackupLifecycleStateAvailable {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			fail("等待备份完成", ctx.Err())
+			return
+		case <-time.After(5 * time.Second):
+		}
+	}
+
+	// (3) Detach and (4) delete the old boot volume.
+	if err := client.DetachBootVolume(ctx, attachmentID); err != nil {
+		fail("分离引导卷", err)
+		return
+	}
+	if err := client.DeleteBootVolume(ctx, oldBV); err != nil {
+		fail("删除引导卷", err)
+		return
+	}
+
+	// (5) Create a temporary AMD 47GB instance, then clone its boot volume.
+	subnet, err := client.EnsurePublicSubnet(ctx, compartmentID)
+	if err != nil || subnet.Id == nil {
+		fail("准备公网子网", fmt.Errorf("no public subnet: %w", err))
+		return
+	}
+	image, err := client.FindImageForOS(ctx, compartmentID, "Ubuntu", "VM.Standard.E2.1.Micro")
+	if err != nil {
+		fail("选择镜像", err)
+		return
+	}
+	tmpName := fmt.Sprintf("oci-helper-rescue-%d", time.Now().UnixNano()/1e6)
+	tmpInst, err := client.LaunchTaskInstance(ctx, ad, "VM.Standard.E2.1.Micro", *image.Id, *subnet.Id, tmpName, 1, 1, 47, "ocihelper2024")
+	if err != nil {
+		fail("创建AMD实例", err)
+		return
+	}
+	tmpID := strOr(tmpInst.Id, "")
+	if !client.WaitForState(ctx, tmpID, "RUNNING", 5*time.Minute) {
+		fail("等待AMD实例启动", fmt.Errorf("timeout"))
+		return
+	}
+	tmpAttachments, err := client.ListBootVolumeAttachments(ctx, compartmentID, tmpID)
+	if err != nil || len(tmpAttachments) == 0 || tmpAttachments[0].BootVolumeId == nil {
+		fail("获取AMD引导卷", fmt.Errorf("no attachment"))
+		return
+	}
+
+	// (6) Clone the new boot volume onto the original instance's AD.
+	clone, err := client.CreateBootVolume(ctx, compartmentID, ad, *tmpAttachments[0].BootVolumeId, "Cloned-Boot-Volume", 47)
+	if err != nil {
+		fail("克隆引导卷", err)
+		return
+	}
+	cloneID := strOr(clone.Id, "")
+	for i := 0; i < 60; i++ {
+		v, err := client.GetBootVolume(ctx, cloneID)
+		if err == nil && v.LifecycleState == core.BootVolumeLifecycleStateAvailable {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			fail("等待克隆完成", ctx.Err())
+			return
+		case <-time.After(5 * time.Second):
+		}
+	}
+
+	// (7) Attach the clone to the rescued instance.
+	if _, err := client.AttachBootVolume(ctx, cloneID, ocid); err != nil {
+		fail("附加引导卷", err)
+		return
+	}
+
+	// (8) Delete the temporary AMD instance.
+	if err := client.TerminateInstance(ctx, tmpID, false, false); err != nil {
+		log.Printf("[autoRescue] terminate temp instance: %v", err)
+	}
+	if !keepBackup {
+		if err := client.DeleteBootVolumeBackup(ctx, backupID); err != nil {
+			log.Printf("[autoRescue] delete backup: %v", err)
+		}
+	}
+
+	// (9) Start the instance and notify.
+	if _, err := client.InstanceAction(ctx, ocid, core.InstanceActionActionStart); err != nil {
+		fail("启动实例", err)
+		return
+	}
+	client.WaitForState(ctx, ocid, "RUNNING", 5*time.Minute)
+	publicIP := ""
+	if vnics, err := client.GetInstanceVNICs(ctx, compartmentID, ocid); err == nil && len(vnics) > 0 && vnics[0].PublicIp != nil {
+		publicIP = *vnics[0].PublicIp
+	}
+	s.notify(tenantID, fmt.Sprintf("【自动救援/缩小硬盘任务】\n用户：%s\n区域：%s\n实例：%s\n公网IP：%s\nSSH端口：22\nSSH账号：root\nSSH密码：ocihelper2024",
+		tenant.Name, tenant.Region, instanceID, publicIP))
 }
 // ── G6: Direct Instance Config Update ───────────────────────────────────
 

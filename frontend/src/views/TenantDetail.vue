@@ -40,6 +40,12 @@
         <el-descriptions :column="2" border>
           <el-descriptions-item :label="$t('tenantDetail.id')">{{ tenant.id }}</el-descriptions-item>
           <el-descriptions-item :label="$t('tenantDetail.name')">{{ tenant.name }}</el-descriptions-item>
+          <el-descriptions-item :label="$t('tenantDetail.accountStatus')">
+            <el-tag v-if="tenant.accountStatus" :type="tenant.accountStatus === 'ACTIVE' ? 'success' : 'danger'" size="small">
+              {{ tenant.accountStatus || '—' }}
+            </el-tag>
+            <span v-else>—</span>
+          </el-descriptions-item>
           <el-descriptions-item :label="$t('tenantDetail.region')">
             <el-tag size="small">{{ tenant.region }}</el-tag>
           </el-descriptions-item>

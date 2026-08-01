@@ -2436,8 +2436,12 @@ func (c *Client) ensureNatRouteTable(ctx context.Context, compartmentID, vcnID, 
 	return &createResp.RouteTable, nil
 }
 
-func (c *Client) Enable500Mbps(ctx context.Context, instanceID string) (string, error) {
+func (c *Client) Enable500Mbps(ctx context.Context, instanceID string, sshPort int) (string, error) {
 	compartmentID := c.tenant.TenancyOCID
+
+	if sshPort <= 0 || sshPort > 65535 {
+		sshPort = 22
+	}
 
 	// Idempotent: if an NLB already exists for this instance, return its public IP.
 	if existing, err := c.findInstanceNLB(ctx, compartmentID, instanceID); err != nil {
@@ -2528,10 +2532,10 @@ func (c *Client) Enable500Mbps(ctx context.Context, instanceID string) (string, 
 				bsName: {
 					Policy:     networkloadbalancer.NetworkLoadBalancingPolicyFiveTuple,
 					IsFailOpen: common.Bool(true),
-					HealthChecker: &networkloadbalancer.HealthChecker{
-						Protocol: networkloadbalancer.HealthCheckProtocolsTcp,
-						Port:     common.Int(22),
-					},
+				HealthChecker: &networkloadbalancer.HealthChecker{
+					Protocol: networkloadbalancer.HealthCheckProtocolsTcp,
+					Port:     common.Int(sshPort),
+				},
 					Backends: []networkloadbalancer.Backend{
 						{IpAddress: common.String(privateIP), Port: common.Int(0), Name: common.String(instanceID)},
 					},
@@ -2613,8 +2617,10 @@ func (c *Client) Enable500Mbps(ctx context.Context, instanceID string) (string, 
 	return "", fmt.Errorf("create NLB after 3 retries: %w", lastErr)
 }
 
-// Disable500Mbps deletes the NLB and unbinds the VNIC from the NAT route table.
-func (c *Client) Disable500Mbps(ctx context.Context, instanceID string) error {
+// Disable500Mbps deletes the NLB (unless retained), unbinds the VNIC from the
+// NAT route table, and optionally removes the NAT gateway and NAT route table
+// created for the 500Mbps feature.
+func (c *Client) Disable500Mbps(ctx context.Context, instanceID string, retainBL, retainNatGW bool) error {
 	compartmentID := c.tenant.TenancyOCID
 
 	// Unbind VNIC from NAT route table if bound.
@@ -2637,45 +2643,51 @@ func (c *Client) Disable500Mbps(ctx context.Context, instanceID string) error {
 	if err != nil {
 		return err
 	}
-	if nlb == nil {
-		return nil // idempotent: nothing to delete
-	}
-	nlbID := nlb.Id
-
-	delResp, err := c.nlb.DeleteNetworkLoadBalancer(ctx, networkloadbalancer.DeleteNetworkLoadBalancerRequest{
-		NetworkLoadBalancerId: nlbID,
-	})
-	if err != nil {
-		return fmt.Errorf("delete NLB: %w", err)
-	}
-	workReqID := delResp.OpcWorkRequestId
-	if workReqID == nil || *workReqID == "" {
-		return nil
-	}
-	log.Printf("[Disable500Mbps] NLB delete work request: %s", *workReqID)
-
-	pollInterval := 5 * time.Second
-	deadline := time.Now().Add(3 * time.Minute)
-	for time.Now().Before(deadline) {
-		wr, err := c.nlb.GetWorkRequest(ctx, networkloadbalancer.GetWorkRequestRequest{WorkRequestId: workReqID})
+	if nlb != nil && !retainBL {
+		nlbID := nlb.Id
+		delResp, err := c.nlb.DeleteNetworkLoadBalancer(ctx, networkloadbalancer.DeleteNetworkLoadBalancerRequest{
+			NetworkLoadBalancerId: nlbID,
+		})
 		if err != nil {
-			return fmt.Errorf("poll NLB delete: %w", err)
+			return fmt.Errorf("delete NLB: %w", err)
 		}
-		status := wr.Status
-		switch status {
-		case networkloadbalancer.OperationStatusSucceeded:
-			log.Printf("[Disable500Mbps] NLB deleted")
-			return nil
-		case networkloadbalancer.OperationStatusFailed:
-			return fmt.Errorf("NLB deletion failed")
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(pollInterval):
+		workReqID := delResp.OpcWorkRequestId
+		if workReqID != nil && *workReqID != "" {
+			log.Printf("[Disable500Mbps] NLB delete work request: %s", *workReqID)
+			pollInterval := 5 * time.Second
+			deadline := time.Now().Add(3 * time.Minute)
+			for time.Now().Before(deadline) {
+				wr, err := c.nlb.GetWorkRequest(ctx, networkloadbalancer.GetWorkRequestRequest{WorkRequestId: workReqID})
+				if err != nil {
+					return fmt.Errorf("poll NLB delete: %w", err)
+				}
+				switch wr.Status {
+				case networkloadbalancer.OperationStatusSucceeded:
+					log.Printf("[Disable500Mbps] NLB deleted")
+					goto natCleanup
+				case networkloadbalancer.OperationStatusFailed:
+					return fmt.Errorf("NLB deletion failed")
+				}
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-time.After(pollInterval):
+				}
+			}
+			return fmt.Errorf("NLB deletion timed out")
 		}
 	}
-	return fmt.Errorf("NLB deletion timed out")
+natCleanup:
+	if !retainNatGW {
+		if len(vnics) > 0 && vnics[0].SubnetId != nil {
+			if subnet, err := c.vcn.GetSubnet(ctx, core.GetSubnetRequest{SubnetId: vnics[0].SubnetId}); err == nil && subnet.VcnId != nil {
+				if err := c.ClearNatGatewayCleanup(ctx, compartmentID, *subnet.VcnId); err != nil {
+					log.Printf("[Disable500Mbps] nat cleanup: %v", err)
+				}
+			}
+		}
+	}
+	return nil
 }
 
 // ChangeInstanceIP replaces the ephemeral public IP of an instance.

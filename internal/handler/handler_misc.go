@@ -196,6 +196,51 @@ func (s *Server) handleTelegramWebhook(w http.ResponseWriter, r *http.Request) {
 		chatID := update.Message.Chat.ID
 		text := update.Message.Text
 
+		tgVolUpdateMu.Lock()
+		_, volWaiting := tgVolUpdateStates[chatID]
+		tgVolUpdateMu.Unlock()
+		if volWaiting {
+			s.tgVolumeUpdate(bot, chatID, text)
+			jsonOK(w, map[string]string{"status": "ok"})
+			return
+		}
+
+		tgCreateMu.Lock()
+		_, creating := tgCreateStates[chatID]
+		tgCreateMu.Unlock()
+		if creating {
+			s.tgCreateRespond(bot, chatID, text)
+			jsonOK(w, map[string]string{"status": "ok"})
+			return
+		}
+
+		tgSSHMu.Lock()
+		sshWaiting := tgSSHStates[chatID]
+		tgSSHMu.Unlock()
+		if sshWaiting {
+			s.tgSSHGenerate(bot, chatID, text)
+			jsonOK(w, map[string]string{"status": "ok"})
+			return
+		}
+
+		tgMFAMu.Lock()
+		mfaWaiting := tgMFAStates[chatID]
+		tgMFAMu.Unlock()
+		if mfaWaiting {
+			s.tgMFADisable(bot, chatID, text)
+			jsonOK(w, map[string]string{"status": "ok"})
+			return
+		}
+
+		tgAIWaitingMu.Lock()
+		waitingAI := tgAIWaiting[chatID]
+		tgAIWaitingMu.Unlock()
+		if waitingAI {
+			s.tgAIRespond(bot, chatID, text)
+			jsonOK(w, map[string]string{"status": "ok"})
+			return
+		}
+
 		switch {
 		case text == "/start":
 			kb := tgMainKeyboard()
@@ -534,13 +579,17 @@ func (s *Server) handleUpdateNow(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	// For a Docker-based deployment, the recommended update method is to pull a new image.
-	// For non-Docker: download the release asset and replace the binary.
-	// This endpoint provides the update instructions.
+	// Write the same trigger flag the Java original uses; the deployment
+	// watcher (or Docker health/entrypoint wrapper) can react to it.
+	flagPath := filepath.Join(filepath.Dir(s.cfg.DBPath), "update_version_trigger.flag")
+	if err := os.WriteFile(flagPath, []byte(time.Now().Format(time.RFC3339)), 0600); err != nil {
+		log.Printf("[update] write trigger flag: %v", err)
+	}
 	s.audit(0, "update:trigger", "", r)
 	jsonOK(w, map[string]interface{}{
-		"status":  "update_instructions",
-		"message": `To update in Docker: docker pull ghcr.io/viogus/oci-helper-go:latest && docker compose up -d. For binary: download from GitHub releases and replace the binary.`,
+		"status":    "triggered",
+		"flag_file": flagPath,
+		"message":   "Update trigger written. Docker deployments should watch this flag or restart from a new image.",
 	})
 }
 

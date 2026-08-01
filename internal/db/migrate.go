@@ -203,6 +203,37 @@ var migrations = []struct {
 			`CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs(created_at)`,
 		},
 	},
+	{
+		Version: 9,
+		Name:    "account_status_recurring_tasks_blacklist",
+		SQL: []string{
+			`ALTER TABLE tenants ADD COLUMN account_status TEXT NOT NULL DEFAULT ''`,
+			`CREATE TABLE IF NOT EXISTS create_tasks (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				tenant_id INTEGER NOT NULL REFERENCES tenants(id),
+				region TEXT NOT NULL DEFAULT '',
+				ocpus REAL NOT NULL DEFAULT 1,
+				memory_gb REAL NOT NULL DEFAULT 1,
+				disk INTEGER NOT NULL DEFAULT 50,
+				architecture TEXT NOT NULL DEFAULT 'AMD',
+				interval_seconds INTEGER NOT NULL DEFAULT 60,
+				create_numbers INTEGER NOT NULL DEFAULT 1,
+				operation_system TEXT NOT NULL DEFAULT 'Ubuntu',
+				root_password TEXT NOT NULL DEFAULT '',
+				paused INTEGER NOT NULL DEFAULT 0,
+				last_run_at DATETIME,
+				created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+				updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+			)`,
+			`CREATE TABLE IF NOT EXISTS login_blacklist (
+				ip TEXT PRIMARY KEY,
+				reason TEXT NOT NULL DEFAULT '',
+				created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+			)`,
+			`CREATE INDEX IF NOT EXISTS idx_create_tasks_tenant_id ON create_tasks(tenant_id)`,
+			`CREATE INDEX IF NOT EXISTS idx_create_tasks_paused ON create_tasks(paused)`,
+		},
+	},
 }
 
 func (s *Store) runMigrations() error {

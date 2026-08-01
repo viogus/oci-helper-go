@@ -27,3 +27,7 @@ export function listKeys() {
 export function uploadKeys(formData) {
   return upload('/keys', formData)
 }
+
+export function uploadTenants(formData) {
+  return upload('/tenants/upload', formData)
+}

@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -9,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/oracle/oci-go-sdk/v65/core"
 	"github.com/viogus/oci-helper-go/internal/db"
 	"github.com/viogus/oci-helper-go/internal/geoip"
 )
@@ -44,6 +46,11 @@ func (s *Server) handleIpData(w http.ResponseWriter, r *http.Request) {
 
 		// Special action: load OCI instance IPs
 		if req.Action == "load_oci" {
+			if req.TenantID == 0 {
+				go s.handleIpDataLoadOCIGlobal(r)
+				jsonOK(w, map[string]string{"status": "started"})
+				return
+			}
 			s.handleIpDataLoadOCI(w, r, req.TenantID)
 			return
 		}
@@ -96,6 +103,72 @@ func (s *Server) handleIpData(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+// handleIpDataLoadOCIGlobal mirrors the Java loadOciIpData: clear old
+// Oracle-typed entries, then refresh live public IPs from every configured
+// tenant asynchronously.
+func (s *Server) handleIpDataLoadOCIGlobal(r *http.Request) {
+	_ = r
+	ctx := context.Background()
+	// Clear only entries previously imported from OCI.
+	existing, _ := s.store.ListIpData(0, "oracle")
+	for _, d := range existing {
+		_ = s.store.DeleteIpData(d.ID)
+	}
+	tenants, err := s.store.ListTenants()
+	if err != nil {
+		log.Printf("[ip-data] load oci global: %v", err)
+		return
+	}
+	added := 0
+	for _, t := range tenants {
+		client, err := s.clientFor(&t)
+		if err != nil {
+			continue
+		}
+		regions := discoverRegions(ctx, client)
+		if len(regions) == 0 {
+			regions = []string{t.Region}
+		}
+		for _, region := range regions {
+			client.SetRegion(region)
+			instances, err := client.ListInstances(ctx, t.TenancyOCID)
+			if err != nil {
+				continue
+			}
+			for _, inst := range instances {
+				if inst.LifecycleState != core.InstanceLifecycleStateRunning {
+					continue
+				}
+				vnics, err := client.GetInstanceVNICs(ctx, t.TenancyOCID, *inst.Id)
+				if err != nil || len(vnics) == 0 || vnics[0].PublicIp == nil {
+					continue
+				}
+				pub := *vnics[0].PublicIp
+				d := &db.IpData{
+					TenantID: t.ID,
+					CIDR:     pub + "/32",
+					Label:    strOr(inst.DisplayName, ""),
+					Type:     "oracle",
+					Enabled:  true,
+				}
+				if info, geoErr := geoip.Lookup(pub); geoErr == nil {
+					d.Lat = info.Lat
+					d.Lng = info.Lng
+					d.Country = info.Country
+					d.Area = info.Area
+					d.City = info.City
+					d.Org = info.Org
+					d.Asn = info.Asn
+				}
+				if err := s.store.CreateIpData(d); err == nil {
+					added++
+				}
+			}
+		}
+	}
+	log.Printf("[ip-data] global oci sync complete: %d IPs", added)
 }
 
 func (s *Server) handleIpDataLoadOCI(w http.ResponseWriter, r *http.Request, tenantID int64) {

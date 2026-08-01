@@ -4,9 +4,10 @@
       <template #header>
         <div class="card-header">
           <span>AI Chat</span>
-          <el-button size="small" @click="clearChat" :disabled="loading">
-            Clear
-          </el-button>
+        <el-button size="small" @click="clearChat" :disabled="loading">
+          Clear
+        </el-button>
+        <el-switch v-model="enableInternet" size="small" active-text="Internet" />
         </div>
       </template>
 
@@ -56,6 +57,8 @@ const messages = ref([
 const input = ref('')
 const loading = ref(false)
 const chatContainer = ref(null)
+const sessionId = ref('session-' + Date.now() + '-' + Math.random().toString(36).slice(2))
+const enableInternet = ref(false)
 
 function scrollToBottom() {
   nextTick(() => {
@@ -75,7 +78,11 @@ async function send() {
   scrollToBottom()
 
   try {
-    const r = await post('/ai/chat', { messages: [{ role: 'user', content: msg }] })
+    const r = await post('/ai/chat', {
+      session_id: sessionId.value,
+      message: msg,
+      enable_internet: enableInternet.value
+    })
     messages.value.push({ role: 'ai', content: r.reply || 'No response' })
   } catch (e) {
     const detail = e.response?.data?.error || 'AI service unavailable'
@@ -91,6 +98,7 @@ function clearChat() {
   messages.value = [
     { role: 'ai', content: 'Ask me about your OCI instances...' }
   ]
+  sessionId.value = 'session-' + Date.now() + '-' + Math.random().toString(36).slice(2)
 }
 
 onMounted(() => {

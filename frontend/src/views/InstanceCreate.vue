@@ -159,6 +159,32 @@
         </span>
       </el-form-item>
 
+      <el-form-item label="定时开机任务">
+        <el-switch v-model="form.scheduleEnabled" />
+      </el-form-item>
+      <template v-if="form.scheduleEnabled">
+        <el-form-item label="创建数量/间隔(秒)">
+          <div style="display:flex;gap:8px">
+            <el-input-number v-model="form.createNumbers" :min="1" :max="100" />
+            <el-input-number v-model="form.intervalSeconds" :min="30" :max="86400" />
+          </div>
+        </el-form-item>
+        <el-form-item label="架构">
+          <el-select v-model="form.architecture" style="width: 180px">
+            <el-option label="AMD" value="AMD" />
+            <el-option label="ARM" value="ARM" />
+            <el-option label="AMD E5" value="AMD_E5" />
+            <el-option label="ARM A2" value="ARM_A2" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="系统">
+          <el-input v-model="form.operationSystem" placeholder="Ubuntu" style="width: 240px" />
+        </el-form-item>
+        <el-form-item label="Root 密码" required>
+          <el-input v-model="form.rootPassword" type="password" show-password style="width: 240px" />
+        </el-form-item>
+      </template>
+
       <!-- Submit -->
       <el-form-item>
         <el-button type="primary" :loading="launching" @click="handleLaunch">
@@ -190,7 +216,13 @@ const form = reactive({
   shape: '',
   vcnId: '',
   subnetId: '',
-  bootVolumeSizeGB: 50
+  bootVolumeSizeGB: 50,
+  scheduleEnabled: false,
+  createNumbers: 1,
+  intervalSeconds: 60,
+  architecture: 'AMD',
+  operationSystem: 'Ubuntu',
+  rootPassword: ''
 })
 
 // --- lists ---
@@ -391,6 +423,10 @@ async function handleLaunch() {
     ElMessage.warning('请填写所有必填字段')
     return
   }
+  if (form.scheduleEnabled && !form.rootPassword) {
+    ElMessage.warning('定时任务需要 Root 密码')
+    return
+  }
 
   launching.value = true
   try {
@@ -404,6 +440,13 @@ async function handleLaunch() {
     }
     if (form.bootVolumeSizeGB) {
       body.bootVolumeSizeGB = form.bootVolumeSizeGB
+    }
+    if (form.scheduleEnabled) {
+      body.intervalSeconds = form.intervalSeconds
+      body.createNumbers = form.createNumbers
+      body.architecture = form.architecture
+      body.operationSystem = form.operationSystem
+      body.rootPassword = form.rootPassword
     }
     await post('/instances', body)
     ElMessage.success('实例创建请求已提交')

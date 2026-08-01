@@ -29,7 +29,7 @@ func (s *Store) CreateTenant(t *Tenant) error {
 }
 
 func (s *Store) ListTenants() ([]Tenant, error) {
-	rows, err := s.db.Query(`SELECT id, name, user_ocid, tenancy_ocid, region, fingerprint, key_file, status, coalesce(home_region,''), coalesce(subscribed,''), created_at, updated_at FROM tenants ORDER BY id DESC`)
+	rows, err := s.db.Query(`SELECT id, name, user_ocid, tenancy_ocid, region, fingerprint, key_file, status, coalesce(account_status,''), coalesce(home_region,''), coalesce(subscribed,''), created_at, updated_at FROM tenants ORDER BY id DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -37,7 +37,7 @@ func (s *Store) ListTenants() ([]Tenant, error) {
 	var list []Tenant
 	for rows.Next() {
 		var t Tenant
-		if err := rows.Scan(&t.ID, &t.Name, &t.UserOCID, &t.TenancyOCID, &t.Region, &t.Fingerprint, &t.KeyFile, &t.Status, &t.HomeRegion, &t.Subscribed, &t.CreatedAt, &t.UpdatedAt); err != nil {
+		if err := rows.Scan(&t.ID, &t.Name, &t.UserOCID, &t.TenancyOCID, &t.Region, &t.Fingerprint, &t.KeyFile, &t.Status, &t.AccountStatus, &t.HomeRegion, &t.Subscribed, &t.CreatedAt, &t.UpdatedAt); err != nil {
 			return nil, err
 		}
 		list = append(list, t)
@@ -47,8 +47,8 @@ func (s *Store) ListTenants() ([]Tenant, error) {
 
 func (s *Store) GetTenant(id int64) (*Tenant, error) {
 	var t Tenant
-	err := s.db.QueryRow(`SELECT id, name, user_ocid, tenancy_ocid, region, fingerprint, key_file, status, coalesce(home_region,''), coalesce(subscribed,''), created_at, updated_at FROM tenants WHERE id=?`, id).
-		Scan(&t.ID, &t.Name, &t.UserOCID, &t.TenancyOCID, &t.Region, &t.Fingerprint, &t.KeyFile, &t.Status, &t.HomeRegion, &t.Subscribed, &t.CreatedAt, &t.UpdatedAt)
+	err := s.db.QueryRow(`SELECT id, name, user_ocid, tenancy_ocid, region, fingerprint, key_file, status, coalesce(account_status,''), coalesce(home_region,''), coalesce(subscribed,''), created_at, updated_at FROM tenants WHERE id=?`, id).
+		Scan(&t.ID, &t.Name, &t.UserOCID, &t.TenancyOCID, &t.Region, &t.Fingerprint, &t.KeyFile, &t.Status, &t.AccountStatus, &t.HomeRegion, &t.Subscribed, &t.CreatedAt, &t.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -69,6 +69,9 @@ func (s *Store) DeleteTenantCascade(id int64) error {
 	if _, err := tx.Exec(`DELETE FROM instances WHERE tenant_id=?`, id); err != nil {
 		return fmt.Errorf("delete instances: %w", err)
 	}
+	if _, err := tx.Exec(`DELETE FROM create_tasks WHERE tenant_id=?`, id); err != nil {
+		return fmt.Errorf("delete create tasks: %w", err)
+	}
 	if _, err := tx.Exec(`DELETE FROM tenants WHERE id=?`, id); err != nil {
 		return fmt.Errorf("delete tenant: %w", err)
 	}
@@ -77,6 +80,13 @@ func (s *Store) DeleteTenantCascade(id int64) error {
 
 func (s *Store) UpdateTenantRegions(id int64, subscribed string) error {
 	_, err := s.db.Exec(`UPDATE tenants SET subscribed=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`, subscribed, id)
+	return err
+}
+
+// SetTenantAccountStatus persists the result of an OCI credential aliveness
+// check ("ACTIVE" / "INACTIVE").
+func (s *Store) SetTenantAccountStatus(id int64, status string) error {
+	_, err := s.db.Exec(`UPDATE tenants SET account_status=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`, status, id)
 	return err
 }
 
@@ -284,6 +294,36 @@ func (s *Store) ListAuditPaginated(keyword string, page, size int) ([]AuditLog, 
 
 // ClearAllTx removes all data within a transaction (for restore)
 func (s *Store) ClearAllTx(tx *sql.Tx) error {
+	if _, err := tx.Exec(`DELETE FROM create_tasks`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM login_blacklist`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM stock_alerts`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM instance_plans`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM ssh_keys`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM ip_data`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM cf_configs`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM users`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM tasks`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM audit_logs`); err != nil {
+		return err
+	}
 	if _, err := tx.Exec(`DELETE FROM instances`); err != nil {
 		return err
 	}
@@ -318,6 +358,16 @@ func (s *Store) CreateTenantImportTx(tx *sql.Tx, name, userOCID, tenancyOCID, re
 	return err
 }
 
+// CreateTenantImportWithIDTx inserts a tenant with its original ID during
+// restore so child rows keep valid foreign keys.
+func (s *Store) CreateTenantImportWithIDTx(tx *sql.Tx, id int64, name, userOCID, tenancyOCID, region, fingerprint, keyFile string) error {
+	_, err := tx.Exec(
+		`INSERT INTO tenants (id, name, user_ocid, tenancy_ocid, region, fingerprint, key_file)
+		 VALUES (?,?,?,?,?,?,?)`,
+		id, name, userOCID, tenancyOCID, region, fingerprint, keyFile)
+	return err
+}
+
 // UpsertInstanceImportTx upserts an instance within a transaction.
 func (s *Store) UpsertInstanceImportTx(tx *sql.Tx, id string, tenantID int64, name, ocid, shape, state, publicIP, privateIP, region, availabilityDomain, faultDomain, imageID, subnetID string, ocpu, memoryGB float64, bootVolumeGB int64) error {
 	_, err := tx.Exec(
@@ -337,6 +387,52 @@ func (s *Store) UpsertInstanceImportTx(tx *sql.Tx, id string, tenantID int64, na
 // SetConfigTx sets a config key-value pair within a transaction.
 func (s *Store) SetConfigTx(tx *sql.Tx, key, value string) error {
 	_, err := tx.Exec(`INSERT INTO config (key, value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, key, value)
+	return err
+}
+
+// ── Backup import helpers (all execute inside a restore transaction) ───
+
+func (s *Store) CreateUserImportTx(tx *sql.Tx, username, passwordHash, role, mfaSecret, email string, mfaEnabled bool) error {
+	_, err := tx.Exec(`INSERT INTO users (username, password_hash, role, mfa_secret, mfa_enabled, email)
+		VALUES (?,?,?,?,?,?)`, username, passwordHash, role, mfaSecret, mfaEnabled, email)
+	return err
+}
+
+func (s *Store) CreateCfCfgImportTx(tx *sql.Tx, c *CfCfg) error {
+	_, err := tx.Exec(`INSERT INTO cf_configs (name, token, email, api_key, zone_id, enabled)
+		VALUES (?,?,?,?,?,?)`, c.Name, c.Token, c.Email, c.APIKey, c.ZoneID, c.Enabled)
+	return err
+}
+
+func (s *Store) CreateIpDataImportTx(tx *sql.Tx, d *IpData) error {
+	_, err := tx.Exec(`INSERT INTO ip_data (tenant_id, cidr, label, type, enabled, lat, lng, country, area, city, org, asn)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+		d.TenantID, d.CIDR, d.Label, d.Type, d.Enabled, d.Lat, d.Lng, d.Country, d.Area, d.City, d.Org, d.Asn)
+	return err
+}
+
+func (s *Store) CreateSSHKeyImportTx(tx *sql.Tx, k *SSHKey) error {
+	_, err := tx.Exec(`INSERT INTO ssh_keys (name, public_key, private_key, fingerprint, tenant_id)
+		VALUES (?,?,?,?,?)`, k.Name, k.PublicKey, k.PrivateKey, k.Fingerprint, k.TenantID)
+	return err
+}
+
+func (s *Store) CreateInstancePlanImportTx(tx *sql.Tx, p *InstancePlan) error {
+	_, err := tx.Exec(`INSERT INTO instance_plans (name, tenant_id, shape, image_id, subnet_id, availability_domain, boot_volume_size_gb, ocpus, memory_gb)
+		VALUES (?,?,?,?,?,?,?,?,?)`,
+		p.Name, p.TenantID, p.Shape, p.ImageID, p.SubnetID, p.AvailabilityDomain, p.BootVolumeSizeGB, p.OCPUs, p.MemoryGB)
+	return err
+}
+
+func (s *Store) CreateStockAlertImportTx(tx *sql.Tx, a *StockAlert) error {
+	_, err := tx.Exec(`INSERT INTO stock_alerts (tenant_id, region, shape, availability_domain, chat_id, enabled)
+		VALUES (?,?,?,?,?,?)`, a.TenantID, a.Region, a.Shape, a.AvailabilityDomain, a.ChatID, a.Enabled)
+	return err
+}
+
+func (s *Store) CreateTaskImportTx(tx *sql.Tx, t *Task) error {
+	_, err := tx.Exec(`INSERT INTO tasks (tenant_id, parent_task_id, type, status, progress, message, payload, result)
+		VALUES (?,?,?,?,?,?,?,?)`, t.TenantID, t.ParentTaskID, t.Type, t.Status, t.Progress, t.Message, t.Payload, t.Result)
 	return err
 }
 
@@ -441,7 +537,7 @@ func (s *Store) ListTenantsPaginated(keyword string, page, size int) ([]Tenant, 
 
 	offset := (page - 1) * size
 	rows, err := s.db.Query(`SELECT id, name, user_ocid, tenancy_ocid, region, fingerprint, key_file,
-		status, coalesce(home_region,''), coalesce(subscribed,''), created_at, updated_at FROM tenants
+		status, coalesce(account_status,''), coalesce(home_region,''), coalesce(subscribed,''), created_at, updated_at FROM tenants
 		WHERE name LIKE ? ESCAPE '\' OR region LIKE ? ESCAPE '\'
 		ORDER BY id DESC LIMIT ? OFFSET ?`,
 		kw, kw, size, offset)
@@ -453,7 +549,7 @@ func (s *Store) ListTenantsPaginated(keyword string, page, size int) ([]Tenant, 
 	for rows.Next() {
 		var t Tenant
 		if err := rows.Scan(&t.ID, &t.Name, &t.UserOCID, &t.TenancyOCID, &t.Region, &t.Fingerprint, &t.KeyFile,
-			&t.Status, &t.HomeRegion, &t.Subscribed, &t.CreatedAt, &t.UpdatedAt); err != nil {
+			&t.Status, &t.AccountStatus, &t.HomeRegion, &t.Subscribed, &t.CreatedAt, &t.UpdatedAt); err != nil {
 			return nil, 0, err
 		}
 		list = append(list, t)
@@ -522,6 +618,160 @@ func (s *Store) ResetRunningTasks() (int64, error) {
 		return 0, err
 	}
 	return res.RowsAffected()
+}
+
+// ── Recurring Create Tasks ────────────────────────────────────────────
+
+func (s *Store) CreateCreateTask(t *CreateTask) error {
+	res, err := s.db.Exec(
+		`INSERT INTO create_tasks (tenant_id, region, ocpus, memory_gb, disk, architecture,
+		 interval_seconds, create_numbers, operation_system, root_password, paused)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+		t.TenantID, t.Region, t.OCPUs, t.MemoryGB, t.Disk, t.Architecture,
+		t.IntervalSeconds, t.CreateNumbers, t.OperationSystem, t.RootPassword, t.Paused)
+	if err != nil {
+		return err
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return err
+	}
+	t.ID = id
+	return nil
+}
+
+const createTaskSelect = `SELECT id, tenant_id, region, ocpus, memory_gb, disk, architecture,
+	interval_seconds, create_numbers, operation_system, root_password, paused,
+	last_run_at, created_at, updated_at FROM create_tasks`
+
+func scanCreateTask(row interface{ Scan(...any) error }) (*CreateTask, error) {
+	var t CreateTask
+	if err := row.Scan(&t.ID, &t.TenantID, &t.Region, &t.OCPUs, &t.MemoryGB, &t.Disk,
+		&t.Architecture, &t.IntervalSeconds, &t.CreateNumbers, &t.OperationSystem,
+		&t.RootPassword, &t.Paused, &t.LastRunAt, &t.CreatedAt, &t.UpdatedAt); err != nil {
+		return nil, err
+	}
+	return &t, nil
+}
+
+func (s *Store) GetCreateTask(id int64) (*CreateTask, error) {
+	t, err := scanCreateTask(s.db.QueryRow(createTaskSelect+` WHERE id=?`, id))
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	return t, err
+}
+
+func (s *Store) ListCreateTasks(tenantID int64) ([]CreateTask, error) {
+	var rows *sql.Rows
+	var err error
+	if tenantID != 0 {
+		rows, err = s.db.Query(createTaskSelect+` WHERE tenant_id=? ORDER BY id DESC`, tenantID)
+	} else {
+		rows, err = s.db.Query(createTaskSelect+` ORDER BY id DESC`)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var list []CreateTask
+	for rows.Next() {
+		t, err := scanCreateTask(rows)
+		if err != nil {
+			return nil, err
+		}
+		list = append(list, *t)
+	}
+	return list, rows.Err()
+}
+
+func (s *Store) ListActiveCreateTasks() ([]CreateTask, error) {
+	rows, err := s.db.Query(createTaskSelect + ` WHERE paused=0 AND create_numbers>0 ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var list []CreateTask
+	for rows.Next() {
+		t, err := scanCreateTask(rows)
+		if err != nil {
+			return nil, err
+		}
+		list = append(list, *t)
+	}
+	return list, rows.Err()
+}
+
+func (s *Store) UpdateCreateTask(t *CreateTask) error {
+	_, err := s.db.Exec(
+		`UPDATE create_tasks SET tenant_id=?, region=?, ocpus=?, memory_gb=?, disk=?,
+		 architecture=?, interval_seconds=?, create_numbers=?, operation_system=?,
+		 root_password=?, paused=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`,
+		t.TenantID, t.Region, t.OCPUs, t.MemoryGB, t.Disk, t.Architecture,
+		t.IntervalSeconds, t.CreateNumbers, t.OperationSystem, t.RootPassword, t.Paused, t.ID)
+	return err
+}
+
+func (s *Store) SetCreateTaskPaused(id int64, paused bool) error {
+	_, err := s.db.Exec(`UPDATE create_tasks SET paused=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`, paused, id)
+	return err
+}
+
+func (s *Store) SetCreateTaskRemaining(id int64, remaining int) error {
+	_, err := s.db.Exec(`UPDATE create_tasks SET create_numbers=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`, remaining, id)
+	return err
+}
+
+func (s *Store) SetCreateTaskLastRun(id int64) error {
+	_, err := s.db.Exec(`UPDATE create_tasks SET last_run_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=?`, id)
+	return err
+}
+
+func (s *Store) DeleteCreateTask(id int64) error {
+	_, err := s.db.Exec(`DELETE FROM create_tasks WHERE id=?`, id)
+	return err
+}
+
+// ── Login IP Blacklist ─────────────────────────────────────────────────
+
+func (s *Store) IsIPBlacklisted(ip string) (bool, error) {
+	var one int
+	err := s.db.QueryRow(`SELECT 1 FROM login_blacklist WHERE ip=?`, ip).Scan(&one)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+func (s *Store) AddLoginBlacklist(ip, reason string) error {
+	_, err := s.db.Exec(`INSERT INTO login_blacklist (ip, reason) VALUES (?,?) ON CONFLICT(ip) DO UPDATE SET reason=excluded.reason`, ip, reason)
+	return err
+}
+
+func (s *Store) RemoveLoginBlacklist(ip string) (bool, error) {
+	res, err := s.db.Exec(`DELETE FROM login_blacklist WHERE ip=?`, ip)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
+}
+
+func (s *Store) ListLoginBlacklist() ([]LoginBlacklist, error) {
+	rows, err := s.db.Query(`SELECT ip, reason, created_at FROM login_blacklist ORDER BY created_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var list []LoginBlacklist
+	for rows.Next() {
+		var b LoginBlacklist
+		if err := rows.Scan(&b.IP, &b.Reason, &b.CreatedAt); err != nil {
+			return nil, err
+		}
+		list = append(list, b)
+	}
+	return list, rows.Err()
 }
 
 // ── CfCfg ──────────────────────────────────────────────────────────────

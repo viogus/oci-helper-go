@@ -394,6 +394,46 @@ func errStr(err error) string {
 	return err.Error()
 }
 
+// updateCfDNSAfterChangeIP removes the previous A record for
+// prefix.domain and creates one pointing at the new public IP. It mirrors the
+// Java change-IP flow's optional Cloudflare DNS update.
+func (s *Server) updateCfDNSAfterChangeIP(tenantID, cfgID int64, prefix, newIP string, proxied *bool, ttl int, remark string) error {
+	cfg, err := s.store.GetCfCfg(cfgID)
+	if err != nil || cfg == nil || cfg.Token == "" {
+		return fmt.Errorf("cloudflare config not found")
+	}
+	if prefix == "" || cfg.ZoneID == "" {
+		return fmt.Errorf("domain prefix and zone required")
+	}
+	dnsName := prefix + "." + cfg.Name
+	cf := cloudflare.New(cfg.Token)
+	records, err := cf.ListDNSRecords(cfg.ZoneID)
+	if err != nil {
+		return err
+	}
+	for _, rec := range records {
+		if strings.EqualFold(strings.TrimRight(rec.Name, "."), strings.TrimRight(dnsName, ".")) {
+			if err := cf.DeleteDNSRecord(cfg.ZoneID, rec.ID); err != nil {
+				return err
+			}
+			break
+		}
+	}
+	record := cloudflare.DNSRecord{
+		Type:    "A",
+		Name:    dnsName,
+		Content: newIP,
+		Proxied: proxied,
+		TTL:     ttl,
+		Comment: remark,
+	}
+	if record.TTL == 0 {
+		record.TTL = 120
+	}
+	_, err = cf.CreateDNSRecord(cfg.ZoneID, record)
+	return err
+}
+
 // ── DNS Auto-Sync Monitor ───────────────────────────────────────────────
 
 // dnsAutoSyncState holds runtime state for the background DNS auto-sync monitor.

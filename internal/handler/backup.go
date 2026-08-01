@@ -10,18 +10,31 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 
 	"golang.org/x/crypto/pbkdf2"
+
+	"github.com/viogus/oci-helper-go/internal/db"
 )
 
 type backupData struct {
-	Tenants   []dbTenant   `json:"tenants"`
-	Instances []dbInstance `json:"instances"`
-	Config    []dbConfig   `json:"config"`
+	Tenants       []dbTenant        `json:"tenants"`
+	Instances     []dbInstance      `json:"instances"`
+	Config        []dbConfig        `json:"config"`
+	Users         []dbUser          `json:"users"`
+	CfCfgs        []db.CfCfg        `json:"cf_configs"`
+	IpData        []db.IpData       `json:"ip_data"`
+	SSHKeys       []db.SSHKey       `json:"ssh_keys"`
+	InstancePlans []db.InstancePlan `json:"instance_plans"`
+	StockAlerts   []db.StockAlert   `json:"stock_alerts"`
+	Tasks         []db.Task         `json:"tasks"`
+	KeyFiles      []dbKeyFile       `json:"key_files"`
 }
 
 // lightweight copies to avoid import cycle (handler already imports db)
 type dbTenant struct {
+	ID                                                                int64
 	Name, UserOCID, TenancyOCID, Region, Fingerprint, KeyFile, Status string
 }
 
@@ -34,6 +47,20 @@ type dbInstance struct {
 
 type dbConfig struct {
 	Key, Value string
+}
+
+type dbUser struct {
+	Username     string
+	PasswordHash string
+	Role         string
+	MFASecret    string
+	Email        string
+	MFAEnabled   bool
+}
+
+type dbKeyFile struct {
+	Name    string
+	Content []byte
 }
 
 func (s *Server) handleBackup(w http.ResponseWriter, r *http.Request) {
@@ -62,7 +89,7 @@ func (s *Server) handleBackup(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, t := range tenants {
 		data.Tenants = append(data.Tenants, dbTenant{
-			Name: t.Name, UserOCID: t.UserOCID, TenancyOCID: t.TenancyOCID,
+			ID: t.ID, Name: t.Name, UserOCID: t.UserOCID, TenancyOCID: t.TenancyOCID,
 			Region: t.Region, Fingerprint: t.Fingerprint, KeyFile: t.KeyFile, Status: t.Status,
 		})
 	}
@@ -89,6 +116,42 @@ func (s *Server) handleBackup(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, c := range configList {
 		data.Config = append(data.Config, dbConfig{Key: c.Key, Value: c.Value})
+	}
+
+	users, err := s.store.ListUsers()
+	if err == nil {
+		for _, u := range users {
+			// Re-read full rows so password hashes and MFA secrets survive
+			// backup/restore.
+			full, err := s.store.GetUserByUsername(u.Username)
+			if err == nil && full != nil {
+				data.Users = append(data.Users, dbUser{
+					Username:     full.Username,
+					PasswordHash: full.PasswordHash,
+					Role:         full.Role,
+					MFASecret:    full.MFASecret,
+					Email:        full.Email,
+					MFAEnabled:   full.MFAEnabled,
+				})
+			}
+		}
+	}
+	data.CfCfgs, _ = s.store.ListCfCfgs()
+	data.IpData, _ = s.store.ListIpData(0, "")
+	data.SSHKeys, _ = s.store.ListSSHKeys(0)
+	data.InstancePlans, _ = s.store.ListInstancePlans(0)
+	data.StockAlerts, _ = s.store.ListStockAlerts(0)
+	data.Tasks, _ = s.store.ListTasks()
+	if entries, err := os.ReadDir(s.cfg.KeysDir); err == nil {
+		for _, e := range entries {
+			if e.IsDir() {
+				continue
+			}
+			content, err := os.ReadFile(filepath.Join(s.cfg.KeysDir, e.Name()))
+			if err == nil {
+				data.KeyFiles = append(data.KeyFiles, dbKeyFile{Name: e.Name(), Content: content})
+			}
+		}
 	}
 
 	plain, err := json.Marshal(data)
@@ -157,7 +220,7 @@ func (s *Server) handleRestore(w http.ResponseWriter, r *http.Request) {
 
 	// restore tenants
 	for _, t := range data.Tenants {
-		if err := s.store.CreateTenantImportTx(tx, t.Name, t.UserOCID, t.TenancyOCID, t.Region, t.Fingerprint, t.KeyFile); err != nil {
+		if err := s.store.CreateTenantImportWithIDTx(tx, t.ID, t.Name, t.UserOCID, t.TenancyOCID, t.Region, t.Fingerprint, t.KeyFile); err != nil {
 			tx.Rollback()
 			jsonErr(w, "restore tenant: "+err.Error())
 			return
@@ -182,9 +245,72 @@ func (s *Server) handleRestore(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	for _, u := range data.Users {
+		if err := s.store.CreateUserImportTx(tx, u.Username, u.PasswordHash, u.Role, u.MFASecret, u.Email, u.MFAEnabled); err != nil {
+			tx.Rollback()
+			jsonErr(w, "restore user: "+err.Error())
+			return
+		}
+	}
+	for i := range data.CfCfgs {
+		if err := s.store.CreateCfCfgImportTx(tx, &data.CfCfgs[i]); err != nil {
+			tx.Rollback()
+			jsonErr(w, "restore cf config: "+err.Error())
+			return
+		}
+	}
+	for i := range data.IpData {
+		if err := s.store.CreateIpDataImportTx(tx, &data.IpData[i]); err != nil {
+			tx.Rollback()
+			jsonErr(w, "restore ip data: "+err.Error())
+			return
+		}
+	}
+	for i := range data.SSHKeys {
+		if err := s.store.CreateSSHKeyImportTx(tx, &data.SSHKeys[i]); err != nil {
+			tx.Rollback()
+			jsonErr(w, "restore ssh key: "+err.Error())
+			return
+		}
+	}
+	for i := range data.InstancePlans {
+		if err := s.store.CreateInstancePlanImportTx(tx, &data.InstancePlans[i]); err != nil {
+			tx.Rollback()
+			jsonErr(w, "restore instance plan: "+err.Error())
+			return
+		}
+	}
+	for i := range data.StockAlerts {
+		if err := s.store.CreateStockAlertImportTx(tx, &data.StockAlerts[i]); err != nil {
+			tx.Rollback()
+			jsonErr(w, "restore stock alert: "+err.Error())
+			return
+		}
+	}
+	for i := range data.Tasks {
+		if err := s.store.CreateTaskImportTx(tx, &data.Tasks[i]); err != nil {
+			tx.Rollback()
+			jsonErr(w, "restore task: "+err.Error())
+			return
+		}
+	}
+
 	if err := tx.Commit(); err != nil {
 		jsonErr(w, "commit: "+err.Error())
 		return
+	}
+	if err := os.MkdirAll(s.cfg.KeysDir, 0700); err != nil {
+		jsonErr(w, "create keys dir: "+err.Error())
+		return
+	}
+	for _, kf := range data.KeyFiles {
+		if kf.Name == "" {
+			continue
+		}
+		if err := os.WriteFile(filepath.Join(s.cfg.KeysDir, kf.Name), kf.Content, 0600); err != nil {
+			jsonErr(w, "restore key file "+kf.Name+": "+err.Error())
+			return
+		}
 	}
 
 	s.audit(0, "backup:restore", fmt.Sprintf("%d tenants, %d instances", len(data.Tenants), len(data.Instances)), r)

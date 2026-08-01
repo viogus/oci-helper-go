@@ -38,7 +38,8 @@
     "ipPool": "IP 池",
     "instancePlans": "实例方案",
     "defense": "防御",
-    "sshKeys": "SSH 密钥"
+    "sshKeys": "SSH 密钥",
+    "systemMetrics": "系统监控"
   },
   "route": {
     "home": "仪表盘",
@@ -69,7 +70,8 @@
     "ipPool": "IP 池",
     "instancePlans": "实例方案",
     "defense": "防御",
-    "sshKeys": "SSH 密钥"
+    "sshKeys": "SSH 密钥",
+    "systemMetrics": "系统监控"
   },
   "login": {
     "username": "用户名",
@@ -629,5 +631,32 @@
     "keyWarning": "请立即保存私钥，它将不会再被显示。",
     "confirmDelete": "删除此 SSH 密钥？租户可能正在使用。",
     "notFound": "未找到 SSH 密钥"
+  },
+  "sysMetrics": {
+    "title": "系统资源监控",
+    "refresh": "刷新",
+    "hostInfo": "主机信息",
+    "hostname": "主机名",
+    "os": "操作系统",
+    "platform": "平台",
+    "arch": "架构",
+    "uptime": "运行时间",
+    "cpuCount": "CPU 核心数",
+    "cpu": "CPU 使用率",
+    "cpuModel": "CPU 型号",
+    "memory": "内存使用率",
+    "disk": "磁盘使用率",
+    "network": "网络流量",
+    "used": "已用",
+    "free": "可用",
+    "total": "总计",
+    "user": "用户态",
+    "system": "系统态",
+    "idle": "空闲",
+    "txRate": "上行速率",
+    "rxRate": "下行速率",
+    "txTotal": "上行总量",
+    "rxTotal": "下行总量",
+    "noDisk": "暂无磁盘信息"
   }
 }

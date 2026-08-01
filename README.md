@@ -326,7 +326,8 @@ All API routes return JSON. Most require a valid session cookie obtained via `/a
 
 | Method | Path | Auth | Description |
 |--------|------|:---:|-------------|
-| GET | `/api/metrics` | ✓ | Real-time CPU/memory/network metrics |
+| GET | `/api/metrics` | ✓ | OCI instance metrics (CPU/memory of an instance) |
+| GET | `/api/system/metrics` | ✓ | Host system metrics (CPU/mem/disk/network of the machine running oci-helper) |
 | POST | `/api/traffic` | ✓ | VNIC traffic over time range |
 | GET | `/api/limits` | ✓ | OCI service limits |
 | GET | `/api/logs` | ✓ | System logs |

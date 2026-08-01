@@ -96,15 +96,15 @@ func (s *Server) handleGlance(w http.ResponseWriter, r *http.Request) {
 	cities := s.glanceCities()
 
 	jsonOK(w, map[string]interface{}{
-		"users":           usersCount,
-		"tasks":           totalTasks,
-		"regions":         regionsCount,
-		"days":            days,
-		"currentVersion":  version,
-		"tenants":         tenantsCount,
-		"instances":       instancesCount,
+		"users":            usersCount,
+		"tasks":            totalTasks,
+		"regions":          regionsCount,
+		"days":             days,
+		"currentVersion":   version,
+		"tenants":          tenantsCount,
+		"instances":        instancesCount,
 		"runningInstances": runningCount,
-		"cities":          cities,
+		"cities":           cities,
 	})
 }
 
@@ -115,15 +115,21 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 	}
 	keyword := r.URL.Query().Get("keyword")
 	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
-	if page < 1 { page = 1 }
+	if page < 1 {
+		page = 1
+	}
 	size, _ := strconv.Atoi(r.URL.Query().Get("size"))
-	if size < 1 { size = 20 }
+	if size < 1 {
+		size = 20
+	}
 	list, total, err := s.store.ListTasksPaginated(keyword, page, size)
 	if err != nil {
 		jsonErr(w, "list tasks: "+err.Error())
 		return
 	}
-	if list == nil { list = []db.Task{} }
+	if list == nil {
+		list = []db.Task{}
+	}
 	jsonOK(w, map[string]interface{}{"data": list, "total": total, "page": page, "size": size})
 }
 
@@ -134,15 +140,21 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 	}
 	keyword := r.URL.Query().Get("keyword")
 	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
-	if page < 1 { page = 1 }
+	if page < 1 {
+		page = 1
+	}
 	size, _ := strconv.Atoi(r.URL.Query().Get("size"))
-	if size < 1 { size = 20 }
+	if size < 1 {
+		size = 20
+	}
 	list, total, err := s.store.ListAuditPaginated(keyword, page, size)
 	if err != nil {
 		jsonErr(w, "list audit: "+err.Error())
 		return
 	}
-	if list == nil { list = []db.AuditLog{} }
+	if list == nil {
+		list = []db.AuditLog{}
+	}
 	jsonOK(w, map[string]interface{}{"data": list, "total": total, "page": page, "size": size})
 }
 
@@ -174,6 +186,25 @@ func (s *Server) handleTelegramWebhook(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, "invalid body")
 		return
 	}
+
+	// Chat-ID allowlist: when telegram_chat_id is configured, only that chat
+	// may drive the bot (protects destructive actions like /ssh, terminate,
+	// and restore). Notifications always go to telegram_chat_id regardless.
+	if chatIDStr, _ := s.store.GetConfig("telegram_chat_id"); chatIDStr != "" {
+		allowed, _ := strconv.ParseInt(chatIDStr, 10, 64)
+		var senderChat int64
+		if update.CallbackQuery != nil && update.CallbackQuery.Message != nil {
+			senderChat = update.CallbackQuery.Message.Chat.ID
+		} else if update.Message != nil {
+			senderChat = update.Message.Chat.ID
+		}
+		if allowed != 0 && senderChat != allowed {
+			log.Printf("[telegram] webhook: rejecting update from unauthorized chat %d (allowlist=%d)", senderChat, allowed)
+			jsonOK(w, map[string]string{"status": "ignored"})
+			return
+		}
+	}
+
 	bot := telegram.New(token)
 
 	// Handle callback queries (button clicks)
@@ -214,6 +245,35 @@ func (s *Server) handleTelegramWebhook(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		tgRestoreMu.Lock()
+		_, restoring := tgRestoreStates[chatID]
+		tgRestoreMu.Unlock()
+		if restoring {
+			s.tgRestoreRespond(bot, chatID, text)
+			jsonOK(w, map[string]string{"status": "ok"})
+			return
+		}
+
+		tgDefenseMu.Lock()
+		defenseSt, inDefense := tgDefenseStates[chatID]
+		tgDefenseMu.Unlock()
+		if inDefense && defenseSt.Step == "cidr" {
+			cidrs := parseCIDRList(text)
+			if len(cidrs) == 0 {
+				bot.SendMessage(chatID, "未识别到有效的 CIDR，请每行输入一个（例如 1.2.3.4/32）。")
+				jsonOK(w, map[string]string{"status": "ok"})
+				return
+			}
+			tgDefenseMu.Lock()
+			defenseSt.CIDRs = cidrs
+			defenseSt.Step = "confirm"
+			st := defenseSt
+			tgDefenseMu.Unlock()
+			s.tgDefenseConfirm(bot, chatID, 0, st, false)
+			jsonOK(w, map[string]string{"status": "ok"})
+			return
+		}
+
 		tgSSHMu.Lock()
 		sshWaiting := tgSSHStates[chatID]
 		tgSSHMu.Unlock()
@@ -245,6 +305,10 @@ func (s *Server) handleTelegramWebhook(w http.ResponseWriter, r *http.Request) {
 		case text == "/start":
 			kb := tgMainKeyboard()
 			bot.SendKeyboard(chatID, "oci-helper Bot — Main Menu\nSelect an option:", kb)
+		case strings.HasPrefix(text, "/ssh_config "):
+			s.tgSSHConfig(bot, chatID, text)
+		case strings.HasPrefix(text, "/ssh "):
+			s.tgSSHExec(bot, chatID, text)
 		case text == "/instances":
 			s.tgSendInstanceList(bot, chatID, 0, 0)
 		case text == "/tasks":

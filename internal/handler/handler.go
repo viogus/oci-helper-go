@@ -1,5 +1,4 @@
 // Package handler implements the HTTP API and SPA frontend server for oci-helper.
-//
 package handler
 
 import (
@@ -23,8 +22,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/viogus/oci-helper-go/internal/auth"
 	"github.com/viogus/oci-helper-go/internal/ai"
+	"github.com/viogus/oci-helper-go/internal/auth"
 	"github.com/viogus/oci-helper-go/internal/config"
 	"github.com/viogus/oci-helper-go/internal/db"
 	ociclient "github.com/viogus/oci-helper-go/internal/oci"
@@ -47,21 +46,21 @@ var oauthHTTPClient = &http.Client{
 }
 
 type Server struct {
-	cfg      *config.Config
-	store    *db.Store
-	auth     *auth.Service
-	mux      *http.ServeMux
+	cfg       *config.Config
+	store     *db.Store
+	auth      *auth.Service
+	mux       *http.ServeMux
 	worker    *Worker
 	ratelimit *loginRateLimiter
 	startTime time.Time
-	stopping   chan struct{}
+	stopping  chan struct{}
 
 	// DNS auto-sync
 	dnsAutoSyncTrigger chan struct{}
-	dnsSyncState        dnsAutoSyncState
+	dnsSyncState       dnsAutoSyncState
 
-	conversationCache    map[string]conversationEntry
-	conversationCacheMu  sync.Mutex
+	conversationCache   map[string]conversationEntry
+	conversationCacheMu sync.Mutex
 
 	mfaCache   mfaCacheEntry
 	mfaCacheMu sync.RWMutex
@@ -86,16 +85,16 @@ const conversationTTL = 1 * time.Hour
 
 func New(cfg *config.Config, store *db.Store) *Server {
 	s := &Server{
-		cfg:                cfg,
-		store:              store,
-		auth:               auth.New(cfg.Username, cfg.Password, cfg.MFASecret, cfg.MFA, cfg.SecureCookies),
-		mux:                http.NewServeMux(),
-		worker:             NewWorker(store, cfg.KeysDir),
-		ratelimit:          newLoginRateLimiter(),
-		startTime:          time.Now(),
-		stopping:           make(chan struct{}),
-		dnsAutoSyncTrigger: make(chan struct{}, 1),
-		dnsSyncState:         dnsAutoSyncState{},
+		cfg:                 cfg,
+		store:               store,
+		auth:                auth.New(cfg.Username, cfg.Password, cfg.MFASecret, cfg.MFA, cfg.SecureCookies),
+		mux:                 http.NewServeMux(),
+		worker:              NewWorker(store, cfg.KeysDir),
+		ratelimit:           newLoginRateLimiter(),
+		startTime:           time.Now(),
+		stopping:            make(chan struct{}),
+		dnsAutoSyncTrigger:  make(chan struct{}, 1),
+		dnsSyncState:        dnsAutoSyncState{},
 		conversationCache:   make(map[string]conversationEntry),
 		conversationCacheMu: sync.Mutex{},
 	}
@@ -111,6 +110,7 @@ func New(cfg *config.Config, store *db.Store) *Server {
 	go s.startVersionUpdateNotify()
 	go s.startupNotify()
 	go s.cleanLogTask()
+	go s.cleanTGSSHConns()
 	go captchaCleanup(s.stopping)
 	go s.flushAuditLogs()
 	return s
@@ -231,8 +231,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/update/now", s.withAuth(s.handleUpdateNow))
 	s.mux.HandleFunc("/api/admin/blacklist/clear", s.withAuth(s.handleAdminBlacklistClear))
 	s.mux.HandleFunc("/api/notify/test", s.withAuth(s.handleNotifyTest))
-		// Stock alerts
-		s.mux.HandleFunc("/api/stock-alerts", s.withAuth(s.handleStockAlerts))
+	// Stock alerts
+	s.mux.HandleFunc("/api/stock-alerts", s.withAuth(s.handleStockAlerts))
 	// SSH keys
 	s.mux.HandleFunc("/api/ssh/keys", s.withAuth(s.handleSSHKeys))
 	// Users
@@ -286,6 +286,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/limits", s.withAuth(s.handleLimits))
 	s.mux.HandleFunc("/api/logs", s.withAuth(s.handleLogs))
 	s.mux.HandleFunc("/api/logs/ws", s.withAuth(s.handleLogWS))
+	s.mux.HandleFunc("/api/system/metrics", s.withAuth(s.handleSystemMetrics))
 
 	// batch create tasks
 	s.mux.HandleFunc("/api/instances/batch-create", s.withAuth(s.handleBatchCreate))
@@ -345,44 +346,43 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/ip-data/", s.withAuth(s.handleIpDataByID))
 	s.mux.HandleFunc("/api/users/", s.withAuth(s.handleUserByID))
 	s.mux.HandleFunc("/api/sync/", s.withAuth(s.handleSync))
-		s.mux.HandleFunc("/api/stock-alerts/", s.withAuth(s.handleStockAlertByID))
+	s.mux.HandleFunc("/api/stock-alerts/", s.withAuth(s.handleStockAlertByID))
 
-
-		// Static files (frontend) with SPA fallback.
-		// Client-side routes (/ssh-keys, /settings, etc.) get index.html
-		// so the SPA router can handle them.
-		staticFS, err := fs.Sub(staticFiles, "dist")
-		if err != nil {
-			log.Fatalf("embedded dist directory not found: %v", err)
+	// Static files (frontend) with SPA fallback.
+	// Client-side routes (/ssh-keys, /settings, etc.) get index.html
+	// so the SPA router can handle them.
+	staticFS, err := fs.Sub(staticFiles, "dist")
+	if err != nil {
+		log.Fatalf("embedded dist directory not found: %v", err)
+	}
+	fileFS := http.FS(staticFS)
+	fileServer := http.FileServer(fileFS)
+	s.mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		// API paths that fell through — genuine 404.
+		if strings.HasPrefix(r.URL.Path, "/api/") {
+			http.NotFound(w, r)
+			return
 		}
-		fileFS := http.FS(staticFS)
-		fileServer := http.FileServer(fileFS)
-		s.mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-			// API paths that fell through — genuine 404.
-			if strings.HasPrefix(r.URL.Path, "/api/") {
-				http.NotFound(w, r)
-				return
-			}
-			// Set CSP on the HTML document (the SPA shell). CSP is a
-			// document-level policy; setting it on API responses has no effect.
-			// CSP: style-src 'unsafe-inline' is required by Element Plus UI library
-	// which injects inline <style> blocks for dynamic theming. Script is
-	// restricted to 'self' (no 'unsafe-inline' for scripts).
-	w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://*.tile.openstreetmap.org; connect-src 'self'; font-src 'self' data:; frame-src 'self'; object-src 'none'; base-uri 'self'")
-			// Try to open the file; if it doesn't exist in the embedded FS,
-			// serve index.html for SPA client-side routing.
-			path := strings.TrimPrefix(r.URL.Path, "/")
-			if path == "" {
-				path = "index.html"
-			}
-			f, err := staticFS.Open(path)
-			if err != nil {
-				r.URL.Path = "/"
-			} else {
-				f.Close()
-			}
-			fileServer.ServeHTTP(w, r)
-		})
+		// Set CSP on the HTML document (the SPA shell). CSP is a
+		// document-level policy; setting it on API responses has no effect.
+		// CSP: style-src 'unsafe-inline' is required by Element Plus UI library
+		// which injects inline <style> blocks for dynamic theming. Script is
+		// restricted to 'self' (no 'unsafe-inline' for scripts).
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://*.tile.openstreetmap.org; connect-src 'self'; font-src 'self' data:; frame-src 'self'; object-src 'none'; base-uri 'self'")
+		// Try to open the file; if it doesn't exist in the embedded FS,
+		// serve index.html for SPA client-side routing.
+		path := strings.TrimPrefix(r.URL.Path, "/")
+		if path == "" {
+			path = "index.html"
+		}
+		f, err := staticFS.Open(path)
+		if err != nil {
+			r.URL.Path = "/"
+		} else {
+			f.Close()
+		}
+		fileServer.ServeHTTP(w, r)
+	})
 }
 
 func (s *Server) Handler() http.Handler { return s.mux }
@@ -643,7 +643,7 @@ func (s *Server) handleGoogleCallback(w http.ResponseWriter, r *http.Request) {
 
 	resp, err := oauthHTTPClient.Post(tokenURL, "application/x-www-form-urlencoded", strings.NewReader(v.Encode()))
 	if err != nil {
-			s.clientSafeErr(w, "OAuth token exchange failed", err)
+		s.clientSafeErr(w, "OAuth token exchange failed", err)
 		return
 	}
 	defer resp.Body.Close()
@@ -652,7 +652,7 @@ func (s *Server) handleGoogleCallback(w http.ResponseWriter, r *http.Request) {
 		AccessToken string `json:"access_token"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&tokenResp); err != nil {
-			s.clientSafeErr(w, "OAuth token decode failed", err)
+		s.clientSafeErr(w, "OAuth token decode failed", err)
 		return
 	}
 	if tokenResp.AccessToken == "" {
@@ -663,13 +663,13 @@ func (s *Server) handleGoogleCallback(w http.ResponseWriter, r *http.Request) {
 	// get user info
 	userReq, err := http.NewRequest("GET", "https://www.googleapis.com/oauth2/v2/userinfo", nil)
 	if err != nil {
-			s.clientSafeErr(w, "OAuth userinfo request failed", err)
+		s.clientSafeErr(w, "OAuth userinfo request failed", err)
 		return
 	}
 	userReq.Header.Set("Authorization", "Bearer "+tokenResp.AccessToken)
 	userResp, err := oauthHTTPClient.Do(userReq)
 	if err != nil {
-			s.clientSafeErr(w, "OAuth userinfo failed", err)
+		s.clientSafeErr(w, "OAuth userinfo failed", err)
 		return
 	}
 	defer userResp.Body.Close()
@@ -678,7 +678,7 @@ func (s *Server) handleGoogleCallback(w http.ResponseWriter, r *http.Request) {
 		Email string `json:"email"`
 	}
 	if err := json.NewDecoder(userResp.Body).Decode(&userInfo); err != nil {
-			s.clientSafeErr(w, "OAuth userinfo decode failed", err)
+		s.clientSafeErr(w, "OAuth userinfo decode failed", err)
 		return
 	}
 
@@ -1182,7 +1182,10 @@ func (s *Server) handleShell(w http.ResponseWriter, r *http.Request) {
 // --- telegram ---
 
 func (s *Server) audit(tenantID int64, action, detail string, r *http.Request) {
-	ip := extractIP(r)
+	ip := ""
+	if r != nil {
+		ip = extractIP(r)
+	}
 	log := &db.AuditLog{
 		TenantID: tenantID,
 		Action:   action,
@@ -1239,9 +1242,10 @@ func maskIP(s string) string {
 
 // --- Phase 1 stubs (implemented in later phases) ---
 
-
 func strOr(p *string, fallback string) string {
-	if p != nil { return *p }
+	if p != nil {
+		return *p
+	}
 	return fallback
 }
 
@@ -1261,7 +1265,9 @@ func ptrInt64(p *int64, fallback int64) int64 {
 
 func checkTCPPort(ip string, port int, timeout time.Duration) bool {
 	conn, err := net.DialTimeout("tcp", net.JoinHostPort(ip, strconv.Itoa(port)), timeout)
-	if err != nil { return false }
+	if err != nil {
+		return false
+	}
 	conn.Close()
 	return true
 }

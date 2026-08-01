@@ -1,7 +1,9 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"strconv"
@@ -33,79 +35,92 @@ func (s *Server) handleDefenseEnable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	client, tenant, ok := s.getTenantClient(req.TenantID, w)
-	if !ok {
+	n, err := s.enableDefense(r.Context(), req.TenantID, req.VcnID, req.Blacklist)
+	if err != nil {
+		jsonErr(w, err.Error())
 		return
+	}
+	s.audit(req.TenantID, "defense:enable", strconv.Itoa(n)+" IPs blocked", r)
+	jsonOK(w, map[string]interface{}{"status": "ok", "blocked": n})
+}
+
+// enableDefense blocks the given CIDRs by removing ALLOW rules matching them
+// from every security list in the VCN, and saves the original rules so
+// disableDefense can restore them. Returns the number of CIDRs blocked.
+func (s *Server) enableDefense(ctx context.Context, tenantID int64, vcnID string, blacklist []string) (int, error) {
+	tenant, err := s.store.GetTenant(tenantID)
+	if err != nil || tenant == nil {
+		return 0, fmt.Errorf("tenant not found")
+	}
+	client, err := s.clientFor(tenant)
+	if err != nil {
+		return 0, fmt.Errorf("oci client: %w", err)
 	}
 	vcn := client.VcnClient()
 
 	slReq := core.ListSecurityListsRequest{
 		CompartmentId: common.String(tenant.TenancyOCID),
-		VcnId:         common.String(req.VcnID),
+		VcnId:         common.String(vcnID),
 		Limit:         common.Int(100),
 	}
-	slResp, err := vcn.ListSecurityLists(r.Context(), slReq)
+	slResp, err := vcn.ListSecurityLists(ctx, slReq)
 	if err != nil {
-		jsonErr(w, "list security lists: "+err.Error())
-		return
+		return 0, fmt.Errorf("list security lists: %w", err)
 	}
 	if len(slResp.Items) == 0 {
-		jsonErr(w, "no security list found")
-		return
+		return 0, fmt.Errorf("no security list found")
 	}
 
 	for _, sl := range slResp.Items {
 		if sl.Id == nil {
-			log.Printf("[defense] skipping security list with nil Id in VCN %s", req.VcnID)
+			log.Printf("[defense] skipping security list with nil Id in VCN %s", vcnID)
 			continue
 		}
 
 		// Filter OUT any ingress rule that ALLOWS traffic from blacklisted CIDRs.
-	// OCI security lists use ALLOW semantics only, so to block an IP we
-	// remove all existing rules that permit traffic from that source.
-	var filteredRules []core.IngressSecurityRule
-	for _, existing := range sl.IngressSecurityRules {
-		remove := false
-		for _, cidr := range req.Blacklist {
-			if existing.Source != nil && *existing.Source == cidr {
-				remove = true
-				break
-			}			
+		// OCI security lists use ALLOW semantics only, so to block an IP we
+		// remove all existing rules that permit traffic from that source.
+		var filteredRules []core.IngressSecurityRule
+		for _, existing := range sl.IngressSecurityRules {
+			remove := false
+			for _, cidr := range blacklist {
+				if existing.Source != nil && *existing.Source == cidr {
+					remove = true
+					break
+				}
+			}
+			if !remove {
+				filteredRules = append(filteredRules, existing)
+			}
 		}
-		if !remove {
-			filteredRules = append(filteredRules, existing)
-		}
-	}
 
-	updateReq := core.UpdateSecurityListRequest{
-		SecurityListId: sl.Id,
-		UpdateSecurityListDetails: core.UpdateSecurityListDetails{
-			IngressSecurityRules: filteredRules,
-			EgressSecurityRules:  sl.EgressSecurityRules,
-		},
-	}
-	if _, err := vcn.UpdateSecurityList(r.Context(), updateReq); err != nil {
-		jsonErr(w, "update security list: "+err.Error())
-		return
-	}
+		updateReq := core.UpdateSecurityListRequest{
+			SecurityListId: sl.Id,
+			UpdateSecurityListDetails: core.UpdateSecurityListDetails{
+				IngressSecurityRules: filteredRules,
+				EgressSecurityRules:  sl.EgressSecurityRules,
+			},
+		}
+		if _, err := vcn.UpdateSecurityList(ctx, updateReq); err != nil {
+			return 0, fmt.Errorf("update security list: %w", err)
+		}
 
 		// Save the original rules so disable can restore them exactly.
 		// Only save the first time — a second enable call sees already-filtered
 		// rules and would overwrite the true originals.
-		origKey := defenseOriginalRulesPrefix + req.VcnID + "_" + *sl.Id
+		origKey := defenseOriginalRulesPrefix + vcnID + "_" + *sl.Id
 		if origStr, _ := s.store.GetConfig(origKey); origStr == "" {
 			origJSON, _ := json.Marshal(sl.IngressSecurityRules)
 			s.setConfig(origKey, string(origJSON))
 		}
 	}
 
-	scope := strconv.FormatInt(req.TenantID, 10) + "_" + req.VcnID
+	scope := strconv.FormatInt(tenantID, 10) + "_" + vcnID
 	s.setConfig("defense_enabled_"+scope, "true")
-	s.setConfig("defense_tenant_"+scope, strconv.FormatInt(req.TenantID, 10))
-	s.setConfig("defense_vcn_"+scope, req.VcnID)
-	s.setConfig("defense_cidrs_"+scope, strings.Join(req.Blacklist, ","))
-	s.audit(req.TenantID, "defense:enable", strconv.Itoa(len(req.Blacklist))+" IPs blocked", r)
-	jsonOK(w, map[string]interface{}{"status": "ok", "blocked": len(req.Blacklist)})
+	s.setConfig("defense_tenant_"+scope, strconv.FormatInt(tenantID, 10))
+	s.setConfig("defense_vcn_"+scope, vcnID)
+	s.setConfig("defense_cidrs_"+scope, strings.Join(blacklist, ","))
+	return len(blacklist), nil
 }
 
 func (s *Server) handleDefenseDisable(w http.ResponseWriter, r *http.Request) {
@@ -126,37 +141,50 @@ func (s *Server) handleDefenseDisable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	client, tenant, ok := s.getTenantClient(req.TenantID, w)
-	if !ok {
+	if err := s.disableDefense(r.Context(), req.TenantID, req.VcnID); err != nil {
+		jsonErr(w, err.Error())
 		return
+	}
+	s.audit(req.TenantID, "defense:disable", req.VcnID, r)
+	jsonOK(w, map[string]string{"status": "ok"})
+}
+
+// disableDefense restores the original ingress rules saved by enableDefense
+// (falling back to an allow-all rule for legacy configs).
+func (s *Server) disableDefense(ctx context.Context, tenantID int64, vcnID string) error {
+	tenant, err := s.store.GetTenant(tenantID)
+	if err != nil || tenant == nil {
+		return fmt.Errorf("tenant not found")
+	}
+	client, err := s.clientFor(tenant)
+	if err != nil {
+		return fmt.Errorf("oci client: %w", err)
 	}
 	vcn := client.VcnClient()
 
 	slReq := core.ListSecurityListsRequest{
 		CompartmentId: common.String(tenant.TenancyOCID),
-		VcnId:         common.String(req.VcnID),
+		VcnId:         common.String(vcnID),
 		Limit:         common.Int(100),
 	}
-	slResp, err := vcn.ListSecurityLists(r.Context(), slReq)
+	slResp, err := vcn.ListSecurityLists(ctx, slReq)
 	if err != nil {
-		jsonErr(w, "list security lists: "+err.Error())
-		return
+		return fmt.Errorf("list security lists: %w", err)
 	}
 	if len(slResp.Items) == 0 {
-		jsonErr(w, "no security list found")
-		return
+		return fmt.Errorf("no security list found")
 	}
 
 	for _, sl := range slResp.Items {
 		if sl.Id == nil {
-			log.Printf("[defense] skipping security list with nil Id in VCN %s", req.VcnID)
+			log.Printf("[defense] skipping security list with nil Id in VCN %s", vcnID)
 			continue
 		}
 
 		// Restore: load the original rules saved during enable.
 		// If none saved (legacy), fall back to adding an allow-all rule.
 		var restoredRules []core.IngressSecurityRule
-		if origStr, err := s.store.GetConfig(defenseOriginalRulesPrefix + req.VcnID + "_" + *sl.Id); err == nil && origStr != "" {
+		if origStr, err := s.store.GetConfig(defenseOriginalRulesPrefix + vcnID + "_" + *sl.Id); err == nil && origStr != "" {
 			if err := json.Unmarshal([]byte(origStr), &restoredRules); err != nil {
 				log.Printf("[defense] unmarshal original rules for %s: %v", *sl.Id, err)
 				restoredRules = nil
@@ -188,13 +216,12 @@ func (s *Server) handleDefenseDisable(w http.ResponseWriter, r *http.Request) {
 				EgressSecurityRules:  sl.EgressSecurityRules,
 			},
 		}
-		if _, err := vcn.UpdateSecurityList(r.Context(), updateReq); err != nil {
-			jsonErr(w, "update security list: "+err.Error())
-			return
+		if _, err := vcn.UpdateSecurityList(ctx, updateReq); err != nil {
+			return fmt.Errorf("update security list: %w", err)
 		}
 	}
 
-	scope := strconv.FormatInt(req.TenantID, 10) + "_" + req.VcnID
+	scope := strconv.FormatInt(tenantID, 10) + "_" + vcnID
 	s.setConfig("defense_enabled_"+scope, "false")
 	s.setConfig("defense_tenant_"+scope, "")
 	s.setConfig("defense_vcn_"+scope, "")
@@ -203,10 +230,9 @@ func (s *Server) handleDefenseDisable(w http.ResponseWriter, r *http.Request) {
 		if sl.Id == nil {
 			continue
 		}
-		s.setConfig(defenseOriginalRulesPrefix+req.VcnID+"_"+*sl.Id, "")
+		s.setConfig(defenseOriginalRulesPrefix+vcnID+"_"+*sl.Id, "")
 	}
-	s.audit(req.TenantID, "defense:disable", req.VcnID, r)
-	jsonOK(w, map[string]string{"status": "ok"})
+	return nil
 }
 
 func (s *Server) handleIPBlacklist(w http.ResponseWriter, r *http.Request) {

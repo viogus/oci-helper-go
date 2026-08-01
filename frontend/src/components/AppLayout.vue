@@ -67,6 +67,7 @@
           <el-menu-item index="/tenants">{{ $t('menu.tenants') }}</el-menu-item>
           <el-menu-item index="/ai-chat">{{ $t('menu.aiChat') }}</el-menu-item>
           <el-menu-item index="/logs">{{ $t('menu.logs') }}</el-menu-item>
+          <el-menu-item index="/system-metrics">{{ $t('menu.systemMetrics') }}</el-menu-item>
           <el-menu-item index="/audit">{{ $t('menu.audit') }}</el-menu-item>
           <el-menu-item index="/users">{{ $t('menu.users') }}</el-menu-item>
           <el-menu-item index="/ssh-keys">{{ $t('menu.sshKeys') }}</el-menu-item>

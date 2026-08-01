@@ -21,29 +21,29 @@ import (
 )
 
 var (
-	tgAIWaiting    = map[int64]bool{}
-	tgAIWaitingMu  sync.Mutex
-	tgCreateStates = map[int64]*tgCreateState{}
-	tgCreateMu     sync.Mutex
-	tgSSHStates    = map[int64]bool{}
-	tgSSHMu        sync.Mutex
-	tgMFAStates    = map[int64]bool{}
-	tgMFAMu        sync.Mutex
+	tgAIWaiting       = map[int64]bool{}
+	tgAIWaitingMu     sync.Mutex
+	tgCreateStates    = map[int64]*tgCreateState{}
+	tgCreateMu        sync.Mutex
+	tgSSHStates       = map[int64]bool{}
+	tgSSHMu           sync.Mutex
+	tgMFAStates       = map[int64]bool{}
+	tgMFAMu           sync.Mutex
 	tgVolUpdateStates = map[int64]*tgVolUpdateState{}
 	tgVolUpdateMu     sync.Mutex
 )
 
 type tgCreateState struct {
-	TenantID    int64
+	TenantID     int64
 	Architecture string
-	OCPUs       float64
-	MemoryGB    float64
-	Disk        int64
-	Count       int
-	Interval    int
-	OS          string
-	Password    string
-	Step        string
+	OCPUs        float64
+	MemoryGB     float64
+	Disk         int64
+	Count        int
+	Interval     int
+	OS           string
+	Password     string
+	Step         string
 }
 
 type tgVolUpdateState struct {
@@ -57,12 +57,13 @@ func tgMainKeyboard() telegram.InlineKeyboardMarkup {
 	return telegram.InlineKeyboardMarkup{
 		InlineKeyboard: [][]telegram.InlineKeyboardButton{
 			{{Text: "🖥 Instances", CallbackData: "instances:0"}, {Text: "📋 Tasks", CallbackData: "tasks:0"}},
-			{{Text: "📊 Status", CallbackData: "status"}, {Text: "❓ Help", CallbackData: "help"}},
-			{{Text: "🤖 AI Chat", CallbackData: "ai"}},
+			{{Text: "📊 Status", CallbackData: "status"}, {Text: "📈 SysMetrics", CallbackData: "sysmetrics"}, {Text: "❓ Help", CallbackData: "help"}},
+			{{Text: "🤖 AI Chat", CallbackData: "ai"}, {Text: "🧠 AI Model", CallbackData: "ai:model"}},
 			{{Text: "🆕 Create Instance", CallbackData: "create"}},
 			{{Text: "🔐 MFA", CallbackData: "mfa"}},
 			{{Text: "🛡 Defense", CallbackData: "defense"}, {Text: "🚫 Blacklist", CallbackData: "blacklist"}},
-			{{Text: "🔑 SSH Keys", CallbackData: "sshkeys"}, {Text: "📌 Version", CallbackData: "version"}},
+			{{Text: "🔑 SSH Keys", CallbackData: "sshkeys"}, {Text: "🖥 SSH", CallbackData: "ssh"}},
+			{{Text: "📌 Version", CallbackData: "version"}},
 			{{Text: "💾 Backup", CallbackData: "backup"}, {Text: "📈 Traffic", CallbackData: "traffic"}},
 			{{Text: "💿 Volumes", CallbackData: "volumes"}, {Text: "📋 Plans", CallbackData: "plans"}},
 			{{Text: "🖥 VNC", CallbackData: "vnc"}},
@@ -116,9 +117,22 @@ func tgInstanceActionKeyboard(instanceID string) telegram.InlineKeyboardMarkup {
 				{Text: "\U0001f504 Reboot", CallbackData: fmt.Sprintf("instances:action:%s:reboot", instanceID)},
 				{Text: "\U0001f504 Soft", CallbackData: fmt.Sprintf("instances:action:%s:softreset", instanceID)},
 			},
-			{{Text: "\U0001f519 Back", CallbackData: "instances:0"}},
+			{
+				{Text: "\u2620\ufe0f Terminate", CallbackData: fmt.Sprintf("instances:terminate:%s", instanceID)},
+				{Text: "\U0001f519 Back", CallbackData: "instances:0"},
+			},
 		},
 	}
+}
+
+// tgInstID re-assembles a composite "tenantID:ocid" instance ID from callback
+// segments split on ':'. OCIDs never contain ':', so a composite occupies
+// exactly two segments starting at idx.
+func tgInstID(parts []string, idx int) string {
+	if len(parts) > idx+1 {
+		return parts[idx] + ":" + parts[idx+1]
+	}
+	return parts[idx]
 }
 
 type tgTaskShort struct {
@@ -166,12 +180,14 @@ func tgSend(bot *telegram.Bot, chatID int64, msgID int, text string, kb *telegra
 
 // ── Utility ──────────────────────────────────────────────────────────
 
-
 // ── Callback router ──────────────────────────────────────────────────
 
 func (s *Server) handleTGCallback(bot *telegram.Bot, chatID int64, messageID int, callbackID, data string) {
 	_ = bot.AnswerCallbackQuery(callbackID, "")
-	parts := strings.SplitN(data, ":", 4)
+	// Split on ALL colons (not SplitN): instance IDs are composite
+	// "tenantID:ocid" (OCIDs never contain ':'), so re-assembling the
+	// segments recovers them exactly.
+	parts := strings.Split(data, ":")
 	action := parts[0]
 
 	switch {
@@ -179,6 +195,29 @@ func (s *Server) handleTGCallback(bot *telegram.Bot, chatID int64, messageID int
 	case action == "main":
 		kb := tgMainKeyboard()
 		tgSend(bot, chatID, messageID, "oci-helper Bot — Main Menu\nSelect an option:", &kb)
+
+	case action == "cancel":
+		// Java parity: "关闭窗口" — clear every per-chat state and delete the
+		// message so no stale inline keyboard remains.
+		tgAIWaitingMu.Lock()
+		delete(tgAIWaiting, chatID)
+		tgAIWaitingMu.Unlock()
+		tgCreateMu.Lock()
+		delete(tgCreateStates, chatID)
+		tgCreateMu.Unlock()
+		tgRestoreMu.Lock()
+		delete(tgRestoreStates, chatID)
+		tgRestoreMu.Unlock()
+		tgDefenseMu.Lock()
+		delete(tgDefenseStates, chatID)
+		tgDefenseMu.Unlock()
+		tgVolUpdateMu.Lock()
+		delete(tgVolUpdateStates, chatID)
+		tgVolUpdateMu.Unlock()
+		tgMFAMu.Lock()
+		delete(tgMFAStates, chatID)
+		tgMFAMu.Unlock()
+		_ = bot.DeleteMessage(chatID, messageID)
 
 	case action == "status":
 		s.tgSendStatus(bot, chatID, messageID)
@@ -201,7 +240,7 @@ func (s *Server) handleTGCallback(bot *telegram.Bot, chatID int64, messageID int
 		kb := tgMainKeyboard()
 		tgSend(bot, chatID, messageID, helpText, &kb)
 
-	case action == "ai":
+	case action == "ai" && len(parts) == 1:
 		tgAIWaitingMu.Lock()
 		tgAIWaiting[chatID] = true
 		tgAIWaitingMu.Unlock()
@@ -233,24 +272,72 @@ func (s *Server) handleTGCallback(bot *telegram.Bot, chatID int64, messageID int
 	// ── Specific sub-action cases (MUST come before generic page cases) ──
 
 	case action == "instances" && len(parts) >= 3 && parts[1] == "detail":
-		s.tgSendInstanceDetail(bot, chatID, messageID, parts[2])
+		s.tgSendInstanceDetail(bot, chatID, messageID, tgInstID(parts, 2))
 
-	case action == "instances" && len(parts) >= 4 && parts[1] == "action":
-		instanceID, actionType := parts[2], parts[3]
+	case action == "instances" && len(parts) >= 5 && parts[1] == "action":
+		instanceID := tgInstID(parts, 2)
+		actionType := parts[4]
 		s.tgPerformAction(bot, chatID, messageID, callbackID, instanceID, actionType)
 		s.tgSendInstanceDetail(bot, chatID, messageID, instanceID)
+
+	// ── Instance terminate (confirm flow, Java parity) ──
+	// (confirm sub-case MUST precede the generic terminate case)
+	case action == "instances" && len(parts) >= 6 && parts[1] == "terminate" && parts[2] == "confirm":
+		instanceID := tgInstID(parts, 3)
+		preserveBootVolume := parts[5] == "keep"
+		s.tgTerminateDo(bot, chatID, messageID, callbackID, instanceID, preserveBootVolume)
+	case action == "instances" && len(parts) >= 3 && parts[1] == "terminate":
+		s.tgTerminateConfirm(bot, chatID, messageID, tgInstID(parts, 2))
 
 	case action == "tasks" && len(parts) >= 3 && parts[1] == "detail":
 		taskID, _ := strconv.ParseInt(parts[2], 10, 64)
 		s.tgSendTaskDetail(bot, chatID, messageID, taskID)
 
-	// ── Defense ──
+	// ── Defense (enable flow: tenant -> VCN -> CIDRs -> confirm) ──
 	case action == "defense" && len(parts) == 1:
 		s.tgDefenseMenu(bot, chatID, messageID)
 	case action == "defense" && len(parts) >= 2 && parts[1] == "enable":
-		s.tgDefenseEnablePrompt(bot, chatID, messageID)
+		s.tgDefenseTenantList(bot, chatID, messageID)
+	case action == "defense" && len(parts) >= 3 && parts[1] == "tenant":
+		tenantID, _ := strconv.ParseInt(parts[2], 10, 64)
+		tgDefenseMu.Lock()
+		tgDefenseStates[chatID] = &tgDefenseState{Step: "vcn", TenantID: tenantID}
+		tgDefenseMu.Unlock()
+		s.tgDefenseVcnList(bot, chatID, messageID, tenantID, false)
+	case action == "defense" && len(parts) >= 4 && parts[1] == "vcn":
+		tenantID, _ := strconv.ParseInt(parts[2], 10, 64)
+		vcnID := parts[3]
+		tgDefenseMu.Lock()
+		tgDefenseStates[chatID] = &tgDefenseState{Step: "cidr", TenantID: tenantID, VcnID: vcnID}
+		tgDefenseMu.Unlock()
+		tgSend(bot, chatID, messageID, "🛡 请输入要封禁的 CIDR，每行一个（例如 1.2.3.4/32）。", nil)
+	case action == "defense" && len(parts) >= 3 && parts[1] == "confirm":
+		tenantID, _ := strconv.ParseInt(parts[2], 10, 64)
+		vcnID := parts[3]
+		s.tgDefenseEnableDo(bot, chatID, messageID, callbackID, tenantID, vcnID)
+
+	// ── Defense disable flow (tenant -> VCN -> confirm) ──
+	// (specific sub-cases MUST precede the generic "disable" case)
+	case action == "defense" && len(parts) >= 4 && parts[1] == "disable" && parts[2] == "tenant":
+		tenantID, _ := strconv.ParseInt(parts[3], 10, 64)
+		tgDefenseMu.Lock()
+		tgDefenseStates[chatID] = &tgDefenseState{Step: "vcn", TenantID: tenantID}
+		tgDefenseMu.Unlock()
+		s.tgDefenseVcnList(bot, chatID, messageID, tenantID, true)
+	case action == "defense" && len(parts) >= 5 && parts[1] == "disable" && parts[2] == "vcn":
+		tenantID, _ := strconv.ParseInt(parts[3], 10, 64)
+		vcnID := parts[4]
+		tgDefenseMu.Lock()
+		tgDefenseStates[chatID] = &tgDefenseState{Step: "confirm", TenantID: tenantID, VcnID: vcnID}
+		st := tgDefenseStates[chatID]
+		tgDefenseMu.Unlock()
+		s.tgDefenseConfirm(bot, chatID, messageID, st, true)
+	case action == "defense" && len(parts) >= 5 && parts[1] == "disable" && parts[2] == "confirm":
+		tenantID, _ := strconv.ParseInt(parts[3], 10, 64)
+		vcnID := parts[4]
+		s.tgDefenseDisableDo(bot, chatID, messageID, callbackID, tenantID, vcnID)
 	case action == "defense" && len(parts) >= 2 && parts[1] == "disable":
-		s.tgDefenseDisableConfirm(bot, chatID, messageID)
+		s.tgDefenseTenantList(bot, chatID, messageID)
 
 	// ── Blacklist ──
 	case action == "blacklist" && len(parts) == 1:
@@ -301,7 +388,7 @@ func (s *Server) handleTGCallback(bot *telegram.Bot, chatID int64, messageID int
 		rows = append(rows, []telegram.InlineKeyboardButton{{Text: "Back", CallbackData: "main"}})
 		tgSend(bot, chatID, messageID, "选择实例查看 VNC 信息（请在面板 /vnc 打开控制台）", &telegram.InlineKeyboardMarkup{InlineKeyboard: rows})
 	case action == "vnc" && len(parts) >= 3 && parts[1] == "open":
-		inst, _ := s.store.GetInstanceByID(parts[2])
+		inst, _ := s.store.GetInstanceByID(tgInstID(parts, 2))
 		if inst == nil {
 			tgSend(bot, chatID, messageID, "实例不存在，请先同步。", nil)
 			return
@@ -318,12 +405,16 @@ func (s *Server) handleTGCallback(bot *telegram.Bot, chatID int64, messageID int
 	case action == "traffic" && len(parts) == 1:
 		s.tgTrafficChooseInstance(bot, chatID, messageID)
 	case action == "traffic" && len(parts) >= 3 && parts[1] == "query":
-		s.tgTrafficQuery(bot, chatID, messageID, parts[2])
+		s.tgTrafficQuery(bot, chatID, messageID, tgInstID(parts, 2))
 
 	// ── Volumes ──
 	case action == "volumes" && len(parts) == 1:
 		s.tgVolumeList(bot, chatID, messageID)
-	case action == "volumes" && len(parts) == 4 && parts[1] == "terminate":
+	case action == "volumes" && len(parts) >= 5 && parts[1] == "terminate" && parts[2] == "confirm":
+		tenantID, _ := strconv.ParseInt(parts[3], 10, 64)
+		volID := parts[4]
+		s.tgVolumeTerminate(bot, chatID, messageID, tenantID, volID)
+	case action == "volumes" && len(parts) >= 4 && parts[1] == "terminate":
 		tenantID, _ := strconv.ParseInt(parts[2], 10, 64)
 		volID := parts[3]
 		kb := telegram.InlineKeyboardMarkup{InlineKeyboard: [][]telegram.InlineKeyboardButton{{
@@ -331,11 +422,7 @@ func (s *Server) handleTGCallback(bot *telegram.Bot, chatID int64, messageID int
 			{Text: "Back", CallbackData: "volumes"},
 		}}}
 		tgSend(bot, chatID, messageID, "确认删除该引导卷？此操作不可恢复。", &kb)
-	case action == "volumes" && len(parts) == 5 && parts[1] == "terminate" && parts[2] == "confirm":
-		tenantID, _ := strconv.ParseInt(parts[3], 10, 64)
-		volID := parts[4]
-		s.tgVolumeTerminate(bot, chatID, messageID, tenantID, volID)
-	case action == "volumes" && len(parts) == 4 && parts[1] == "update":
+	case action == "volumes" && len(parts) >= 4 && parts[1] == "update":
 		tenantID, _ := strconv.ParseInt(parts[2], 10, 64)
 		volID := parts[3]
 		tgVolUpdateMu.Lock()
@@ -359,11 +446,45 @@ func (s *Server) handleTGCallback(bot *telegram.Bot, chatID int64, messageID int
 	case action == "checkalive" && len(parts) == 1:
 		s.tgCheckAlivePrompt(bot, chatID, messageID)
 	case action == "checkalive" && len(parts) >= 3 && parts[1] == "do":
-		s.tgCheckAliveDo(bot, chatID, messageID, parts[2])
+		s.tgCheckAliveDo(bot, chatID, messageID, tgInstID(parts, 2))
 
 	// ── Configs ──
 	case action == "cfg" && len(parts) >= 2 && parts[1] == "list":
 		s.tgConfigList(bot, chatID, messageID)
+
+	// ── System metrics (host CPU/mem/disk/net) ──
+	case action == "sysmetrics":
+		s.tgSystemMetrics(bot, chatID, messageID)
+
+	// ── AI model selection (Java parity: deepseek_r1 / deepseek_v3 / qwen) ──
+	case action == "ai" && len(parts) >= 4 && parts[1] == "model" && parts[2] == "set":
+		tgAIModelMu.Lock()
+		tgAIModels[chatID] = parts[3]
+		tgAIModelMu.Unlock()
+		_ = bot.AnswerCallbackQuery(callbackID, "Model set")
+		kb := tgMainKeyboard()
+		tgSend(bot, chatID, messageID, "AI 模型已切换: "+tgModelDisplayName(parts[3]), &kb)
+	case action == "ai" && len(parts) >= 2 && parts[1] == "model":
+		s.tgAIModelMenu(bot, chatID, messageID)
+
+	// ── Backup / restore ──
+	case action == "backup" && len(parts) == 1:
+		s.tgBackupTrigger(bot, chatID, messageID)
+	case action == "backup" && len(parts) >= 2 && parts[1] == "restore":
+		tgRestoreMu.Lock()
+		tgRestoreStates[chatID] = &tgRestoreState{Step: "password"}
+		tgRestoreMu.Unlock()
+		tgSend(bot, chatID, messageID, "📥 恢复数据\n\n请回复备份密码（备份时设置的密码）。", nil)
+
+	// ── SSH management (Java parity: /ssh_config + /ssh) ──
+	case action == "ssh" && len(parts) == 1:
+		s.tgSSHManagement(bot, chatID, messageID)
+	case action == "ssh" && len(parts) >= 3 && parts[1] == "remove":
+		sshConnsMu.Lock()
+		delete(tgSSHConnections, chatID)
+		sshConnsMu.Unlock()
+		_ = bot.AnswerCallbackQuery(callbackID, "Connection removed")
+		s.tgSSHManagement(bot, chatID, messageID)
 
 	// ── Generic list/page cases (match LAST) ──
 
@@ -472,7 +593,15 @@ func (s *Server) tgAIRespond(bot *telegram.Bot, chatID int64, text string) {
 		bot.SendMessage(chatID, "AI 未配置，请先在设置页填写 SiliconFlow API Key。")
 		return
 	}
-	model, _ := s.store.GetConfig("siliconflow_model")
+	model := ""
+	tgAIModelMu.Lock()
+	if key, ok := tgAIModels[chatID]; ok {
+		model = tgModelIDs[key]
+	}
+	tgAIModelMu.Unlock()
+	if model == "" {
+		model, _ = s.store.GetConfig("siliconflow_model")
+	}
 	client := ai.New(apiKey, model)
 	reply, err := client.Chat([]ai.ChatMessage{{Role: "user", Content: text}})
 	if err != nil {
@@ -681,19 +810,7 @@ func (s *Server) tgDefenseMenu(bot *telegram.Bot, chatID int64, messageID int) {
 			{{Text: "\U0001f519 Back", CallbackData: "main"}},
 		},
 	}
-	tgSend(bot, chatID, messageID, "\U0001f6e1 Defense Mode\n\nEnable: Block specified CIDRs via security list rules.\nDisable: Restore allow-all rule.\n\nUse web UI for setup: /defense", &kb)
-}
-
-func (s *Server) tgDefenseEnablePrompt(bot *telegram.Bot, chatID int64, messageID int) {
-	text := "To enable defense, visit the web UI:\n→ /defense\n\nProvide: tenant, VCN, and CIDR blacklist (one per line)."
-	kb := tgMainKeyboard()
-	tgSend(bot, chatID, messageID, text, &kb)
-}
-
-func (s *Server) tgDefenseDisableConfirm(bot *telegram.Bot, chatID int64, messageID int) {
-	text := "To disable defense, visit the web UI:\n→ /defense\n\nThis restores the allow-all ingress rule."
-	kb := tgMainKeyboard()
-	tgSend(bot, chatID, messageID, text, &kb)
+	tgSend(bot, chatID, messageID, "\U0001f6e1 Defense Mode\n\nEnable: Block specified CIDRs via security list rules.\nDisable: Restore allow-all rule.", &kb)
 }
 
 // ── Blacklist handlers ───────────────────────────────────────────────

@@ -36,6 +36,7 @@ const routes = [
       { path: 'ai-chat', name: 'AiChat', component: () => import('../views/AiChat.vue'), meta: { titleKey: 'route.aiChat', icon: 'ChatDotRound' } },
       { path: 'backup', name: 'Backup', component: () => import('../views/Backup.vue'), meta: { titleKey: 'route.backup', icon: 'Upload' } },
       { path: 'logs', name: 'Logs', component: () => import('../views/Logs.vue'), meta: { titleKey: 'route.logs', icon: 'Document' } },
+      { path: 'system-metrics', name: 'SystemMetrics', component: () => import('../views/SystemMetrics.vue'), meta: { titleKey: 'route.systemMetrics', icon: 'DataLine' } },
       { path: 'mem-tasks', name: 'InMemoryTasks', component: () => import('../views/InMemoryTasks.vue'), meta: { titleKey: 'route.memTasks', icon: 'Timer' } },
       { path: 'settings', name: 'Settings', component: () => import('../views/Settings.vue'), meta: { titleKey: 'route.settings', icon: 'Setting' } },
       { path: 'audit', name: 'Audit', component: () => import('../views/Audit.vue'), meta: { titleKey: 'route.audit', icon: 'List' } },

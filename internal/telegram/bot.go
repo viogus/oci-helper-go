@@ -1,5 +1,4 @@
 // Package telegram implements a Telegram Bot API client.
-//
 package telegram
 
 import (
@@ -27,8 +26,8 @@ type Update struct {
 }
 
 type Message struct {
-	MessageID int  `json:"message_id"`
-	Chat      Chat `json:"chat"`
+	MessageID int    `json:"message_id"`
+	Chat      Chat   `json:"chat"`
 	Text      string `json:"text"`
 }
 
@@ -107,6 +106,14 @@ func (b *Bot) AnswerCallbackQuery(callbackID, text string) error {
 		"show_alert":        false,
 	}
 	return b.call("answerCallbackQuery", body, nil)
+}
+
+func (b *Bot) DeleteMessage(chatID int64, messageID int) error {
+	body := map[string]interface{}{
+		"chat_id":    chatID,
+		"message_id": messageID,
+	}
+	return b.call("deleteMessage", body, nil)
 }
 
 func (b *Bot) GetUpdates(offset int) ([]Update, error) {

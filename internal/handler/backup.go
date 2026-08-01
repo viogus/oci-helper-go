@@ -40,9 +40,9 @@ type dbTenant struct {
 
 type dbInstance struct {
 	ID, Name, OCID, Shape, State, PublicIP, PrivateIP, Region, AvailabilityDomain, FaultDomain, ImageID, SubnetID string
-	TenantID                                                   int64
-	OCPU, MemoryGB                                             float64
-	BootVolumeGB                                               int64
+	TenantID                                                                                                      int64
+	OCPU, MemoryGB                                                                                                float64
+	BootVolumeGB                                                                                                  int64
 }
 
 type dbConfig struct {
@@ -187,134 +187,117 @@ func (s *Server) handleRestore(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	encrypted, err := base64.RawURLEncoding.DecodeString(req.Data)
+	nTenants, nInstances, err := s.restoreData(req.Password, req.Data)
 	if err != nil {
-		jsonErr(w, "invalid data: "+err.Error())
+		jsonErr(w, err.Error())
 		return
 	}
+	s.audit(0, "backup:restore", fmt.Sprintf("%d tenants, %d instances", nTenants, nInstances), r)
+	jsonOK(w, map[string]string{"status": "ok"})
+}
 
-	plain, err := decrypt(encrypted, req.Password)
+// restoreData decrypts an encrypted backup payload and imports it into the
+// database (wiping existing data first). Returns restored tenant/instance
+// counts. Shared by the web restore endpoint and the Telegram restore flow.
+func (s *Server) restoreData(password, data string) (int, int, error) {
+	encrypted, err := base64.RawURLEncoding.DecodeString(data)
 	if err != nil {
-		jsonErr(w, "decrypt failed: wrong password or corrupt data")
-		return
+		return 0, 0, fmt.Errorf("invalid data: %w", err)
 	}
 
-	var data backupData
-	if err := json.Unmarshal(plain, &data); err != nil {
-		jsonErr(w, "invalid backup: "+err.Error())
-		return
+	plain, err := decrypt(encrypted, password)
+	if err != nil {
+		return 0, 0, fmt.Errorf("decrypt failed: wrong password or corrupt data")
+	}
+
+	var payload backupData
+	if err := json.Unmarshal(plain, &payload); err != nil {
+		return 0, 0, fmt.Errorf("invalid backup: %w", err)
 	}
 
 	// clear existing data before restore
 	tx, err := s.store.BeginTx()
 	if err != nil {
-		jsonErr(w, "begin tx: "+err.Error())
-		return
+		return 0, 0, fmt.Errorf("begin tx: %w", err)
 	}
 	defer tx.Rollback() // safe no-op after successful Commit
 
 	if err := s.store.ClearAllTx(tx); err != nil {
-		jsonErr(w, "clear: "+err.Error())
-		return
+		return 0, 0, fmt.Errorf("clear: %w", err)
 	}
 
-	// restore tenants
-	for _, t := range data.Tenants {
+	for _, t := range payload.Tenants {
 		if err := s.store.CreateTenantImportWithIDTx(tx, t.ID, t.Name, t.UserOCID, t.TenancyOCID, t.Region, t.Fingerprint, t.KeyFile); err != nil {
-			tx.Rollback()
-			jsonErr(w, "restore tenant: "+err.Error())
-			return
+			return 0, 0, fmt.Errorf("restore tenant: %w", err)
 		}
 	}
-
-	// restore instances
-	for _, i := range data.Instances {
+	for _, i := range payload.Instances {
 		if err := s.store.UpsertInstanceImportTx(tx, i.ID, i.TenantID, i.Name, i.OCID, i.Shape, i.State, i.PublicIP, i.PrivateIP, i.Region, i.AvailabilityDomain, i.FaultDomain, i.ImageID, i.SubnetID, i.OCPU, i.MemoryGB, i.BootVolumeGB); err != nil {
-			tx.Rollback()
-			jsonErr(w, "restore instance: "+err.Error())
-			return
+			return 0, 0, fmt.Errorf("restore instance: %w", err)
 		}
 	}
-
-	// restore config
-	for _, c := range data.Config {
+	for _, c := range payload.Config {
 		if err := s.store.SetConfigTx(tx, c.Key, c.Value); err != nil {
-			tx.Rollback()
-			jsonErr(w, "restore config: "+err.Error())
-			return
+			return 0, 0, fmt.Errorf("restore config: %w", err)
 		}
 	}
-
-	for _, u := range data.Users {
+	for _, u := range payload.Users {
 		if err := s.store.CreateUserImportTx(tx, u.Username, u.PasswordHash, u.Role, u.MFASecret, u.Email, u.MFAEnabled); err != nil {
-			tx.Rollback()
-			jsonErr(w, "restore user: "+err.Error())
-			return
+			return 0, 0, fmt.Errorf("restore user: %w", err)
 		}
 	}
-	for i := range data.CfCfgs {
-		if err := s.store.CreateCfCfgImportTx(tx, &data.CfCfgs[i]); err != nil {
-			tx.Rollback()
-			jsonErr(w, "restore cf config: "+err.Error())
-			return
+	for i := range payload.CfCfgs {
+		if err := s.store.CreateCfCfgImportTx(tx, &payload.CfCfgs[i]); err != nil {
+			return 0, 0, fmt.Errorf("restore cf config: %w", err)
 		}
 	}
-	for i := range data.IpData {
-		if err := s.store.CreateIpDataImportTx(tx, &data.IpData[i]); err != nil {
-			tx.Rollback()
-			jsonErr(w, "restore ip data: "+err.Error())
-			return
+	for i := range payload.IpData {
+		if err := s.store.CreateIpDataImportTx(tx, &payload.IpData[i]); err != nil {
+			return 0, 0, fmt.Errorf("restore ip data: %w", err)
 		}
 	}
-	for i := range data.SSHKeys {
-		if err := s.store.CreateSSHKeyImportTx(tx, &data.SSHKeys[i]); err != nil {
-			tx.Rollback()
-			jsonErr(w, "restore ssh key: "+err.Error())
-			return
+	for i := range payload.SSHKeys {
+		if err := s.store.CreateSSHKeyImportTx(tx, &payload.SSHKeys[i]); err != nil {
+			return 0, 0, fmt.Errorf("restore ssh key: %w", err)
 		}
 	}
-	for i := range data.InstancePlans {
-		if err := s.store.CreateInstancePlanImportTx(tx, &data.InstancePlans[i]); err != nil {
-			tx.Rollback()
-			jsonErr(w, "restore instance plan: "+err.Error())
-			return
+	for i := range payload.InstancePlans {
+		if err := s.store.CreateInstancePlanImportTx(tx, &payload.InstancePlans[i]); err != nil {
+			return 0, 0, fmt.Errorf("restore instance plan: %w", err)
 		}
 	}
-	for i := range data.StockAlerts {
-		if err := s.store.CreateStockAlertImportTx(tx, &data.StockAlerts[i]); err != nil {
-			tx.Rollback()
-			jsonErr(w, "restore stock alert: "+err.Error())
-			return
+	for i := range payload.StockAlerts {
+		if err := s.store.CreateStockAlertImportTx(tx, &payload.StockAlerts[i]); err != nil {
+			return 0, 0, fmt.Errorf("restore stock alert: %w", err)
 		}
 	}
-	for i := range data.Tasks {
-		if err := s.store.CreateTaskImportTx(tx, &data.Tasks[i]); err != nil {
-			tx.Rollback()
-			jsonErr(w, "restore task: "+err.Error())
-			return
+	for i := range payload.Tasks {
+		if err := s.store.CreateTaskImportTx(tx, &payload.Tasks[i]); err != nil {
+			return 0, 0, fmt.Errorf("restore task: %w", err)
 		}
 	}
 
 	if err := tx.Commit(); err != nil {
-		jsonErr(w, "commit: "+err.Error())
-		return
+		return 0, 0, fmt.Errorf("commit: %w", err)
 	}
 	if err := os.MkdirAll(s.cfg.KeysDir, 0700); err != nil {
-		jsonErr(w, "create keys dir: "+err.Error())
-		return
+		return 0, 0, fmt.Errorf("create keys dir: %w", err)
 	}
-	for _, kf := range data.KeyFiles {
+	for _, kf := range payload.KeyFiles {
 		if kf.Name == "" {
 			continue
 		}
+		// Prevent path traversal: backup files must restore as plain names
+		// inside the keys dir.
+		if filepath.Base(kf.Name) != kf.Name {
+			return 0, 0, fmt.Errorf("restore key file %q: invalid name", kf.Name)
+		}
 		if err := os.WriteFile(filepath.Join(s.cfg.KeysDir, kf.Name), kf.Content, 0600); err != nil {
-			jsonErr(w, "restore key file "+kf.Name+": "+err.Error())
-			return
+			return 0, 0, fmt.Errorf("restore key file %s: %w", kf.Name, err)
 		}
 	}
 
-	s.audit(0, "backup:restore", fmt.Sprintf("%d tenants, %d instances", len(data.Tenants), len(data.Instances)), r)
-	jsonOK(w, map[string]string{"status": "ok"})
+	return len(payload.Tenants), len(payload.Instances), nil
 }
 
 func encrypt(plaintext []byte, password string) ([]byte, error) {

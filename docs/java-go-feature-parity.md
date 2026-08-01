@@ -132,6 +132,42 @@ the Java process did.
 
 ---
 
+## 2026-08-02 Gap Closure Update (fresh audit vs Yohann0617/oci-helper @HEAD)
+
+A fresh comparison against the Java source found and closed these gaps:
+
+- **Host system metrics (资源监控)**: Java's `/metrics/{token}` WebSocket +
+  `UserDashboard` page + TG `system_metrics` menu streamed host CPU/memory/disk/
+  network. Go now has `GET /api/system/metrics` (pure-Go gopsutil; darwin
+  static-build fallback via `top -l 1`), a new **System Metrics** frontend page
+  (`/system-metrics`, sidebar System submenu, i18n en/zh-CN), and the TG
+  **SysMetrics** menu item with a refresh button.
+- **TG AI model selection**: `🧠 AI Model` menu mirrors Java's
+  `ai_select_model` / `ai_set_model_*` (DeepSeek-R1 / DeepSeek-V3 / Qwen-2.5);
+  per-chat model overrides the global `siliconflow_model` config.
+- **TG instance terminate**: `instances:terminate` confirm flow with the
+  Java `terminate_instances:true/false` preserve-boot-volume choice.
+- **TG backup restore**: `💾 Backup` menu gained a restore flow (password →
+  base64 payload) reusing the web restore pipeline (`restoreData`).
+- **TG SSH management**: `/ssh_config host port user pwd` + `/ssh <cmd>`
+  one-shot execution (30s timeout, interactive-command blocklist) and a
+  `🖥 SSH` menu showing the saved connection with remove button. 30-min idle
+  expiry like Java's `SshConnectionStorage`/`TelegramCleanupTask`.
+- **TG defense full flow**: enable (tenant → VCN → CIDRs → confirm) and
+  disable (tenant → VCN → confirm) now run inside Telegram instead of pointing
+  at the web UI; shared `enableDefense`/`disableDefense` helpers back both the
+  HTTP handlers and the bot.
+- **TG `cancel` (关闭窗口)**: clears per-chat state and deletes the message.
+- **TG callback parsing fix**: instance IDs are composite `tenantID:ocid`;
+  callbacks are now split on all `:` and re-assembled (`tgInstID`), fixing
+  broken instance detail/action/traffic/checkalive/vnc/volume flows that used
+  `SplitN(data, ":", 4)`.
+- New tests: `internal/system` (CPU delta math, top-regex, rounding) and
+  `internal/handler/handler_tg_test.go` (composite-ID parsing, CIDR list,
+  model mapping).
+
+
+
 ## 2. Architecture Parity — All Java Patterns Have Go Equivalents
 
 | Java Pattern | Go Equivalent | File |

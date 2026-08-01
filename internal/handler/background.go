@@ -152,3 +152,25 @@ func (s *Server) cleanLogTask() {
 		}
 	}
 }
+
+// cleanTGSSHConns expires Telegram SSH connection configs idle for more than
+// 30 minutes (Java's TelegramCleanupTask equivalent).
+func (s *Server) cleanTGSSHConns() {
+	ticker := time.NewTicker(10 * time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-s.stopping:
+			return
+		case <-ticker.C:
+			now := time.Now()
+			sshConnsMu.Lock()
+			for chatID, c := range tgSSHConnections {
+				if now.Sub(c.LastUsed) > tgSSHExpiry {
+					delete(tgSSHConnections, chatID)
+				}
+			}
+			sshConnsMu.Unlock()
+		}
+	}
+}

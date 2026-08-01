@@ -38,7 +38,8 @@
     "ipPool": "IP Pool",
     "instancePlans": "Instance Plans",
     "defense": "Defense",
-    "sshKeys": "SSH Keys"
+    "sshKeys": "SSH Keys",
+    "systemMetrics": "System Metrics"
   },
   "route": {
     "home": "Dashboard",
@@ -69,7 +70,8 @@
     "ipPool": "IP Pool",
     "instancePlans": "Instance Plans",
     "defense": "Defense",
-    "sshKeys": "SSH Keys"
+    "sshKeys": "SSH Keys",
+    "systemMetrics": "System Metrics"
   },
   "login": {
     "username": "Username",
@@ -629,5 +631,32 @@
     "keyWarning": "Save your private key now. It will not be shown again.",
     "confirmDelete": "Delete this SSH key? It may be in use by tenants.",
     "notFound": "No SSH keys found"
+  },
+  "sysMetrics": {
+    "title": "System Metrics",
+    "refresh": "Refresh",
+    "hostInfo": "Host Info",
+    "hostname": "Hostname",
+    "os": "OS",
+    "platform": "Platform",
+    "arch": "Architecture",
+    "uptime": "Uptime",
+    "cpuCount": "CPU Cores",
+    "cpu": "CPU Usage",
+    "cpuModel": "CPU Model",
+    "memory": "Memory",
+    "disk": "Disk Usage",
+    "network": "Network",
+    "used": "Used",
+    "free": "Free",
+    "total": "Total",
+    "user": "User",
+    "system": "System",
+    "idle": "Idle",
+    "txRate": "TX Rate",
+    "rxRate": "RX Rate",
+    "txTotal": "TX Total",
+    "rxTotal": "RX Total",
+    "noDisk": "No disk information available"
   }
 }

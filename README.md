@@ -189,6 +189,17 @@ volumes:
   oci-helper-data:
 ```
 
+> The image runs as UID 65534 (`nobody`). If you mount a host directory with
+> `- /root/oci-helper-go:/app/oci-helper`, the host directory must be writable
+> by that UID. Fix on the host:
+>
+> ```bash
+> sudo chown -R 65534:65534 /root/oci-helper-go
+> ```
+>
+> Or run the container as root by adding `user: "0:0"` to the service.
+> Without this, startup fails with `attempt to write a readonly database`.
+
 ## Environment variables
 
 | Variable | Default | Description |

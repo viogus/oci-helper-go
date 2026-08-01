@@ -91,6 +91,19 @@ func main() {
 		log.Printf("warn: cannot set keys dir permission %s: %v (PEM upload may fail)", cfg.KeysDir, err)
 	}
 
+	// Fail fast with an actionable message when the data volume is not
+	// writable by the container user (the image runs as UID 65534).
+	if cfg.DBPath != ":memory:" {
+		dbDir := filepath.Dir(cfg.DBPath)
+		probe, err := os.CreateTemp(dbDir, ".oci-helper-write-test-*")
+		if err != nil {
+			log.Fatalf("data directory %s is not writable by UID %d: %v\n"+
+				"Fix on host: sudo chown -R 65534:65534 <host-data-dir>\n"+
+				"Or in docker-compose add: user: \"0:0\"", dbDir, os.Getuid(), err)
+		}
+		_ = os.Remove(probe.Name())
+	}
+
 	// open db
 	store, err := db.New(cfg.DBPath)
 	if err != nil {

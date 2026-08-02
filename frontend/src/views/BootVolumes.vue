@@ -107,6 +107,17 @@
             style="width: 180px"
           />
         </el-form-item>
+        <el-form-item :label="$t('bootVolume.vpusPerGB')">
+          <el-input-number
+            v-model="resizeForm.vpusPerGB"
+            :min="0"
+            :max="120"
+            :step="10"
+            controls-position="right"
+            style="width: 180px"
+          />
+          <span style="margin-left:8px;color:#909399;font-size:12px">0 = keep current</span>
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="resizeDialogVisible = false">{{ $t('bootVolume.cancel') }}</el-button>
@@ -140,7 +151,7 @@ const size = ref(20)
 // Resize dialog
 const resizeDialogVisible = ref(false)
 const selectedVolume = ref(null)
-const resizeForm = ref({ sizeGB: 47 })
+const resizeForm = ref({ sizeGB: 47, vpusPerGB: 0 })
 
 // ---------------------------------------------------------------------------
 // Computed
@@ -291,9 +302,10 @@ async function handleResize() {
   try {
     await post('/boot-volumes/' + volumeId + '/resize', {
       tenantId: tenantId.value,
-      sizeInGBs: resizeForm.value.sizeGB
+      sizeInGBs: resizeForm.value.sizeGB,
+      vpusPerGB: resizeForm.value.vpusPerGB || 0
     })
-    ElMessage.success('Boot volume resized to ' + resizeForm.value.sizeGB + ' GB')
+    ElMessage.success('Boot volume updated')
     resizeDialogVisible.value = false
     await loadBootVolumes()
   } catch (e) {

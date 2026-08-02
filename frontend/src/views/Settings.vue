@@ -165,6 +165,22 @@
             </el-button>
           </div>
         </el-form-item>
+        <el-form-item label="Allowed Emails">
+          <div class="setting-row">
+            <el-input
+              v-model="config.google_allowed_emails"
+              placeholder="Comma-separated emails; empty = allow any Google account"
+              :disabled="saving"
+            />
+            <el-button
+              type="primary"
+              :loading="saving"
+              @click="saveSetting('google_allowed_emails', config.google_allowed_emails)"
+            >
+              Save
+            </el-button>
+          </div>
+        </el-form-item>
       </el-form>
     </el-card>
 

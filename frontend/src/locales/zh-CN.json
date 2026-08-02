@@ -458,7 +458,8 @@
     "needInstanceTitle": "需要实例",
     "confirmShrink": "缩容引导卷 \"{name}\" 到 47 GB？操作期间实例将被停止。",
     "shrinkTitle": "缩容到 47GB",
-    "shrinkBtn": "缩容"
+    "shrinkBtn": "缩容",
+    "vpusPerGB": "VPU / GB"
   },
   "tenantDetail": {
     "title": "租户详情",

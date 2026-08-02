@@ -458,7 +458,8 @@
     "needInstanceTitle": "Instance Required",
     "confirmShrink": "Shrink boot volume \"{name}\" to 47 GB? The instance will be stopped during this operation.",
     "shrinkTitle": "Shrink to 47GB",
-    "shrinkBtn": "Shrink"
+    "shrinkBtn": "Shrink",
+    "vpusPerGB": "VPU / GB"
   },
   "tenantDetail": {
     "title": "Tenant Detail",

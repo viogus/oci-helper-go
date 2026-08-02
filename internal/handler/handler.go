@@ -690,6 +690,23 @@ func (s *Server) handleGoogleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Google email allowlist (Java parity): when google_allowed_emails is
+	// configured (comma-separated), only those emails may sign in via OAuth.
+	if allowlist, _ := s.store.GetConfig("google_allowed_emails"); strings.TrimSpace(allowlist) != "" {
+		allowed := false
+		for _, e := range strings.Split(allowlist, ",") {
+			if strings.EqualFold(strings.TrimSpace(e), userInfo.Email) {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			s.audit(0, "oauth:denied", "email not in allowlist: "+userInfo.Email, r)
+			http.Error(w, "Forbidden: email not allowed", http.StatusForbidden)
+			return
+		}
+	}
+
 	// set session using signed cookie
 	// Look up user role from DB (default to "user" for new accounts).
 	role := "user"
@@ -744,7 +761,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		// Sensitive keys are masked — only first 2 + last 2 chars shown.
 		keys := []string{
 			"mfa_enabled", "telegram_token", "dingtalk_webhook",
-			"google_client_id", "google_client_secret",
+			"google_client_id", "google_client_secret", "google_allowed_emails",
 			"cloudflare_token", "siliconflow_key", "siliconflow_model",
 			"ai_search_enabled", "telegram_chat_id", "telegram_webhook_secret",
 			"daily_broadcast_enabled", "daily_broadcast_cron",

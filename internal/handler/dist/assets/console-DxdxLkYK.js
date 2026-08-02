@@ -1,1 +1,0 @@
-import{a9 as t,a5 as n}from"./index-MF4KkqaI.js";function e(s){return n("/ssh/keys",{tenant_id:s})}function r(s){return t("/instances/vnc",s)}function o(s){return t("/instances/vnc/stop",s)}export{o as a,e as l,r as s};

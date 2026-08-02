@@ -63,6 +63,9 @@
       <el-button @click="$router.push('/shell')">
         {{ $t('instanceDetail.cloudShell') }}
       </el-button>
+      <el-button @click="openConfigDialog">
+        Modify Config
+      </el-button>
       <el-button @click="changeIpDialog = true">
         {{ $t('instanceDetail.changeIp') }}
       </el-button>
@@ -199,6 +202,27 @@
           {{ $t('instanceDetail.confirmTerminate') }}
         </el-button>
       </div>
+    </el-dialog>
+
+    <!-- Modify config dialog (Java's OciUpdateInstanceCfg direct mode) -->
+    <el-dialog v-model="configDialogVisible" title="Modify Instance Config" width="420px">
+      <el-form label-position="top">
+        <el-form-item label="Shape">
+          <el-input v-model="configForm.shape" placeholder="Keep current shape" />
+        </el-form-item>
+        <el-form-item label="OCPUs" required>
+          <el-input-number v-model="configForm.ocpus" :min="0.1" :step="0.5" controls-position="right" style="width:180px" />
+        </el-form-item>
+        <el-form-item label="Memory (GB)" required>
+          <el-input-number v-model="configForm.memoryGB" :min="1" :step="1" controls-position="right" style="width:180px" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="configDialogVisible = false">Cancel</el-button>
+        <el-button type="primary" :loading="acting === 'config'" @click="confirmConfigUpdate">
+          Apply
+        </el-button>
+      </template>
     </el-dialog>
   </div>
 </template>
@@ -451,6 +475,39 @@ async function showVncInfo() {
 function formatTime(t) {
   if (!t) return '—'
   return new Date(t).toLocaleString()
+}
+// Modify instance config (direct OCPU/memory update, Java OciUpdateInstanceCfg
+// parity). No frontend caller existed before this dialog.
+const configDialogVisible = ref(false)
+const configForm = ref({ shape: '', ocpus: 1, memoryGB: 1 })
+
+function openConfigDialog() {
+  configForm.value = {
+    shape: inst.value.shape || '',
+    ocpus: Number(inst.value.ocpu) || 1,
+    memoryGB: Number(inst.value.memoryGB) || 1
+  }
+  configDialogVisible.value = true
+}
+
+async function confirmConfigUpdate() {
+  acting.value = 'config'
+  try {
+    await post('/instances/config-update', {
+      tenant_id: inst.value.tenantId,
+      instance_id: decodeURIComponent(route.params.id),
+      display_name: '',
+      shape: configForm.value.shape || '',
+      ocpus: Number(configForm.value.ocpus) || 1,
+      memory_gb: Number(configForm.value.memoryGB) || 1
+    })
+    ElMessage.success('Instance config updated')
+    configDialogVisible.value = false
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || 'Config update failed')
+  } finally {
+    acting.value = ''
+  }
 }
 </script>
 

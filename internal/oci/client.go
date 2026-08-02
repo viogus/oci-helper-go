@@ -2136,6 +2136,21 @@ func (c *Client) ReleaseAllPorts(ctx context.Context, vcnID string) error {
 				Source:   common.String("0.0.0.0/0"),
 			})
 		}
+		// Java parity: also open IPv6 (::/0) — Java releases both stacks.
+		hasAllowAllV6 := false
+		for _, r := range ingressRules {
+			if r.Protocol != nil && *r.Protocol == "all" &&
+				r.Source != nil && *r.Source == "::/0" {
+				hasAllowAllV6 = true
+				break
+			}
+		}
+		if !hasAllowAllV6 {
+			ingressRules = append(ingressRules, core.IngressSecurityRule{
+				Protocol: common.String("all"),
+				Source:   common.String("::/0"),
+			})
+		}
 
 		egressRules := sl.EgressSecurityRules
 		hasEgressAllowAll := false
@@ -2150,6 +2165,20 @@ func (c *Client) ReleaseAllPorts(ctx context.Context, vcnID string) error {
 			egressRules = append(egressRules, core.EgressSecurityRule{
 				Protocol:    common.String("all"),
 				Destination: common.String("0.0.0.0/0"),
+			})
+		}
+		hasEgressAllowAllV6 := false
+		for _, r := range egressRules {
+			if r.Protocol != nil && *r.Protocol == "all" &&
+				r.Destination != nil && *r.Destination == "::/0" {
+				hasEgressAllowAllV6 = true
+				break
+			}
+		}
+		if !hasEgressAllowAllV6 {
+			egressRules = append(egressRules, core.EgressSecurityRule{
+				Protocol:    common.String("all"),
+				Destination: common.String("::/0"),
 			})
 		}
 

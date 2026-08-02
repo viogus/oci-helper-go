@@ -12,6 +12,9 @@
           <el-button :icon="Refresh" :loading="loading" @click="loadTasks">
             Refresh
           </el-button>
+          <el-button type="danger" plain :disabled="!changeIPTasks.length" @click="clearAllTasks('change-ip')">
+            {{ $t('task.clear') }} All
+          </el-button>
         </div>
 
         <el-table
@@ -111,6 +114,9 @@
           </el-button>
           <el-button :icon="Refresh" :loading="loading" @click="loadTasks">
             Refresh
+          </el-button>
+          <el-button type="danger" plain :disabled="!updateCfgTasks.length" @click="clearAllTasks('update-cfg')">
+            {{ $t('task.clear') }} All
           </el-button>
         </div>
 
@@ -533,6 +539,13 @@ async function handleAdd() {
 // ---------------------------------------------------------------------------
 // Row actions
 // ---------------------------------------------------------------------------
+async function clearAllTasks(taskType) {
+  const list = taskType === 'change-ip' ? changeIPTasks.value : updateCfgTasks.value
+  if (!list.length) return
+  const ids = list.map((t) => t.id)
+  await handleAction(ids, 'delete', taskType)
+}
+
 async function handleAction(taskIds, action, taskType) {
   if (action === 'delete') {
     try {

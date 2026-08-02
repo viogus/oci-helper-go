@@ -1,0 +1,1 @@
+import{a5 as t,a9 as a,aq as s,aI as e}from"./index-B9eE4bAd.js";function r(n={}){return t("/tenants",n)}function o(n){return a("/tenants",n)}function c(n){return s("/tenants/"+n)}function i(n){return a("/sync/"+n)}function l(){return t("/keys")}function f(n){return e("/keys",n)}function d(n){return e("/tenants/upload",n)}export{d as a,l as b,o as c,c as d,r as l,i as s,f as u};

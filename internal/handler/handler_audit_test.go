@@ -215,3 +215,58 @@ func TestRestoreRejectsTraversalKeyName(t *testing.T) {
 		t.Fatalf("unexpected error: %s", e.Error)
 	}
 }
+
+// TestAdminBlacklistListAndClear verifies the login-failure blacklist list
+// endpoint and the clear endpoint (both single IP and clear-all).
+func TestAdminBlacklistListAndClear(t *testing.T) {
+	_, store, ts, cleanup := setupTestServer(t)
+	defer cleanup()
+
+	// Seed two blocked IPs directly in the store.
+	if err := store.AddLoginBlacklist("203.0.113.1", "too many failures"); err != nil {
+		t.Fatalf("seed blacklist: %v", err)
+	}
+	if err := store.AddLoginBlacklist("203.0.113.2", "too many failures"); err != nil {
+		t.Fatalf("seed blacklist: %v", err)
+	}
+
+	resp := authedReq(t, ts, http.MethodGet, "/api/admin/blacklist", "")
+	if resp.StatusCode != 200 {
+		t.Fatalf("GET /api/admin/blacklist: %d, want 200", resp.StatusCode)
+	}
+	var got struct {
+		Data []struct {
+			IP     string `json:"ip"`
+			Reason string `json:"reason"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("decode list: %v", err)
+	}
+	if len(got.Data) != 2 || got.Data[0].IP != "203.0.113.1" {
+		t.Fatalf("unexpected blacklist list: %+v", got.Data)
+	}
+
+	// Clear a single IP.
+	resp = authedReq(t, ts, http.MethodPost, "/api/admin/blacklist/clear", `{"ip":"203.0.113.1"}`)
+	if resp.StatusCode != 200 {
+		t.Fatalf("POST clear single: %d, want 200", resp.StatusCode)
+	}
+	entries, err := store.ListLoginBlacklist()
+	if err != nil {
+		t.Fatalf("list after clear: %v", err)
+	}
+	if len(entries) != 1 || entries[0].IP != "203.0.113.2" {
+		t.Fatalf("after single clear want 1 remaining entry, got %+v", entries)
+	}
+
+	// Clear all.
+	resp = authedReq(t, ts, http.MethodPost, "/api/admin/blacklist/clear", `{"ip":""}`)
+	if resp.StatusCode != 200 {
+		t.Fatalf("POST clear all: %d, want 200", resp.StatusCode)
+	}
+	entries, _ = store.ListLoginBlacklist()
+	if len(entries) != 0 {
+		t.Fatalf("after clear-all want empty list, got %+v", entries)
+	}
+}

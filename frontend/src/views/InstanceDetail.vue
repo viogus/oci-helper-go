@@ -57,6 +57,12 @@
       >
         Netboot Rescue
       </el-button>
+      <el-button
+        :loading="acting === 'netbootStop'"
+        @click="handleNetbootStop"
+      >
+        Stop Rescue
+      </el-button>
 
       <el-divider direction="vertical" />
 
@@ -382,6 +388,32 @@ async function handleNetbootRescue() {
     ElMessage.success('Netboot rescue completed')
   } catch (e) {
     ElMessage.error(e.response?.data?.error || 'Netboot rescue failed')
+  }
+  acting.value = ''
+}
+
+// NetbootStop detaches the rescue boot volume, re-attaches the original boot
+// volume and starts the instance (up to 10 minutes, synchronous).
+async function handleNetbootStop() {
+  try {
+    await ElMessageBox.confirm(
+      `Stop netboot rescue for "${inst.value.name}"?\n\nThis re-attaches the original boot volume and starts the instance. May take several minutes.`,
+      'Stop Netboot Rescue',
+      { confirmButtonText: 'Stop', cancelButtonText: 'Cancel', type: 'warning' }
+    )
+  } catch {
+    return
+  }
+  acting.value = 'netbootStop'
+  ElMessage.info('Stopping netboot rescue — this can take up to 10 minutes...')
+  try {
+    await post('/instances/netboot-rescue/stop', {
+      tenant_id: inst.value.tenantId,
+      instance_id: decodeURIComponent(route.params.id)
+    }, { timeout: 620000 })
+    ElMessage.success('Netboot rescue stopped, instance starting')
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || 'Stop netboot rescue failed')
   }
   acting.value = ''
 }

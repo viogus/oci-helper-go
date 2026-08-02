@@ -344,6 +344,43 @@
       />
     </el-card>
 
+    <el-card shadow="never" class="settings-card">
+      <template #header>
+        <div class="card-header">
+          <span>登录失败黑名单</span>
+          <div>
+            <el-button size="small" :loading="blacklistLoading" @click="loadBlacklist">
+              刷新
+            </el-button>
+            <el-button
+              size="small"
+              type="danger"
+              :disabled="!blacklist.length"
+              :loading="clearingBlacklist"
+              @click="clearBlacklist"
+            >
+              清空全部
+            </el-button>
+          </div>
+        </div>
+      </template>
+      <el-empty v-if="!blacklistLoading && !blacklist.length" description="暂无被封禁的 IP" :image-size="60" />
+      <el-table v-else v-loading="blacklistLoading" :data="blacklist" stripe size="small">
+        <el-table-column prop="ip" label="IP" min-width="140" />
+        <el-table-column prop="reason" label="原因" min-width="200" show-overflow-tooltip />
+        <el-table-column prop="createdAt" label="封禁时间" width="170">
+          <template #default="{ row }">
+            {{ row.createdAt ? new Date(row.createdAt).toLocaleString() : '—' }}
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="90" align="center">
+          <template #default="{ row }">
+            <el-button type="primary" link size="small" @click="unblockIP(row.ip)">解除</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+    </el-card>
+
     <el-alert
       v-if="loadError"
       :title="loadError"
@@ -377,6 +414,43 @@ const testingDingtalk = ref(false)
 const checkingUpdate = ref(false)
 const updating = ref(false)
 const updateInfo = ref(null)
+
+// Login-failure blacklist (blocked IPs after repeated failed logins)
+const blacklist = ref([])
+const blacklistLoading = ref(false)
+const clearingBlacklist = ref(false)
+
+async function loadBlacklist() {
+  blacklistLoading.value = true
+  try {
+    const res = await get('/admin/blacklist')
+    blacklist.value = res?.data || []
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || '加载黑名单失败')
+  } finally {
+    blacklistLoading.value = false
+  }
+}
+
+async function unblockIP(ip) {
+  try {
+    await post('/admin/blacklist/clear', { ip })
+    ElMessage.success(`已解除 ${ip}`)
+    loadBlacklist()
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || '解除失败')
+  }
+}
+
+async function clearBlacklist() {
+  try {
+    await post('/admin/blacklist/clear', { ip: '' })
+    ElMessage.success('黑名单已清空')
+    blacklist.value = []
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || '清空失败')
+  }
+}
 
 async function loadConfig() {
   loadingConfig.value = true
@@ -464,6 +538,7 @@ async function handleUpdateNow() {
 
 onMounted(() => {
   loadConfig()
+  loadBlacklist()
 })
 </script>
 

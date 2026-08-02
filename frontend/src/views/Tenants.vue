@@ -6,6 +6,9 @@
         <el-icon><Plus /></el-icon> {{ $t('tenant.add') }}
       </el-button>
       <el-button @click="batchDialogVisible = true">批量导入配置</el-button>
+      <el-button :loading="refreshingPlans" :disabled="!tenants.length" @click="refreshAllPlans">
+        批量刷新套餐
+      </el-button>
     </div>
 
     <div class="search-bar">
@@ -26,6 +29,12 @@
       <el-table-column prop="id" :label="$t('tenant.id')" width="70" />
       <el-table-column prop="name" :label="$t('tenant.name')" min-width="160" />
       <el-table-column prop="region" :label="$t('tenant.region')" width="160" />
+      <el-table-column prop="planType" label="套餐" width="120">
+        <template #default="{ row }">
+          <el-tag v-if="row.planType" size="small">{{ row.planType }}</el-tag>
+          <span v-else>—</span>
+        </template>
+      </el-table-column>
       <el-table-column :label="$t('tenant.status')" width="110">
         <template #default="{ row }">
           <el-tag
@@ -233,6 +242,7 @@ const keyword = ref('')
 const loading = ref(false)
 const syncingId = ref(null)
 const aliveId = ref(null)
+const refreshingPlans = ref(false)
 const saving = ref(false)
 
 // --- dialog state ---
@@ -513,6 +523,24 @@ async function checkAlive(id) {
     ElMessage.error(e.response?.data?.error || '测活失败')
   } finally {
     aliveId.value = null
+  }
+}
+
+// refreshAllPlans re-queries each tenant's subscription and caches the plan
+// type (config key tenant_plan_type_{id}), shown in the planType column.
+async function refreshAllPlans() {
+  const ids = tenants.value.map((t) => t.id)
+  if (!ids.length) return
+  refreshingPlans.value = true
+  try {
+    const res = await post('/tenants/refresh-plan-type/batch', { tenant_ids: ids })
+    const done = res?.results?.length ?? 0
+    ElMessage.success(`已刷新 ${done}/${ids.length} 个租户的套餐`)
+    loadTenants()
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || '批量刷新套餐失败')
+  } finally {
+    refreshingPlans.value = false
   }
 }
 </script>

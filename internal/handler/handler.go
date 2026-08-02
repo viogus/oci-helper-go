@@ -229,6 +229,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/dingtalk/test", s.withAuth(s.handleDingTalkTest))
 	s.mux.HandleFunc("/api/update/check", s.withAuth(s.handleUpdateCheck))
 	s.mux.HandleFunc("/api/update/now", s.withAuth(s.handleUpdateNow))
+	s.mux.HandleFunc("/api/admin/blacklist", s.withAuth(s.handleAdminBlacklistList))
 	s.mux.HandleFunc("/api/admin/blacklist/clear", s.withAuth(s.handleAdminBlacklistClear))
 	s.mux.HandleFunc("/api/notify/test", s.withAuth(s.handleNotifyTest))
 	// Stock alerts
@@ -1428,6 +1429,22 @@ func (s *Server) conversationCacheCleanup() {
 }
 
 // ── Admin: IP Blacklist ──────────────────────────────────────────────────
+
+func (s *Server) handleAdminBlacklistList(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	entries, err := s.store.ListLoginBlacklist()
+	if err != nil {
+		jsonErr(w, "list login blacklist: "+err.Error())
+		return
+	}
+	if entries == nil {
+		entries = []db.LoginBlacklist{}
+	}
+	jsonOK(w, map[string]interface{}{"data": entries})
+}
 
 func (s *Server) handleAdminBlacklistClear(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {

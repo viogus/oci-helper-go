@@ -60,7 +60,18 @@ func (s *Server) handleTenants(w http.ResponseWriter, r *http.Request) {
 		if list == nil {
 			list = []db.Tenant{}
 		}
-		jsonOK(w, map[string]interface{}{"data": list, "total": total, "page": page, "size": size})
+		// Attach cached plan type (config key tenant_plan_type_{id}) so the
+		// tenants table can show the subscription plan per tenant.
+		type tenantRow struct {
+			db.Tenant
+			PlanType string `json:"planType"`
+		}
+		rows := make([]tenantRow, 0, len(list))
+		for _, t := range list {
+			planType, _ := s.store.GetConfig("tenant_plan_type_" + strconv.FormatInt(t.ID, 10))
+			rows = append(rows, tenantRow{Tenant: t, PlanType: planType})
+		}
+		jsonOK(w, map[string]interface{}{"data": rows, "total": total, "page": page, "size": size})
 	case http.MethodPost:
 		var t db.Tenant
 		if err := json.NewDecoder(r.Body).Decode(&t); err != nil {

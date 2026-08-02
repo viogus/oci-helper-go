@@ -4,8 +4,8 @@ export function listInstances(params = {}) {
   return get('/instances', params)
 }
 
-export function instanceAction(instanceId, action) {
-  return post('/instances/' + instanceId, { action })
+export function instanceAction(instanceId, action, extra = {}) {
+  return post('/instances/' + instanceId, { action, ...extra })
 }
 
 export function batchStart(payload) {

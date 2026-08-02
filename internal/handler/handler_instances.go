@@ -257,9 +257,26 @@ func (s *Server) handleInstanceAction(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	switch req.Action {
 	case "terminate":
-		if req.CaptchaCode != "" && !verifyCaptcha(req.CaptchaTarget, req.CaptchaCode) {
-			jsonErr(w, "invalid or expired captcha code")
-			return
+		// Java parity: termination is protected by a single-use captcha sent
+		// over the configured notification channel. When a channel exists we
+		// require it; without any channel the captcha cannot be delivered, so
+		// the check is skipped (legacy/airgapped deployments).
+		hasChannel := false
+		if t, _ := s.store.GetConfig("telegram_token"); t != "" {
+			hasChannel = true
+		}
+		if d, _ := s.store.GetConfig("dingtalk_webhook"); d != "" {
+			hasChannel = true
+		}
+		if hasChannel {
+			if req.CaptchaCode == "" {
+				jsonErr(w, "captcha code required: request one via /api/captcha/send first")
+				return
+			}
+			if !verifyCaptcha(req.CaptchaTarget, req.CaptchaCode) {
+				jsonErr(w, "invalid or expired captcha code")
+				return
+			}
 		}
 		if err := client.TerminateInstance(ctx, bareOCID(instanceID), req.PreserveBootVolume, req.PreserveDataVolumes); err != nil {
 			jsonErr(w, "terminate: "+err.Error())

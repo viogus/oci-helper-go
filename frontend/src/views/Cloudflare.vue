@@ -1,5 +1,35 @@
 <template>
   <div class="cloudflare-page">
+    <!-- OCI DNS Auto-Sync (backend monitor runs every 60s when enabled) -->
+    <el-card shadow="never" class="autosync-card">
+      <template #header>
+        <div class="autosync-header">
+          <span>OCI DNS Auto-Sync</span>
+          <el-switch v-model="autoSync.enabled" @change="toggleAutoSync" />
+        </div>
+      </template>
+      <div class="autosync-row">
+        <el-input v-model="autoSync.zoneId" placeholder="Zone ID" style="width: 200px" />
+        <el-input
+          v-model="autoSync.domain"
+          placeholder="Domain (e.g. vps.example.com)"
+          style="width: 260px"
+        />
+        <el-button @click="saveAutoSync" :loading="savingAutoSync">Save</el-button>
+        <el-button
+          type="primary"
+          :loading="syncing"
+          :disabled="!autoSync.enabled"
+          @click="triggerAutoSync"
+        >
+          Sync Now
+        </el-button>
+      </div>
+      <div v-if="autoSync.lastSync" class="autosync-last">
+        Last sync: {{ autoSync.lastSync }} · {{ autoSync.lastCount }} record(s)
+      </div>
+    </el-card>
+
     <!-- Zone selector and actions -->
     <div class="filter-bar">
       <el-select
@@ -152,6 +182,7 @@
 import { ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { listZones, listRecords, createRecord, updateRecord, deleteRecord } from '../api/cloudflare.js'
+import { get, post } from '../api/index.js'
 
 // ---------------------------------------------------------------------------
 // State
@@ -297,12 +328,87 @@ async function handleDelete(row) {
 // ---------------------------------------------------------------------------
 onMounted(() => {
   loadZones()
+  loadAutoSync()
 })
+
+// ---------------------------------------------------------------------------
+// OCI DNS Auto-Sync
+// ---------------------------------------------------------------------------
+const autoSync = ref({ enabled: false, zoneId: '', domain: '', lastSync: '', lastCount: 0 })
+const savingAutoSync = ref(false)
+const syncing = ref(false)
+
+async function loadAutoSync() {
+  try {
+    autoSync.value = await get('/cloudflare/auto-sync/status')
+  } catch {
+    // monitor endpoint unavailable — keep defaults
+  }
+}
+
+async function toggleAutoSync(val) {
+  try {
+    await post('/config', { key: 'dns_auto_sync_enabled', value: String(val) })
+    ElMessage.success(val ? 'Auto-sync enabled' : 'Auto-sync disabled')
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || 'Failed to toggle auto-sync')
+    loadAutoSync()
+  }
+}
+
+async function saveAutoSync() {
+  savingAutoSync.value = true
+  try {
+    await post('/config', { key: 'dns_auto_sync_zone_id', value: autoSync.value.zoneId })
+    await post('/config', { key: 'dns_auto_sync_domain', value: autoSync.value.domain })
+    ElMessage.success('Auto-sync config saved')
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || 'Failed to save auto-sync config')
+  } finally {
+    savingAutoSync.value = false
+  }
+}
+
+async function triggerAutoSync() {
+  syncing.value = true
+  try {
+    await post('/cloudflare/auto-sync/trigger')
+    ElMessage.success('Sync triggered')
+    setTimeout(loadAutoSync, 3000)
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || 'Failed to trigger sync')
+  } finally {
+    syncing.value = false
+  }
+}
 </script>
 
 <style scoped>
 .cloudflare-page {
   padding: 20px;
+}
+
+.autosync-card {
+  margin-bottom: 16px;
+}
+
+.autosync-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.autosync-row {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.autosync-last {
+  margin-top: 8px;
+  font-size: 13px;
+  color: var(--el-text-color-secondary);
 }
 
 .filter-bar {

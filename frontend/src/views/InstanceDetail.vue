@@ -45,6 +45,18 @@
       >
         {{ $t('instanceDetail.terminate') }}
       </el-button>
+      <el-button
+        :loading="acting === 'shrinkDisk'"
+        @click="handleShrinkDisk"
+      >
+        Shrink Disk
+      </el-button>
+      <el-button
+        :loading="acting === 'netboot'"
+        @click="handleNetbootRescue"
+      >
+        Netboot Rescue
+      </el-button>
 
       <el-divider direction="vertical" />
 
@@ -194,7 +206,7 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { get, post } from '../api/index.js'
 import { instanceAction } from '../api/instances.js'
 
@@ -256,11 +268,114 @@ onMounted(async () => {
   loading.value = false
 })
 
+// requestTerminateCaptcha sends a verification code over the configured
+// notification channel and returns the user-entered code, or null when the
+// user cancels, or false when no channel is available (server then skips the
+// check). Mirrors the Instances.vue flow.
+async function requestTerminateCaptcha() {
+  let recipient = null
+  let target = ''
+  try {
+    const cfg = await get('/config')
+    if (cfg.telegram_chat_id) {
+      recipient = 'telegram'
+      target = String(cfg.telegram_chat_id)
+    } else if (cfg.dingtalk_webhook) {
+      recipient = 'dingtalk'
+      target = 'dingtalk'
+    }
+  } catch {
+    return null
+  }
+  if (!recipient) return false
+  try {
+    await post('/captcha/send', { recipient, target })
+  } catch (e) {
+    ElMessage.error('Failed to send verification code: ' + (e.response?.data?.error || e.message))
+    return null
+  }
+  try {
+    const { value } = await ElMessageBox.prompt(
+      `A verification code was sent via ${recipient}. Enter it to confirm termination:`,
+      'Verification Code',
+      { confirmButtonText: 'Terminate', cancelButtonText: 'Cancel', inputPlaceholder: '6-digit code' }
+    )
+    return { code: (value || '').trim(), target }
+  } catch {
+    return null
+  }
+}
+
+// ShrinkDisk recreates the instance with a ~47GB boot volume (Java's
+// "缩容到 47GB" flow). Long-running synchronous operation; keep the button
+// disabled while it runs.
+async function handleShrinkDisk() {
+  try {
+    await ElMessageBox.confirm(
+      `Shrink "${inst.value.name}" boot volume to ~47GB?\n\nThis recreates the instance and may cause brief downtime.`,
+      'Shrink Disk',
+      { confirmButtonText: 'Shrink', cancelButtonText: 'Cancel', type: 'warning' }
+    )
+  } catch {
+    return
+  }
+  acting.value = 'shrinkDisk'
+  try {
+    await post('/instances/shrink-disk', {
+      tenant_id: inst.value.tenantId,
+      instance_id: decodeURIComponent(route.params.id),
+      retain_bl: false,
+      retain_nat_gw: false
+    })
+    ElMessage.success('Shrink disk completed')
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || 'Shrink disk failed')
+  }
+  acting.value = ''
+}
+
+// NetbootRescue detaches the boot volume, boots a temp Oracle Linux rescue
+// instance and re-attaches it (up to 10 minutes, synchronous). The axios
+// default 30s timeout is overridden for this call.
+async function handleNetbootRescue() {
+  try {
+    await ElMessageBox.confirm(
+      `Start netboot rescue for "${inst.value.name}"?\n\nThis detaches the boot volume and boots a temporary rescue instance. May take several minutes.`,
+      'Netboot Rescue',
+      { confirmButtonText: 'Start', cancelButtonText: 'Cancel', type: 'warning' }
+    )
+  } catch {
+    return
+  }
+  acting.value = 'netboot'
+  ElMessage.info('Netboot rescue started — this can take up to 10 minutes...')
+  try {
+    await post('/instances/netboot-rescue', {
+      tenant_id: inst.value.tenantId,
+      instance_id: decodeURIComponent(route.params.id),
+      rescue_image_id: ''
+    }, { timeout: 620000 })
+    ElMessage.success('Netboot rescue completed')
+  } catch (e) {
+    ElMessage.error(e.response?.data?.error || 'Netboot rescue failed')
+  }
+  acting.value = ''
+}
+
 async function doAction(action) {
   acting.value = action
   const id = decodeURIComponent(route.params.id)
+  let extra = {}
+  if (action === 'terminate') {
+    const captcha = await requestTerminateCaptcha()
+    if (!captcha) {
+      acting.value = ''
+      return // cancelled or send failed
+    }
+    extra = { captchaCode: captcha.code, captchaTarget: captcha.target }
+  }
   try {
-    await instanceAction(id, action)
+    await instanceAction(id, action, extra)
     ElMessage.success(`Action "${action}" sent`)
     terminateDialog.value = false
     // Refresh after short delay

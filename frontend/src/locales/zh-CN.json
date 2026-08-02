@@ -39,7 +39,22 @@
     "instancePlans": "实例方案",
     "defense": "防御",
     "sshKeys": "SSH 密钥",
-    "systemMetrics": "系统监控"
+    "systemMetrics": "系统监控",
+    "stockAlerts": {
+      "title": "缺货预警",
+      "refresh": "刷新",
+      "add": "新增预警",
+      "region": "区域",
+      "shape": "机型",
+      "ad": "可用域",
+      "chatId": "Chat ID",
+      "enabled": "启用",
+      "lastStatus": "最近状态",
+      "actions": "操作",
+      "empty": "暂无缺货预警。添加后，后台每 60 秒检查一次并在有货时发送 Telegram 通知。",
+      "addTitle": "新增缺货预警",
+      "tenant": "租户"
+    }
   },
   "route": {
     "home": "仪表盘",
@@ -71,7 +86,22 @@
     "instancePlans": "实例方案",
     "defense": "防御",
     "sshKeys": "SSH 密钥",
-    "systemMetrics": "系统监控"
+    "systemMetrics": "系统监控",
+    "stockAlerts": {
+      "title": "缺货预警",
+      "refresh": "刷新",
+      "add": "新增预警",
+      "region": "区域",
+      "shape": "机型",
+      "ad": "可用域",
+      "chatId": "Chat ID",
+      "enabled": "启用",
+      "lastStatus": "最近状态",
+      "actions": "操作",
+      "empty": "暂无缺货预警。添加后，后台每 60 秒检查一次并在有货时发送 Telegram 通知。",
+      "addTitle": "新增缺货预警",
+      "tenant": "租户"
+    }
   },
   "login": {
     "username": "用户名",
@@ -658,5 +688,20 @@
     "txTotal": "上行总量",
     "rxTotal": "下行总量",
     "noDisk": "暂无磁盘信息"
+  },
+  "stockAlerts": {
+    "title": "缺货预警",
+    "refresh": "刷新",
+    "add": "新增预警",
+    "region": "区域",
+    "shape": "机型",
+    "ad": "可用域",
+    "chatId": "Chat ID",
+    "enabled": "启用",
+    "lastStatus": "最近状态",
+    "actions": "操作",
+    "empty": "暂无缺货预警。添加后，后台每 60 秒检查一次并在有货时发送 Telegram 通知。",
+    "addTitle": "新增缺货预警",
+    "tenant": "租户"
   }
 }

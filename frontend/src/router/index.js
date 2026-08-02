@@ -47,6 +47,7 @@ const routes = [
       { path: 'tenants/:id', name: 'TenantDetail', component: () => import('../views/TenantDetail.vue'), meta: { titleKey: 'route.tenantDetail' } },
       { path: 'instances/:id', name: 'InstanceDetail', component: () => import('../views/InstanceDetail.vue'), meta: { titleKey: 'route.instanceDetail' } },
       { path: 'users', name: 'Users', component: () => import('../views/Users.vue'), meta: { titleKey: 'route.users', icon: 'User' } },
+      { path: 'stock-alerts', name: 'StockAlerts', component: () => import('../views/StockAlerts.vue'), meta: { titleKey: 'route.stockAlerts', icon: 'Bell' } },
       { path: 'ip-pool', name: 'IpPool', component: () => import('../views/IpPool.vue'), meta: { titleKey: 'route.ipPool', icon: 'Connection' } },
       { path: 'instance-plans', name: 'InstancePlans', component: () => import('../views/InstancePlans.vue'), meta: { titleKey: 'route.instancePlans', icon: 'Tickets' } },
       { path: 'defense', name: 'Defense', component: () => import('../views/Defense.vue'), meta: { titleKey: 'route.defense', icon: 'Lock' } },

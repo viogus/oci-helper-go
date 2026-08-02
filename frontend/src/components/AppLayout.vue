@@ -71,6 +71,7 @@
           <el-menu-item index="/audit">{{ $t('menu.audit') }}</el-menu-item>
           <el-menu-item index="/users">{{ $t('menu.users') }}</el-menu-item>
           <el-menu-item index="/ssh-keys">{{ $t('menu.sshKeys') }}</el-menu-item>
+          <el-menu-item index="/stock-alerts">{{ $t('menu.stockAlerts') }}</el-menu-item>
         </el-sub-menu>
 
         <el-menu-item index="/backup">

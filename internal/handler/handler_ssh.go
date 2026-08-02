@@ -42,7 +42,9 @@ func (s *Server) handleSSHKeys(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		if req.Action == "generate" {
+		// The frontend sends ?action=generate in the query string; accept both
+		// query and body forms for backward compatibility.
+		if req.Action == "generate" || r.URL.Query().Get("action") == "generate" {
 			s.handleSSHKeyGenerate(w, r, req)
 			return
 		}

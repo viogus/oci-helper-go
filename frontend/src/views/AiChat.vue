@@ -49,7 +49,7 @@
 <script setup>
 import { ref, onMounted, nextTick } from 'vue'
 import { ElMessage } from 'element-plus'
-import { post } from '../api/index.js'
+import { post, del } from '../api/index.js'
 
 const messages = ref([
   { role: 'ai', content: 'Ask me about your OCI instances...' }
@@ -99,6 +99,11 @@ function clearChat() {
     { role: 'ai', content: 'Ask me about your OCI instances...' }
   ]
   sessionId.value = 'session-' + Date.now() + '-' + Math.random().toString(36).slice(2)
+  // Also clear the server-side conversation cache so old history does not
+  // linger (and leak into new sessions) until the TTL expires.
+  del('/ai/chat/cache', { params: {} }).catch(() => {
+    // Local clear is the important part; server clear is best-effort.
+  })
 }
 
 onMounted(() => {

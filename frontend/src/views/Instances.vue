@@ -645,9 +645,9 @@ function handleDropdownAction(row, command) {
   }
 }
 
-async function handleAction(instance, action) {
+async function handleAction(instance, action, extra = {}) {
   try {
-    await instanceAction(instance.id, action)
+    await instanceAction(instance.id, action, extra)
     ElMessage.success(`Action "${action}" sent to ${instance.name}`)
     await loadInstances()
   } catch (e) {
@@ -667,9 +667,54 @@ async function handleTerminate(instance) {
         type: 'warning'
       }
     )
-    await handleAction(instance, 'terminate')
   } catch {
-    // User cancelled
+    return // user cancelled
+  }
+
+  // Java parity: termination requires a single-use captcha delivered over
+  // the configured notification channel (Telegram preferred, DingTalk
+  // fallback). Without any channel the server skips the check.
+  let recipient = null
+  let target = ''
+  try {
+    const cfg = await get('/config')
+    if (cfg.telegram_chat_id) {
+      recipient = 'telegram'
+      target = String(cfg.telegram_chat_id)
+    } else if (cfg.dingtalk_webhook) {
+      recipient = 'dingtalk'
+      target = 'dingtalk'
+    }
+  } catch {
+    // config unavailable — proceed without captcha
+  }
+
+  if (recipient) {
+    try {
+      await post('/captcha/send', { recipient, target })
+    } catch (e) {
+      ElMessage.error('Failed to send verification code: ' + (e.response?.data?.error || e.message))
+      return
+    }
+    let code = ''
+    try {
+      const { value } = await ElMessageBox.prompt(
+        `A verification code was sent via ${recipient}. Enter it to confirm termination:`,
+        'Verification Code',
+        {
+          confirmButtonText: 'Terminate',
+          cancelButtonText: 'Cancel',
+          inputPlaceholder: '6-digit code'
+        }
+      )
+      code = (value || '').trim()
+    } catch {
+      return // user cancelled
+    }
+    if (!code) return
+    await handleAction(instance, 'terminate', { captchaCode: code, captchaTarget: target })
+  } else {
+    await handleAction(instance, 'terminate')
   }
 }
 

@@ -746,13 +746,14 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			"mfa_enabled", "telegram_token", "dingtalk_webhook",
 			"google_client_id", "google_client_secret",
 			"cloudflare_token", "siliconflow_key", "siliconflow_model",
-			"ai_search_enabled", "telegram_chat_id",
+			"ai_search_enabled", "telegram_chat_id", "telegram_webhook_secret",
 			"daily_broadcast_enabled", "daily_broadcast_cron",
 			"version_update_notifications_enabled", "update_repo", "panel_url",
 		}
 		secretKeys := map[string]bool{
 			"telegram_token": true, "cloudflare_token": true,
 			"siliconflow_key": true, "google_client_secret": true,
+			"telegram_webhook_secret": true,
 		}
 		out := map[string]string{"username": s.cfg.Username}
 		for _, k := range keys {

@@ -39,7 +39,22 @@
     "instancePlans": "Instance Plans",
     "defense": "Defense",
     "sshKeys": "SSH Keys",
-    "systemMetrics": "System Metrics"
+    "systemMetrics": "System Metrics",
+    "stockAlerts": {
+      "title": "Stock Alerts",
+      "refresh": "Refresh",
+      "add": "Add Alert",
+      "region": "Region",
+      "shape": "Shape",
+      "ad": "AD",
+      "chatId": "Chat ID",
+      "enabled": "Enabled",
+      "lastStatus": "Last Status",
+      "actions": "Actions",
+      "empty": "No stock alerts. Add one to get Telegram notifications when a shape is back in stock.",
+      "addTitle": "Add Stock Alert",
+      "tenant": "Tenant"
+    }
   },
   "route": {
     "home": "Dashboard",
@@ -71,7 +86,22 @@
     "instancePlans": "Instance Plans",
     "defense": "Defense",
     "sshKeys": "SSH Keys",
-    "systemMetrics": "System Metrics"
+    "systemMetrics": "System Metrics",
+    "stockAlerts": {
+      "title": "Stock Alerts",
+      "refresh": "Refresh",
+      "add": "Add Alert",
+      "region": "Region",
+      "shape": "Shape",
+      "ad": "AD",
+      "chatId": "Chat ID",
+      "enabled": "Enabled",
+      "lastStatus": "Last Status",
+      "actions": "Actions",
+      "empty": "No stock alerts. Add one to get Telegram notifications when a shape is back in stock.",
+      "addTitle": "Add Stock Alert",
+      "tenant": "Tenant"
+    }
   },
   "login": {
     "username": "Username",
@@ -658,5 +688,20 @@
     "txTotal": "TX Total",
     "rxTotal": "RX Total",
     "noDisk": "No disk information available"
+  },
+  "stockAlerts": {
+    "title": "Stock Alerts",
+    "refresh": "Refresh",
+    "add": "Add Alert",
+    "region": "Region",
+    "shape": "Shape",
+    "ad": "AD",
+    "chatId": "Chat ID",
+    "enabled": "Enabled",
+    "lastStatus": "Last Status",
+    "actions": "Actions",
+    "empty": "No stock alerts. Add one to get Telegram notifications when a shape is back in stock.",
+    "addTitle": "Add Stock Alert",
+    "tenant": "Tenant"
   }
 }

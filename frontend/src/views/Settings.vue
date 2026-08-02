@@ -97,6 +97,29 @@
             </el-button>
           </div>
         </el-form-item>
+        <el-form-item label="Telegram Webhook Secret">
+          <div class="setting-row">
+            <el-input
+              v-model="config.telegram_webhook_secret"
+              type="password"
+              show-password
+              placeholder="Secret token for the bot webhook (optional)"
+              :disabled="saving"
+            />
+            <el-button
+              type="primary"
+              :loading="saving"
+              @click="saveSetting('telegram_webhook_secret', config.telegram_webhook_secret)"
+            >
+              Save
+            </el-button>
+          </div>
+          <div class="setting-hint">
+            Guards {{ baseUrl }}/api/telegram/webhook. Set it with Telegram's
+            <code>setWebhook</code> call: the bot rejects updates without a matching
+            <code>X-Telegram-Bot-Api-Secret-Token</code> header.
+          </div>
+        </el-form-item>
       </el-form>
     </el-card>
 
@@ -323,6 +346,7 @@ import { get, post } from '../api/index.js'
 import { useAuthStore } from '../stores/auth.js'
 
 const authStore = useAuthStore()
+const baseUrl = window.location.origin
 
 const config = reactive({})
 const saving = ref(false)
@@ -430,6 +454,13 @@ onMounted(() => {
 <style scoped>
 .settings-page {
   padding: 0;
+}
+
+.setting-hint {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  line-height: 1.5;
 }
 
 .settings-card {

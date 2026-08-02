@@ -367,14 +367,25 @@ func (s *Server) routes() {
 		// document-level policy; setting it on API responses has no effect.
 		// CSP: style-src 'unsafe-inline' is required by Element Plus UI library
 		// which injects inline <style> blocks for dynamic theming. Script is
-		// restricted to 'self' (no 'unsafe-inline' for scripts).
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://*.tile.openstreetmap.org; connect-src 'self'; font-src 'self' data:; frame-src 'self'; object-src 'none'; base-uri 'self'")
-		// Try to open the file; if it doesn't exist in the embedded FS,
-		// serve index.html for SPA client-side routing.
+		// restricted to 'self' (no 'unsafe-inline' for scripts). img-src covers
+		// the map tile providers used by Home.vue (Carto, OSM, AMap) so the
+		// dashboard map is not blanked by CSP.
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://*.tile.openstreetmap.org https://*.basemaps.cartocdn.com https://*.is.autonavi.com; connect-src 'self'; font-src 'self' data:; frame-src 'self'; object-src 'none'; base-uri 'self'")
+		// Cache strategy: index.html must be revalidated every time — an old
+		// cached shell references hashed assets that a new deployment has
+		// removed, which makes the SPA render blank after an upgrade.
+		// Hashed assets under /assets/ are immutable and can be cached long.
 		path := strings.TrimPrefix(r.URL.Path, "/")
 		if path == "" {
 			path = "index.html"
 		}
+		if strings.HasPrefix(path, "assets/") {
+			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		} else {
+			w.Header().Set("Cache-Control", "no-cache")
+		}
+		// Try to open the file; if it doesn't exist in the embedded FS,
+		// serve index.html for SPA client-side routing.
 		f, err := staticFS.Open(path)
 		if err != nil {
 			r.URL.Path = "/"

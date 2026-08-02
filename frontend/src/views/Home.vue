@@ -129,6 +129,41 @@ const markerColors = {
 }
 const iconCache = {}
 
+// Multiple tile providers with automatic fallback: Carto (default), then
+// OpenStreetMap, then AMap (高德, reachable from mainland China where
+// Carto/OSM are often blocked). On repeated tile errors we rotate to the
+// next provider so the map is never a blank grey box.
+const TILE_PROVIDERS = [
+  { name: 'carto', url: 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', opts: { maxZoom: 19, subdomains: 'abcd' } },
+  { name: 'osm', url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png', opts: { maxZoom: 19 } },
+  { name: 'amap', url: 'https://webrd0{s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}', opts: { maxZoom: 18, subdomains: '1234' } },
+]
+let tileProviderIdx = 0
+let tileLayer = null
+let tileErrors = 0
+
+function loadTileLayer() {
+  if (tileLayer) {
+    map.removeLayer(tileLayer)
+    tileLayer = null
+  }
+  if (tileProviderIdx >= TILE_PROVIDERS.length) {
+    tileProviderIdx = 0
+  }
+  const p = TILE_PROVIDERS[tileProviderIdx]
+  tileErrors = 0
+  tileLayer = L.tileLayer(p.url, p.opts).addTo(map)
+  tileLayer.on('tileerror', () => {
+    tileErrors++
+    // A few errors may be transient; 6+ means the provider is unreachable.
+    if (tileErrors >= 6) {
+      console.warn('[home-map] tile provider unreachable, switching: ' + p.name)
+      tileProviderIdx++
+      loadTileLayer()
+    }
+  })
+}
+
 function getIcon(state) {
   const color = markerColors[state] || markerColors.default
   if (!iconCache[color]) {
@@ -153,9 +188,7 @@ function initMap() {
     attributionControl: false,
   })
 
-  L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
-    maxZoom: 19,
-  }).addTo(map)
+  loadTileLayer()
 
   markerLayer = L.layerGroup().addTo(map)
 

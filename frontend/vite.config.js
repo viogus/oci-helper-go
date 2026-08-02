@@ -18,6 +18,8 @@ export default defineConfig({
   },
   build: {
     outDir: 'dist',
-    emptyOutDir: true
+    emptyOutDir: true,
+    // noVNC 1.7 uses top-level await (WebCodecs detection) — needs es2022+ output.
+    target: 'esnext'
   }
 })

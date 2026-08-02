@@ -49,13 +49,24 @@
         <el-button type="primary" @click="openConsole">
           {{ $t('vnc.openConsole') }}
         </el-button>
+        <el-button type="success" :loading="embedLoading" @click="openEmbeddedConsole">
+          浏览器内打开
+        </el-button>
+      </div>
+
+      <div v-if="embedded" style="margin-top:16px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+          <span style="font-size:13px;color:#606266">{{ embedStatus }}</span>
+          <el-button type="danger" size="small" @click="closeEmbeddedConsole">断开</el-button>
+        </div>
+        <div ref="vncContainer" style="width:100%;height:480px;background:#000;border-radius:4px;overflow:hidden"></div>
       </div>
     </el-card>
   </div>
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, nextTick, onBeforeUnmount } from 'vue'
 import { listTenants } from '../api/tenants.js'
 import { listInstances } from '../api/instances.js'
 import { listSSHKeys, startVNC, stopVNC } from '../api/console.js'
@@ -92,6 +103,8 @@ onMounted(async () => {
     console.error('load tenants', e)
   }
 })
+
+onBeforeUnmount(stopEmbeddedOnUnmount)
 
 async function onTenantChange() {
   form.instanceId = ''
@@ -176,5 +189,65 @@ function openConsole() {
   if (session.vncUrl) {
     window.open(session.vncUrl, '_blank')
   }
+}
+
+// ── Embedded noVNC console ─────────────────────────────────────────────
+// Connects straight to the backend WebSocket proxy
+// (GET /api/instances/vnc/proxy), which creates the OCI console connection
+// and tunnels raw VNC over WebSocket. Requires an active session so the
+// proxy SSH key / tenant context is already validated.
+const embedded = ref(false)
+const embedLoading = ref(false)
+const embedStatus = ref('')
+const vncContainer = ref(null)
+let rfb = null
+
+async function openEmbeddedConsole() {
+  if (!session.active) {
+    error.value = '请先启动控制台会话'
+    return
+  }
+  embedLoading.value = true
+  embedStatus.value = '正在连接...'
+  embedded.value = true
+  try {
+    const RFB = (await import('@novnc/novnc')).default
+    const proto = window.location.protocol === 'https:' ? 'wss://' : 'ws://'
+    const url = `${proto}${window.location.host}/api/instances/vnc/proxy?tenant_id=${form.tenantId}&instance_id=${encodeURIComponent(form.instanceId)}&ssh_key_id=${form.sshKeyId || ''}`
+    await nextTick()
+    rfb = new RFB(vncContainer.value, url, { credentials: { password: '' } })
+    rfb.scaleViewport = true
+    rfb.resizeSession = false
+    rfb.background = '#000000'
+    rfb.addEventListener('connect', () => {
+      embedStatus.value = '已连接'
+    })
+    rfb.addEventListener('disconnect', (e) => {
+      embedStatus.value = e?.detail?.clean ? '连接已断开' : '连接已断开（异常）'
+    })
+    rfb.addEventListener('credentialsrequired', () => {
+      embedStatus.value = '连接已建立（无需密码）'
+    })
+  } catch (e) {
+    embedStatus.value = '连接失败: ' + (e.message || e)
+    error.value = '浏览器内连接失败: ' + (e.message || e)
+  } finally {
+    embedLoading.value = false
+  }
+}
+
+function closeEmbeddedConsole() {
+  if (rfb) {
+    try {
+      rfb.disconnect()
+    } catch { /* ignore */ }
+    rfb = null
+  }
+  embedded.value = false
+  embedStatus.value = ''
+}
+
+function stopEmbeddedOnUnmount() {
+  closeEmbeddedConsole()
 }
 </script>

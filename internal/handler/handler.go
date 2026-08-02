@@ -371,7 +371,7 @@ func (s *Server) routes() {
 		// restricted to 'self' (no 'unsafe-inline' for scripts). img-src covers
 		// the map tile providers used by Home.vue (Carto, OSM, AMap) so the
 		// dashboard map is not blanked by CSP.
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://*.tile.openstreetmap.org https://*.basemaps.cartocdn.com https://*.is.autonavi.com; connect-src 'self'; font-src 'self' data:; frame-src 'self'; object-src 'none'; base-uri 'self'")
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://*.tile.openstreetmap.org https://*.basemaps.cartocdn.com https://*.is.autonavi.com; connect-src 'self' ws: wss:; font-src 'self' data:; frame-src 'self'; object-src 'none'; base-uri 'self'")
 		// Cache strategy: index.html must be revalidated every time — an old
 		// cached shell references hashed assets that a new deployment has
 		// removed, which makes the SPA render blank after an upgrade.

@@ -234,6 +234,13 @@ func (s *Server) runChangeIPAttempt(task *memTask) bool {
 	if err != nil {
 		return false
 	}
+	// The instance may live in a region other than the tenant's default
+	// (e.g. an extra region), so switch the client to the instance's region
+	// before calling OCI — ListVnicAttachments/GetVnic/PublicIp calls are
+	// region-scoped.
+	if inst, err := s.store.GetInstanceByID(task.InstanceID); err == nil && inst != nil && inst.Region != "" {
+		client.SetRegion(inst.Region)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	newIP, err := client.ChangeInstanceIP(ctx, bareOCID(task.InstanceID), task.CidrList)
 	cancel()

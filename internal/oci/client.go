@@ -2751,7 +2751,7 @@ func (c *Client) ChangeInstanceIP(ctx context.Context, instanceID string, cidrLi
 	// Find the primary private IP on that VNIC — the target for the new IP.
 	privResp, err := c.vcn.ListPrivateIps(ctx, core.ListPrivateIpsRequest{
 		VnicId: common.String(vnicID),
-		Limit:  common.Int(10),
+		Limit:  common.Int(100),
 	})
 	if err != nil {
 		return "", fmt.Errorf("list private IPs: %w", err)
@@ -2769,8 +2769,13 @@ func (c *Client) ChangeInstanceIP(ctx context.Context, instanceID string, cidrLi
 
 	// Delete the old public IP and wait until it is fully released before
 	// creating the replacement (see function comment).
+	//
+	// The instance's ephemeral public IP is bound to a private IP and is
+	// AD-scoped, so ListPublicIps(scope=REGION) cannot see it. Resolve it by
+	// querying each private IP on the VNIC directly (GetPublicIpByPrivateIpId
+	// returns 404 for private IPs without an assigned public IP).
 	if oldIP != "" {
-		oldIPID, err := c.findPublicIPID(ctx, oldIP)
+		oldIPID, err := c.publicIPIDForPrivateIPs(ctx, privResp.Items)
 		if err != nil {
 			return "", err
 		}
@@ -2854,31 +2859,33 @@ func (c *Client) resolvePublicIPVnic(ctx context.Context, attachments []core.Vni
 	return firstVnicID, "", nil
 }
 
-// findPublicIPID locates the OCID of a public IP by its IP address across the
-// region scope.
-func (c *Client) findPublicIPID(ctx context.Context, ipAddr string) (string, error) {
-	var page *string
-	for {
-		pipResp, err := c.vcn.ListPublicIps(ctx, core.ListPublicIpsRequest{
-			Scope:         core.ListPublicIpsScopeRegion,
-			CompartmentId: common.String(c.tenant.TenancyOCID),
-			Limit:         common.Int(100),
-			Page:          page,
+// publicIPIDForPrivateIPs finds the OCID of the public IP assigned to any of
+// the given private IPs.
+//
+// An instance's ephemeral public IP is AD-scoped and bound to a private IP, so
+// it cannot be found via ListPublicIps(scope=REGION). GetPublicIpByPrivateIpId
+// resolves it directly and returns 404 for private IPs without a public IP.
+func (c *Client) publicIPIDForPrivateIPs(ctx context.Context, privateIPs []core.PrivateIp) (string, error) {
+	for _, p := range privateIPs {
+		if p.Id == nil {
+			continue
+		}
+		getResp, err := c.vcn.GetPublicIpByPrivateIpId(ctx, core.GetPublicIpByPrivateIpIdRequest{
+			GetPublicIpByPrivateIpIdDetails: core.GetPublicIpByPrivateIpIdDetails{
+				PrivateIpId: p.Id,
+			},
 		})
 		if err != nil {
-			return "", fmt.Errorf("list public IPs: %w", err)
-		}
-		for _, ip := range pipResp.Items {
-			if ip.IpAddress != nil && *ip.IpAddress == ipAddr && ip.Id != nil {
-				return *ip.Id, nil
+			if isNotFound(err) {
+				continue
 			}
+			return "", fmt.Errorf("get public IP for private IP %s: %w", *p.Id, err)
 		}
-		if pipResp.OpcNextPage == nil || *pipResp.OpcNextPage == "" {
-			break
+		if getResp.Id != nil {
+			return *getResp.Id, nil
 		}
-		page = pipResp.OpcNextPage
 	}
-	return "", fmt.Errorf("public IP %s not found in region", ipAddr)
+	return "", fmt.Errorf("no public IP found for any private IP on VNIC")
 }
 
 // waitPublicIPGone polls until a public IP reaches a terminal state (or is no

@@ -759,6 +759,11 @@ func (s *Server) handleChangeIP(w http.ResponseWriter, r *http.Request) {
 			log.Printf("[change-ip] cloudflare dns update: %v", err)
 		}
 	}
+	// Keep the DB in sync so the UI shows the new IP right away (the next
+	// sync would also fix it, but that may take a while).
+	if err := s.store.UpdateInstancePublicIP(req.InstanceID, newIP); err != nil {
+		log.Printf("[change-ip] update instance public_ip: %v", err)
+	}
 	s.audit(req.TenantID, "instance:change-ip", req.InstanceID+" → "+maskIP(newIP), r)
 	s.notify(req.TenantID, fmt.Sprintf("【更换公共IP】实例 %s 新公网IP: %s", req.InstanceID, newIP))
 	jsonOK(w, map[string]string{"new_ip": newIP, "status": "ok", "dns_error": dnsErr})

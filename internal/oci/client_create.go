@@ -37,7 +37,7 @@ func TaskShapeForArchitecture(arch string) string {
 func (c *Client) ListAllShapes(ctx context.Context, compartmentID string) ([]core.Shape, error) {
 	defer c.withSubtreeInterceptor(&c.compute.Interceptor)()
 	var all []core.Shape
-	page := common.String("")
+	var page *string
 	for {
 		req := core.ListShapesRequest{
 			CompartmentId: common.String(compartmentID),
@@ -592,7 +592,7 @@ func (c *Client) AddEgressRuleAdvanced(ctx context.Context, vcnID string, opts S
 }
 
 func (c *Client) applyIngressRule(ctx context.Context, vcnID string, newRule core.IngressSecurityRule) error {
-	page := common.String("")
+	var page *string
 	for {
 		req := core.ListSecurityListsRequest{
 			CompartmentId: common.String(c.tenant.TenancyOCID),
@@ -628,7 +628,7 @@ func (c *Client) applyIngressRule(ctx context.Context, vcnID string, newRule cor
 }
 
 func (c *Client) applyEgressRule(ctx context.Context, vcnID string, newRule core.EgressSecurityRule) error {
-	page := common.String("")
+	var page *string
 	for {
 		req := core.ListSecurityListsRequest{
 			CompartmentId: common.String(c.tenant.TenancyOCID),

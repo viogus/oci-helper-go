@@ -105,6 +105,14 @@ func (s *Store) UpdateInstanceDNSIP(id string, ip string) error {
 	return err
 }
 
+// UpdateInstancePublicIP updates the public_ip column for an instance.
+// Used after a change-IP so the UI reflects the new address without waiting
+// for the next sync.
+func (s *Store) UpdateInstancePublicIP(id string, ip string) error {
+	_, err := s.db.Exec(`UPDATE instances SET public_ip=? WHERE id=?`, ip, id)
+	return err
+}
+
 func (s *Store) UpsertInstance(inst *Instance) error {
 	_, err := s.db.Exec(
 		`INSERT INTO instances (id, tenant_id, name, ocid, shape, ocpu, memory_gb, boot_volume_gb, public_ip, private_ip, state, availability_domain, fault_domain, image_id, subnet_id, region, dns_last_ip, synced_at)

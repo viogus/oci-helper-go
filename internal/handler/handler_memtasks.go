@@ -246,6 +246,9 @@ func (s *Server) runChangeIPAttempt(task *memTask) bool {
 			log.Printf("[mem-task] change-ip dns: %v", err)
 		}
 	}
+	if err := s.store.UpdateInstancePublicIP(task.InstanceID, newIP); err != nil {
+		log.Printf("[mem-task] change-ip update public_ip: %v", err)
+	}
 	s.notify(task.TenantID, fmt.Sprintf("【更换公共IP】实例 %s 新公网IP: %s", task.InstanceID, newIP))
 	memTasksMu.Lock()
 	delete(memTasks, task.ID)

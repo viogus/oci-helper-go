@@ -236,7 +236,7 @@ func (c *Client) SetRegion(region string) {
 
 func (c *Client) ListInstances(ctx context.Context, compartmentID string) ([]core.Instance, error) {
 	var all []core.Instance
-	page := common.String("")
+	var page *string
 	for {
 		req := core.ListInstancesRequest{
 			CompartmentId: common.String(compartmentID),
@@ -354,7 +354,7 @@ func (c *Client) withSubtreeInterceptor(interceptor *common.RequestInterceptor) 
 func (c *Client) ListVCNs(ctx context.Context, compartmentID string) ([]core.Vcn, error) {
 	defer c.withSubtreeInterceptor(&c.vcn.Interceptor)()
 	var all []core.Vcn
-	page := common.String("")
+	var page *string
 	for {
 		req := core.ListVcnsRequest{
 			CompartmentId: common.String(compartmentID),
@@ -377,7 +377,7 @@ func (c *Client) ListVCNs(ctx context.Context, compartmentID string) ([]core.Vcn
 func (c *Client) ListSubnets(ctx context.Context, compartmentID, vcnID string) ([]core.Subnet, error) {
 	defer c.withSubtreeInterceptor(&c.vcn.Interceptor)()
 	var all []core.Subnet
-	page := common.String("")
+	var page *string
 	for {
 		req := core.ListSubnetsRequest{
 			CompartmentId: common.String(compartmentID),
@@ -435,7 +435,7 @@ func (c *Client) ListRegionSubscriptions(ctx context.Context) ([]identity.Region
 func (c *Client) ListUsers(ctx context.Context, compartmentID string) ([]identity.User, error) {
 	defer c.withSubtreeInterceptor(&c.identity.Interceptor)()
 	var all []identity.User
-	page := common.String("")
+	var page *string
 	for {
 		req := identity.ListUsersRequest{
 			CompartmentId: common.String(compartmentID),
@@ -573,7 +573,7 @@ func (c *Client) GetTenancy(ctx context.Context) (*identity.Tenancy, error) {
 func (c *Client) ListImages(ctx context.Context, compartmentID, os string) ([]core.Image, error) {
 	defer c.withSubtreeInterceptor(&c.compute.Interceptor)()
 	var all []core.Image
-	page := common.String("")
+	var page *string
 	for {
 		req := core.ListImagesRequest{
 			CompartmentId:   common.String(compartmentID),
@@ -601,7 +601,7 @@ func (c *Client) ListImages(ctx context.Context, compartmentID, os string) ([]co
 func (c *Client) ListVnicAttachments(ctx context.Context, compartmentID, instanceID string) ([]core.VnicAttachment, error) {
 	defer c.withSubtreeInterceptor(&c.compute.Interceptor)()
 	var all []core.VnicAttachment
-	page := common.String("")
+	var page *string
 	for {
 		req := core.ListVnicAttachmentsRequest{
 			CompartmentId: common.String(compartmentID),
@@ -636,7 +636,7 @@ func (c *Client) GetVnic(ctx context.Context, vnicID string) (*core.Vnic, error)
 func (c *Client) ListPublicIPs(ctx context.Context, compartmentID string) ([]core.PublicIp, error) {
 	defer c.withSubtreeInterceptor(&c.vcn.Interceptor)()
 	var all []core.PublicIp
-	page := common.String("")
+	var page *string
 	for {
 		req := core.ListPublicIpsRequest{
 			CompartmentId: common.String(compartmentID),
@@ -684,7 +684,7 @@ func (c *Client) GetPublicIP(ctx context.Context, publicIPID string) (*core.Publ
 func (c *Client) ListShapes(ctx context.Context, compartmentID, imageID string) ([]core.Shape, error) {
 	defer c.withSubtreeInterceptor(&c.compute.Interceptor)()
 	var all []core.Shape
-	page := common.String("")
+	var page *string
 	for {
 		req := core.ListShapesRequest{
 			CompartmentId: common.String(compartmentID),
@@ -710,7 +710,7 @@ func (c *Client) ListShapes(ctx context.Context, compartmentID, imageID string) 
 func (c *Client) ListBootVolumes(ctx context.Context, compartmentID string) ([]core.BootVolume, error) {
 	defer c.withSubtreeInterceptor(&c.bootVolume.Interceptor)()
 	var all []core.BootVolume
-	page := common.String("")
+	var page *string
 	for {
 		req := core.ListBootVolumesRequest{
 			CompartmentId: common.String(compartmentID),
@@ -761,7 +761,7 @@ func (c *Client) UpdateBootVolume(ctx context.Context, id string, sizeInGBs int6
 func (c *Client) ListBootVolumeAttachments(ctx context.Context, compartmentID, instanceID string) ([]core.BootVolumeAttachment, error) {
 	defer c.withSubtreeInterceptor(&c.compute.Interceptor)()
 	var all []core.BootVolumeAttachment
-	page := common.String("")
+	var page *string
 	for {
 		req := core.ListBootVolumeAttachmentsRequest{
 			CompartmentId: common.String(compartmentID),
@@ -1644,7 +1644,7 @@ func (c *Client) ListSecurityRules(ctx context.Context, vcnID, keyword string, p
 
 	// Paginate through all security lists — a VCN may have >100.
 	var allSecurityLists []core.SecurityList
-	pageSL := common.String("")
+	var pageSL *string
 	for {
 		req := core.ListSecurityListsRequest{
 			CompartmentId: common.String(compartmentID),
@@ -1763,7 +1763,7 @@ func (c *Client) AddIngressRule(ctx context.Context, vcnID, protocol, port, sour
 	}
 
 	// Apply to ALL security lists in the VCN, not just the first.
-	page := common.String("")
+	var page *string
 	for {
 		req := core.ListSecurityListsRequest{
 			CompartmentId: common.String(c.tenant.TenancyOCID),
@@ -1932,7 +1932,7 @@ func (c *Client) AddEgressRule(ctx context.Context, vcnID, protocol, port, dest 
 	}
 
 	// Apply to ALL security lists in the VCN, not just the first.
-	page := common.String("")
+	var page *string
 	for {
 		req := core.ListSecurityListsRequest{
 			CompartmentId: common.String(c.tenant.TenancyOCID),

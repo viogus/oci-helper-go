@@ -235,7 +235,7 @@ func (s *Server) runChangeIPAttempt(task *memTask) bool {
 		return false
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
-	newIP, err := client.ChangeInstanceIP(ctx, task.InstanceID, task.CidrList)
+	newIP, err := client.ChangeInstanceIP(ctx, bareOCID(task.InstanceID), task.CidrList)
 	cancel()
 	if err != nil {
 		return false

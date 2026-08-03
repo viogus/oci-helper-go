@@ -4,6 +4,7 @@ package oci
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -2720,16 +2721,20 @@ natCleanup:
 }
 
 // ChangeInstanceIP replaces the ephemeral public IP of an instance.
+//
+// OCI rejects CreatePublicIp while the target private IP already has a public
+// IP in ASSIGNING/ASSIGNED state, so the old IP must be deleted first and
+// reach a terminal state before the replacement can be created.
 func (c *Client) ChangeInstanceIP(ctx context.Context, instanceID string, cidrList []string) (string, error) {
 	defer c.withSubtreeInterceptor(&c.compute.Interceptor)()
 	defer c.withSubtreeInterceptor(&c.vcn.Interceptor)()
-	// Get current VNIC
-	attReq := core.ListVnicAttachmentsRequest{
+
+	// List VNIC attachments for the instance.
+	attResp, err := c.compute.ListVnicAttachments(ctx, core.ListVnicAttachmentsRequest{
 		CompartmentId: common.String(c.tenant.TenancyOCID),
 		InstanceId:    common.String(instanceID),
-		Limit:         common.Int(10),
-	}
-	attResp, err := c.compute.ListVnicAttachments(ctx, attReq)
+		Limit:         common.Int(100),
+	})
 	if err != nil {
 		return "", fmt.Errorf("list vnic attachments: %w", err)
 	}
@@ -2737,30 +2742,17 @@ func (c *Client) ChangeInstanceIP(ctx context.Context, instanceID string, cidrLi
 		return "", fmt.Errorf("no VNIC attached")
 	}
 
-	vnicID := attResp.Items[0].VnicId
-	vnicReq := core.GetVnicRequest{VnicId: vnicID}
-	vnicResp, err := c.vcn.GetVnic(ctx, vnicReq)
+	// Find the VNIC that carries the current public IP (usually the primary).
+	vnicID, oldIP, err := c.resolvePublicIPVnic(ctx, attResp.Items)
 	if err != nil {
-		return "", fmt.Errorf("get vnic: %w", err)
+		return "", err
 	}
 
-	// Get current public IP
-	oldIP := ""
-	if vnicResp.PublicIp != nil {
-		oldIP = *vnicResp.PublicIp
-	}
-
-	// If no public IP, create one
-	if oldIP == "" {
-		return "", fmt.Errorf("instance has no public IP to replace")
-	}
-
-	// Find the private IP OCID for this VNIC to use when creating the new public IP
-	privReq := core.ListPrivateIpsRequest{
-		VnicId: vnicID,
+	// Find the primary private IP on that VNIC — the target for the new IP.
+	privResp, err := c.vcn.ListPrivateIps(ctx, core.ListPrivateIpsRequest{
+		VnicId: common.String(vnicID),
 		Limit:  common.Int(10),
-	}
-	privResp, err := c.vcn.ListPrivateIps(ctx, privReq)
+	})
 	if err != nil {
 		return "", fmt.Errorf("list private IPs: %w", err)
 	}
@@ -2775,15 +2767,31 @@ func (c *Client) ChangeInstanceIP(ctx context.Context, instanceID string, cidrLi
 		return "", fmt.Errorf("no primary private IP found for VNIC")
 	}
 
-	// Create new public IP first (preserve old IP in case CIDR filter rejects).
-	createReq := core.CreatePublicIpRequest{
+	// Delete the old public IP and wait until it is fully released before
+	// creating the replacement (see function comment).
+	if oldIP != "" {
+		oldIPID, err := c.findPublicIPID(ctx, oldIP)
+		if err != nil {
+			return "", err
+		}
+		if _, err := c.vcn.DeletePublicIp(ctx, core.DeletePublicIpRequest{PublicIpId: common.String(oldIPID)}); err != nil {
+			// 404 means the old IP is already gone — nothing to wait for.
+			if !isNotFound(err) {
+				return "", fmt.Errorf("delete old IP: %w", err)
+			}
+		} else if err := c.waitPublicIPGone(ctx, oldIPID); err != nil {
+			return "", fmt.Errorf("wait for old IP release: %w", err)
+		}
+	}
+
+	// Create the replacement ephemeral public IP.
+	createResp, err := c.vcn.CreatePublicIp(ctx, core.CreatePublicIpRequest{
 		CreatePublicIpDetails: core.CreatePublicIpDetails{
 			CompartmentId: common.String(c.tenant.TenancyOCID),
 			Lifetime:      core.CreatePublicIpDetailsLifetimeEphemeral,
 			PrivateIpId:   privateIPID,
 		},
-	}
-	createResp, err := c.vcn.CreatePublicIp(ctx, createReq)
+	})
 	if err != nil {
 		return "", fmt.Errorf("create new IP: %w", err)
 	}
@@ -2793,7 +2801,8 @@ func (c *Client) ChangeInstanceIP(ctx context.Context, instanceID string, cidrLi
 		newIP = *createResp.PublicIp.IpAddress
 	}
 
-	// Check CIDR filter before deleting the old IP.
+	// Optional CIDR filter: if the fresh IP does not match, release it and
+	// report an error so the caller (or the retry task) can try again.
 	if len(cidrList) > 0 {
 		matched := false
 		for _, cidr := range cidrList {
@@ -2803,49 +2812,112 @@ func (c *Client) ChangeInstanceIP(ctx context.Context, instanceID string, cidrLi
 			}
 		}
 		if !matched {
-			// CIDR mismatch: delete the unwanted new IP and return error.
 			if createResp.PublicIp.Id != nil {
-				c.vcn.DeletePublicIp(ctx, core.DeletePublicIpRequest{PublicIpId: createResp.PublicIp.Id})
+				if _, derr := c.vcn.DeletePublicIp(ctx, core.DeletePublicIpRequest{PublicIpId: createResp.PublicIp.Id}); derr != nil && !isNotFound(derr) {
+					log.Printf("[ChangeInstanceIP] cleanup of out-of-CIDR IP %s: %v", newIP, derr)
+				} else {
+					_ = c.waitPublicIPGone(ctx, *createResp.PublicIp.Id)
+				}
 			}
 			return "", fmt.Errorf("new IP %s not in desired CIDR ranges: %v", newIP, cidrList)
 		}
 	}
 
-	// CIDR OK (or no filter): now safe to delete the old public IP.
-	var oldIPID string
+	return newIP, nil
+}
+
+// resolvePublicIPVnic returns the VNIC that currently carries a public IP and
+// that IP. When no VNIC has a public IP (e.g. the instance was never assigned
+// one), it falls back to the first VNIC so a fresh IP can still be created.
+func (c *Client) resolvePublicIPVnic(ctx context.Context, attachments []core.VnicAttachment) (string, string, error) {
+	var firstVnicID string
+	for _, att := range attachments {
+		if att.VnicId == nil {
+			continue
+		}
+		if firstVnicID == "" {
+			firstVnicID = *att.VnicId
+		}
+		vnicResp, err := c.vcn.GetVnic(ctx, core.GetVnicRequest{VnicId: att.VnicId})
+		if err != nil {
+			// A failed lookup must not silently pick a different VNIC: it could
+			// leave the old public IP assigned and create a second one.
+			return "", "", fmt.Errorf("get vnic %s: %w", *att.VnicId, err)
+		}
+		if vnicResp.PublicIp != nil && *vnicResp.PublicIp != "" {
+			return *att.VnicId, *vnicResp.PublicIp, nil
+		}
+	}
+	if firstVnicID == "" {
+		return "", "", fmt.Errorf("no VNIC id found")
+	}
+	return firstVnicID, "", nil
+}
+
+// findPublicIPID locates the OCID of a public IP by its IP address across the
+// region scope.
+func (c *Client) findPublicIPID(ctx context.Context, ipAddr string) (string, error) {
 	var page *string
 	for {
-		pipReq := core.ListPublicIpsRequest{
+		pipResp, err := c.vcn.ListPublicIps(ctx, core.ListPublicIpsRequest{
 			Scope:         core.ListPublicIpsScopeRegion,
 			CompartmentId: common.String(c.tenant.TenancyOCID),
 			Limit:         common.Int(100),
 			Page:          page,
-		}
-		pipResp, err := c.vcn.ListPublicIps(ctx, pipReq)
+		})
 		if err != nil {
 			return "", fmt.Errorf("list public IPs: %w", err)
 		}
 		for _, ip := range pipResp.Items {
-			if ip.IpAddress != nil && *ip.IpAddress == oldIP {
-				oldIPID = *ip.Id
-				break
+			if ip.IpAddress != nil && *ip.IpAddress == ipAddr && ip.Id != nil {
+				return *ip.Id, nil
 			}
-		}
-		if oldIPID != "" {
-			break
 		}
 		if pipResp.OpcNextPage == nil || *pipResp.OpcNextPage == "" {
 			break
 		}
 		page = pipResp.OpcNextPage
 	}
-	if oldIPID != "" {
-		if _, err := c.vcn.DeletePublicIp(ctx, core.DeletePublicIpRequest{PublicIpId: common.String(oldIPID)}); err != nil {
-			log.Printf("[ChangeInstanceIP] delete old IP %s: %v", oldIP, err)
+	return "", fmt.Errorf("public IP %s not found in region", ipAddr)
+}
+
+// waitPublicIPGone polls until a public IP reaches a terminal state (or is no
+// longer visible), so a subsequent CreatePublicIp on the same private IP is
+// not rejected due to a lingering ASSIGNING/ASSIGNED state.
+func (c *Client) waitPublicIPGone(ctx context.Context, publicIPID string) error {
+	const pollInterval = 2 * time.Second
+	const timeout = 60 * time.Second
+	deadline := time.Now().Add(timeout)
+	for {
+		getResp, err := c.vcn.GetPublicIp(ctx, core.GetPublicIpRequest{PublicIpId: common.String(publicIPID)})
+		if err != nil {
+			// 404 means the IP is gone — safe to proceed. Other errors are
+			// treated as transient and retried until the deadline.
+			if isNotFound(err) {
+				return nil
+			}
+		} else if string(getResp.PublicIp.LifecycleState) == string(core.PublicIpLifecycleStateTerminated) {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			state := ""
+			if err == nil {
+				state = string(getResp.PublicIp.LifecycleState)
+			}
+			return fmt.Errorf("timed out waiting for public IP %s to be released (state=%s)", publicIPID, state)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(pollInterval):
 		}
 	}
+}
 
-	return newIP, nil
+// isNotFound reports whether err is an OCI service error with HTTP 404.
+func isNotFound(err error) bool {
+	var se common.ServiceError
+	return errors.As(err, &se) && se.GetHTTPStatusCode() == http.StatusNotFound
 }
 
 // ipInCIDR checks if an IP is in a CIDR range

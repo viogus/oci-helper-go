@@ -308,7 +308,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/mem-tasks/update-cfg", s.withAuth(s.handleMemTasksUpdateCfg))
 
 	// ip-info
-	s.mux.HandleFunc("/api/ip-info", s.withAuth(s.handleIPInfo))
+	// ip-info is a public page (frontend route meta: guest) — no session required.
+	s.mux.HandleFunc("/api/ip-info", s.handleIPInfo)
 
 	// G9: tenant upload (BEFORE wildcard /api/tenants/)
 	s.mux.HandleFunc("/api/tenants/upload", s.withAuth(s.handleTenantUpload))

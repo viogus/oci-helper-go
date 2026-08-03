@@ -518,20 +518,37 @@ func (s *Server) handleIPInfo(w http.ResponseWriter, r *http.Request) {
 	if targetIP == "" {
 		host, _, err := net.SplitHostPort(r.RemoteAddr)
 		if err != nil {
-			targetIP = r.RemoteAddr
-		} else {
-			targetIP = host
+			host = r.RemoteAddr
 		}
+		targetIP = host
+	}
+	// Endpoint is public — validate the IP before any upstream call so
+	// unauthenticated callers cannot use this as an ip-api.com proxy or
+	// inject into the upstream URL.
+	if net.ParseIP(targetIP) == nil {
+		jsonErr(w, "invalid ip parameter")
+		return
+	}
+	// Match the frontend contract (IpInfo.vue): always include the resolved
+	// IP and the X-Forwarded-For chain alongside the geolocation fields.
+	info := map[string]interface{}{
+		"ip":        targetIP,
+		"forwarded": r.Header.Get("X-Forwarded-For"),
 	}
 	result, err := geoip.Lookup(targetIP)
 	if err != nil {
-		jsonOK(w, map[string]interface{}{
-			"ip":    targetIP,
-			"error": err.Error(),
-		})
+		info["error"] = err.Error()
+		jsonOK(w, info)
 		return
 	}
-	jsonOK(w, result)
+	info["lat"] = result.Lat
+	info["lng"] = result.Lng
+	info["country"] = result.Country
+	info["area"] = result.Area
+	info["city"] = result.City
+	info["org"] = result.Org
+	info["asn"] = result.Asn
+	jsonOK(w, info)
 }
 
 // --- DingTalk Notifications ---

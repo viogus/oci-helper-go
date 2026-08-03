@@ -8,11 +8,11 @@ The original Java (Spring Boot) + Vue 2 version was mature but heavy. Go makes i
 
 | Metric | Java | Go | Improvement |
 |--------|:---:|:--:|:-----------:|
-| Docker image | ~80MB (JRE Alpine) | **~13MB** | 6× |
+| Docker image | ~80MB (JRE Alpine) | **~21MB** | 4× |
 | Containers | 3 (app+watcher+websockify) | **1** | 3× |
 | Memory | 512MB recommended | **128MB** | 4× |
 | Startup | ~8s (JVM) | **<100ms** | 80× |
-| Binary size | 80MB JAR + 80MB JRE | **12MB static** | 13× |
+| Binary size | 80MB JAR + 80MB JRE | **~20MB static** | 8× |
 | Base image | eclipse-temurin:21-jre-alpine | **FROM scratch** | Zero deps |
 
 Single Go binary, `FROM scratch`, `CGO_ENABLED=0`. No JVM, no middleware, no extra containers.
@@ -99,7 +99,7 @@ oci-helper-go/
 | OCI SDK | `oci-go-sdk/v65` | Compute, VCN, Identity, Block Storage, Monitoring, Limits, NLB |
 | Auth | bcrypt + AES-256-GCM session cookie | HttpOnly, 24h TTL, server-side invalidation |
 | Frontend | Vue 3 + Element Plus + Vue Router + Pinia + ECharts | Built with Vite, embedded in binary |
-| Deployment | `FROM scratch` | Binary + ca-certificates only, ~13MB |
+| Deployment | `FROM scratch` | Binary + ca-certificates only, ~21MB |
 
 ## Features
 
@@ -144,7 +144,7 @@ oci-helper-go/
 - [x] Encrypted backup/restore (AES-256-GCM + PBKDF2)
 - [x] Audit log with pagination and keyword search
 - [x] Dual logging (stderr + file)
-- [x] i18n (zh_CN / en), auto-detected from Accept-Language
+- [x] i18n (zh_CN / en), locale persisted per browser (default zh-CN)
 - [x] Auto-update check and trigger
 - [x] Docker single-container deploy (FROM scratch, user 65534)
 - [x] CI/CD: push to main → build amd64+arm64 → push to ghcr.io
@@ -236,13 +236,16 @@ volumes:
 | `GOOGLE_CLIENT_ID` | — | Google OAuth 2.0 client ID |
 | `GOOGLE_CLIENT_SECRET` | — | Google OAuth 2.0 client secret |
 | `GOOGLE_REDIRECT_URL` | — | Google OAuth redirect URI |
+| `OCI_SSH_KEY_ENCRYPTION_KEY` | — | Base64-encoded 32-byte AES-256 key for encrypting stored SSH private keys (generate: `openssl rand -base64 32`). Without it, SSH keys encrypted this session are lost on restart |
+| `OCI_DEBUG_PORT` | — | Optional pprof debug server, bound to `127.0.0.1` only (e.g. `6060`) |
 
 The following are configured through the web panel (stored in SQLite `config` table):
-- Cloudflare API token (`cloudflare_token`)
-- SiliconFlow API key (`siliconflow_key`) and model (`siliconflow_model`)
-- Telegram Bot token (`telegram_token`)
-- MFA TOTP secret (set up via `/api/mfa/setup`)
-- AI search toggle (`ai_search_enabled`)
+- Cloudflare API token (`cloudflare_token`); DNS auto-sync (`dns_auto_sync_enabled`, `dns_auto_sync_zone_id`, `dns_auto_sync_domain`, `dns_auto_sync_cfg_id`)
+- SiliconFlow API key (`siliconflow_key`) and model (`siliconflow_model`); AI search toggle (`ai_search_enabled`)
+- Telegram Bot token (`telegram_token`), webhook secret (`telegram_webhook_secret`), chat allowlist (`telegram_chat_id`); DingTalk webhook (`dingtalk_webhook`)
+- MFA TOTP secret (set up via `/api/mfa/setup`); SSH key encryption key (`ssh_key_encryption_key`)
+- Panel URL (`panel_url`), Google email allowlist (`google_allowed_emails`), update repo (`update_repo`)
+- Daily broadcast (`daily_broadcast_enabled`, `daily_broadcast_cron`), version update notifications (`version_update_notifications_enabled`)
 
 ## API reference
 
@@ -305,7 +308,7 @@ All API routes return JSON. Most require a valid session cookie obtained via `/a
 | POST | `/api/instances/netboot-rescue` | ✓ | Netboot rescue flow (up to 10 min, synchronous) |
 | POST | `/api/instances/netboot-rescue/stop` | ✓ | Stop netboot rescue |
 | POST | `/api/instances/disable-ipv6` | ✓ | Disable instance IPv6 |
-| GET | `/api/instances/vnc` | ✓ | Start VNC console connection |
+| POST | `/api/instances/vnc` | ✓ | Start VNC console connection |
 | GET | `/api/instances/config-info` | ✓ | Get instance configuration info |
 | POST | `/api/instances/update-password` | ✓ | Update instance OS password |
 
@@ -380,7 +383,7 @@ All API routes return JSON. Most require a valid session cookie obtained via `/a
 | GET | `/api/cloudflare/zones` | ✓ | List Cloudflare zones |
 | GET | `/api/cloudflare/{zoneId}/records` | ✓ | List DNS records |
 | POST | `/api/cloudflare/{zoneId}/records` | ✓ | Create DNS record |
-| PATCH | `/api/cloudflare/{zoneId}/records/{recordId}` | ✓ | Update DNS record |
+| PUT | `/api/cloudflare/{zoneId}/records/{recordId}` | ✓ | Update DNS record |
 | DELETE | `/api/cloudflare/{zoneId}/records/{recordId}` | ✓ | Delete DNS record |
 | POST | `/api/cloudflare/update-ip` | ✓ | Update DNS record IP for an instance |
 | POST | `/api/cloudflare/oci-sync` | ✓ | Sync OCI instance IPs to Cloudflare DNS |
@@ -479,6 +482,34 @@ All API routes return JSON. Most require a valid session cookie obtained via `/a
 | POST | `/api/update/now` | ✓ | Trigger update |
 | GET | `/api/ip-info` | — | Public IP info (no auth) |
 
+### Additional endpoints
+
+Implemented routes not listed in the tables above (registered in `internal/handler/handler.go`):
+
+| Method | Path | Auth | Description |
+|--------|------|:---:|-------------|
+| GET | `/api/health` | — | Healthcheck (used by `oci-helper health`) |
+| GET | `/api/csrf-token` | ✓ | Fetch the CSRF token for state-changing requests |
+| GET | `/api/admin/blacklist` | ✓ | List persistently blocked login IPs |
+| POST | `/api/admin/blacklist/clear` | ✓ | Clear the login IP blacklist |
+| GET/POST | `/api/stock-alerts` | ✓ | Stock price alerts |
+| GET/PUT/DELETE | `/api/stock-alerts/{id}` (+ `/{id}/check` manual trigger) | ✓ | Manage / trigger a stock alert |
+| POST | `/api/captcha/send` | ✓ | Send a one-time captcha (required to terminate instances when a notification channel is configured) |
+| GET | `/api/glance` | ✓ | Home dashboard glance data (cities + IP geolocation map) |
+| GET/POST | `/api/cost`, `/api/cost/analysis` | ✓ | Cost analysis |
+| POST | `/api/instances/config-update` | ✓ | Direct instance config update (retry loop via `/api/mem-tasks/update-cfg`) |
+| POST | `/api/instances/network-status` | ✓ | Instance network status |
+| POST | `/api/instances/shrink-disk` | ✓ | Shrink boot volume |
+| GET | `/api/instances/vnc/stop`, `/api/instances/vnc/wait` | ✓ | VNC console lifecycle |
+| GET | `/api/instances/vnc/proxy` | ✓ | noVNC WebSocket proxy |
+| POST | `/api/security-rules/release` | ✓ | Release a security rule |
+| GET | `/api/traffic/getCondition`, `/api/traffic/fetchVnics`, `/api/traffic/fetchInstances` | ✓ | Traffic query helpers |
+| GET | `/api/limits/services` | ✓ | List OCI limit services |
+| POST | `/api/tenants/refresh-plan-type/batch` | ✓ | Batch refresh tenant plan type |
+| POST | `/api/tenants/{id}/proxy`, `/api/tenants/{id}/users/delete`, `/api/tenants/{id}/mfa/clear`, `/api/tenants/{id}/api-keys/clear`, `/api/tenants/{id}/password-policy`, `/api/tenants/{id}/refresh-plan-type` | ✓ | Tenant sub-actions (proxy, IAM user, MFA devices, API keys, password policy, plan type) |
+| GET | `/api/cloudflare/auto-sync/status` | ✓ | Cloudflare DNS auto-sync status |
+| POST | `/api/cloudflare/auto-sync/trigger` | ✓ | Trigger Cloudflare DNS auto-sync |
+
 ### Error format
 
 Errors return `{"error": "message"}` with an appropriate HTTP status code (400 for bad requests, 401 for auth failures, etc.).
@@ -486,7 +517,7 @@ Errors return `{"error": "message"}` with an appropriate HTTP status code (400 f
 ## Build
 
 ```bash
-# Local build (static binary, ~12MB)
+# Local build (static binary, ~20MB)
 CGO_ENABLED=0 go build -ldflags="-s -w" -o oci-helper ./cmd/server
 
 # Build with frontend

@@ -7,6 +7,52 @@ import (
 	"github.com/viogus/oci-helper-go/internal/db"
 )
 
+// TestIPInfoPublic verifies /api/ip-info is reachable without a session
+// (guest page), returns the resolved IP + forwarded fields, and rejects
+// malformed ip parameters. Uses private IPs only, so no network calls.
+func TestIPInfoPublic(t *testing.T) {
+	_, _, ts, cleanup := setupTestServer(t)
+	defer cleanup()
+
+	// No session cookie: default target = caller (127.0.0.1, private → error
+	// path short-circuits before any ip-api.com call).
+	resp, err := ts.Client().Get(ts.URL + "/api/ip-info")
+	if err != nil {
+		t.Fatalf("GET /api/ip-info: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /api/ip-info status = %d, want 200", resp.StatusCode)
+	}
+	m := jsonMap(t, resp)
+	if ip, _ := m["ip"].(string); ip == "" {
+		t.Fatalf("ip field missing or empty: %v", m)
+	}
+	if _, ok := m["forwarded"]; !ok {
+		t.Fatalf("forwarded field missing: %v", m)
+	}
+
+	// Explicit private IP: 200 with the ip echoed back.
+	resp2, err := ts.Client().Get(ts.URL + "/api/ip-info?ip=127.0.0.1")
+	if err != nil {
+		t.Fatalf("GET /api/ip-info?ip=127.0.0.1: %v", err)
+	}
+	if resp2.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp2.StatusCode)
+	}
+	if m2 := jsonMap(t, resp2); m2["ip"] != "127.0.0.1" {
+		t.Fatalf("ip = %v, want 127.0.0.1", m2["ip"])
+	}
+
+	// Malformed ip param: rejected with 400, no upstream call.
+	resp3, err := ts.Client().Get(ts.URL + "/api/ip-info?ip=not-an-ip")
+	if err != nil {
+		t.Fatalf("GET /api/ip-info?ip=not-an-ip: %v", err)
+	}
+	if resp3.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", resp3.StatusCode)
+	}
+}
+
 func TestHandleGlance(t *testing.T) {
 	_, store, ts, cleanup := setupTestServer(t)
 	defer cleanup()

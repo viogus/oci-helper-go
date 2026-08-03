@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Build & Run
 
 ```bash
-# Local build (static binary, ~13MB)
+# Local build (static binary, ~20MB)
 CGO_ENABLED=0 go build -ldflags="-s -w" -o oci-helper ./cmd/server
 
 # Run locally (needs port, credentials, data dir)
@@ -68,7 +68,7 @@ internal/
 
 - **No CGO**: `CGO_ENABLED=0`, `modernc.org/sqlite` (pure Go SQLite), `FROM scratch`. Binary is fully static.
 - **SQLite WAL mode, single connection**: `?_journal=WAL&_busy_timeout=5000` with `SetMaxOpenConns(1)`. WAL for concurrent reads, single writer avoids SQLite busy errors.
-- **Auth middleware pattern**: `withAuth(f)` wraps handlers, checks session cookie. Login uses HTTP Basic Auth to set cookie. No JWT — just base64-encoded JSON session with TTL. CSRF token required on state-changing methods. Sessions invalidated server-side on logout via version bump.
+- **Auth middleware pattern**: `withAuth(f)` wraps handlers, checks session cookie. Login uses HTTP Basic Auth to set cookie. No JWT — the cookie is a JSON session, HMAC-SHA256-signed then AES-256-GCM-encrypted, base64-encoded, 24h TTL. CSRF token required on state-changing methods. Sessions invalidated server-side on logout via version bump.
 - **MFA cache**: `mfa_enabled`/`mfa_secret` are cached in-memory (`s.mfaCache`); `refreshMFACache()` must be called after any direct config change (including backup restore).
 - **OCI client per call**: `oci.NewClient(tenant)` creates fresh OCI SDK clients on each sync. Not pooled or cached. Tenant stores key file path in DB.
 - **Frontend embedding**: `//go:embed all:dist/*` embeds SPA into binary. `fs.Sub` strips `dist/` prefix. Served as `/` catch-all behind API routes. Rebuilt in Docker from `frontend/`; `internal/handler/dist` is committed for local builds.

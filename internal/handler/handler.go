@@ -68,6 +68,12 @@ type Server struct {
 	auditCh chan *db.AuditLog
 
 	createTaskRunning sync.Map
+
+	// SSH private-key encryption key, loaded once per process and persisted
+	// to the DB config table so restarts don't orphan existing private keys.
+	sshKeyMu     sync.Mutex
+	sshKeyLoaded bool
+	sshKeyBytes  []byte
 }
 
 type mfaCacheEntry struct {

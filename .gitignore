@@ -7,3 +7,6 @@ internal/handler/dist/
 .worktrees/
 /server
 .claude/worktrees/
+
+# Reasonix host runtime state
+.reasonix/

@@ -510,7 +510,12 @@ func newConsoleRSAKey() (gossh.Signer, string, error) {
 
 // parseConsoleConnectionString extracts proxy info from an OCI ConnectionString.
 //
-// Format: ssh -o ProxyCommand='ssh -W %h:%p -p 443 ocid1.console...@instance-console.region.oci.oraclecloud.com' ocid1.instance...
+// Format: ssh [options] -o ProxyCommand='ssh -W %h:%p -p 443 ocid1.console...@instance-console.region.oci.oraclecloud.com' [user@]ocid1.instance...
+//
+// The token after ProxyCommand's quoted value is the real SSH destination.
+// OCI uses the instance OCID there — the console proxy resolves it to the
+// instance's SSH port. Defaulting to "localhost" (as older code did) makes
+// every proxy dial fail with "ssh: rejected: connect failed".
 func parseConsoleConnectionString(s string) (*consoleProxyInfo, error) {
 	info := &consoleProxyInfo{
 		ProxyPort:  443,
@@ -563,7 +568,62 @@ func parseConsoleConnectionString(s string) (*consoleProxyInfo, error) {
 		return nil, fmt.Errorf("could not parse proxy host/user from: %s", proxyCmd)
 	}
 
+	// Extract the outer ssh destination ([user@]<target>) that follows the
+	// quoted ProxyCommand value — OCI sets it to the instance OCID.
+	if target, tport := parseOuterTarget(s, proxyCmdStart); target != "" {
+		info.TargetHost = target
+		info.TargetPort = tport
+	}
+
 	return info, nil
+}
+
+// parseOuterTarget scans the ssh command that follows ProxyCommand='...' for
+// the destination host, stripping any user@ prefix. A -p <port> in the outer
+// command sets the returned port (default 22). Returns "" when nothing
+// parseable is found (caller keeps the localhost fallback).
+func parseOuterTarget(s string, proxyCmdStart int) (string, int) {
+	rest := s[proxyCmdStart+len("ProxyCommand="):]
+	// Skip the quoted ProxyCommand value (single or double quotes).
+	if len(rest) > 0 && (rest[0] == '\'' || rest[0] == '"') {
+		q := rest[0]
+		if end := strings.IndexByte(rest[1:], q); end >= 0 {
+			rest = rest[end+2:]
+		}
+	}
+
+	port := 22
+	fields := strings.Fields(rest)
+	for i := 0; i < len(fields); i++ {
+		f := fields[i]
+		switch f {
+		case "-p":
+			if i+1 < len(fields) {
+				if p, err := strconv.Atoi(fields[i+1]); err == nil && p > 0 {
+					port = p
+				}
+				i++
+			}
+			continue
+		case "-i", "-o", "-l", "-F", "-J", "-W":
+			if i+1 < len(fields) {
+				i++
+			}
+			continue
+		}
+		if strings.HasPrefix(f, "-") {
+			continue
+		}
+		target := f
+		if j := strings.LastIndexByte(target, '@'); j >= 0 {
+			target = target[j+1:]
+		}
+		if target == "" {
+			continue
+		}
+		return target, port
+	}
+	return "", port
 }
 
 // ── WebSocket helpers ────────────────────────────────────────────────────

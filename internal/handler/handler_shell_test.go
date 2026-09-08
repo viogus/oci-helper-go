@@ -54,3 +54,49 @@ func TestUserCandidates(t *testing.T) {
 		}
 	}
 }
+
+// TestParseConsoleConnectionString: the proxy hop must dial the instance OCID
+// from the outer ssh destination — not "localhost" — or every proxy dial
+// fails with "ssh: rejected: connect failed".
+func TestParseConsoleConnectionString(t *testing.T) {
+	s := `ssh -i /tmp/k.pem -o ProxyCommand='ssh -W %h:%p -p 443 ocid1.instanceconsoleconnection.oc1.ap-chuncheon-1.an4w4@instance-console.ap-chuncheon-1.oci.oraclecloud.com' debian@ocid1.instance.oc1.ap-chuncheon-1.an4w4ljrqyycjticz`
+	info, err := parseConsoleConnectionString(s)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if info.ProxyPort != 443 {
+		t.Errorf("ProxyPort = %d, want 443", info.ProxyPort)
+	}
+	if info.ProxyUser != "ocid1.instanceconsoleconnection.oc1.ap-chuncheon-1.an4w4" {
+		t.Errorf("ProxyUser = %q", info.ProxyUser)
+	}
+	if info.ProxyHost != "instance-console.ap-chuncheon-1.oci.oraclecloud.com" {
+		t.Errorf("ProxyHost = %q", info.ProxyHost)
+	}
+	if info.TargetHost != "ocid1.instance.oc1.ap-chuncheon-1.an4w4ljrqyycjticz" {
+		t.Errorf("TargetHost = %q, want the instance OCID", info.TargetHost)
+	}
+	if info.TargetPort != 22 {
+		t.Errorf("TargetPort = %d, want 22", info.TargetPort)
+	}
+
+	// Outer destination without a user@ prefix.
+	s2 := `ssh -o ProxyCommand="ssh -W %h:%p -p 443 ocid1.console.x@instance-console.us-ashburn-1.oci.oraclecloud.com" ocid1.instance.oc1.us-ashburn-1.abc`
+	info2, err := parseConsoleConnectionString(s2)
+	if err != nil {
+		t.Fatalf("parse2: %v", err)
+	}
+	if info2.TargetHost != "ocid1.instance.oc1.us-ashburn-1.abc" {
+		t.Errorf("TargetHost = %q", info2.TargetHost)
+	}
+
+	// Legacy string with no outer destination: keep the localhost fallback.
+	s3 := `ssh -o ProxyCommand='ssh -W %h:%p -p 443 u@h.example.com'`
+	info3, err := parseConsoleConnectionString(s3)
+	if err != nil {
+		t.Fatalf("parse3: %v", err)
+	}
+	if info3.TargetHost != "localhost" || info3.TargetPort != 22 {
+		t.Errorf("fallback target = %s:%d, want localhost:22", info3.TargetHost, info3.TargetPort)
+	}
+}

@@ -237,6 +237,8 @@
     "selectTenant": "Tenant",
     "selectInstance": "Instance",
     "selectSSHKey": "SSH Key",
+    "username": "SSH username",
+    "usernamePlaceholder": "Leave empty to auto-try opc/root/ubuntu/debian/admin",
     "connect": "Connect",
     "disconnect": "Disconnect",
     "manageKeys": "Manage SSH Keys",

@@ -237,6 +237,8 @@
     "selectTenant": "选择租户",
     "selectInstance": "选择实例",
     "selectSSHKey": "选择 SSH 密钥",
+    "username": "登录用户名",
+    "usernamePlaceholder": "留空自动尝试 opc/root/ubuntu/debian/admin",
     "connect": "连接",
     "disconnect": "断开",
     "manageKeys": "管理 SSH 密钥",

@@ -2,6 +2,8 @@ package handler
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -24,10 +26,10 @@ import (
 // wsMessage is the JSON protocol between frontend xterm.js and backend SSH.
 type wsMessage struct {
 	Type    string `json:"type"`              // "resize", "input", "output", "error", "ready"
-	Rows    int    `json:"rows,omitempty"`     // terminal rows (resize)
-	Cols    int    `json:"cols,omitempty"`     // terminal cols (resize)
-	Data    string `json:"data,omitempty"`     // base64-encoded bytes
-	Message string `json:"message,omitempty"`  // error/status text
+	Rows    int    `json:"rows,omitempty"`    // terminal rows (resize)
+	Cols    int    `json:"cols,omitempty"`    // terminal cols (resize)
+	Data    string `json:"data,omitempty"`    // base64-encoded bytes
+	Message string `json:"message,omitempty"` // error/status text
 }
 
 // knownHostKeys stores SSH host keys for TOFU (Trust On First Use) verification.
@@ -81,14 +83,32 @@ var shellUpgrader = websocket.Upgrader{
 	},
 }
 
+// sshLoginUsers are the conventional SSH usernames tried in order when no
+// explicit username is given. Covers OCI platform images (opc/root/ubuntu)
+// plus imported Debian-style images (default user "debian") and AWS-style
+// images (default user "admin").
+var sshLoginUsers = []string{"opc", "root", "ubuntu", "debian", "admin"}
+
+// userCandidates returns the SSH users to attempt: an explicitly requested
+// username is used alone; otherwise the conventional list is tried in order.
+func userCandidates(loginUser string) []string {
+	if loginUser != "" {
+		return []string{loginUser}
+	}
+	return sshLoginUsers
+}
+
 // handleShellWS handles WebSocket upgrade and bridges SSH → browser terminal.
 //
 // GET /api/shell/ws?tenant_id=X&instance_id=X:ocid&ssh_key_id=X&rows=24&cols=80
+// An optional ssh_user param pins the SSH login user (e.g. "debian"); when
+// omitted, conventional users (opc/root/ubuntu/debian/admin) are tried.
 func (s *Server) handleShellWS(w http.ResponseWriter, r *http.Request) {
 	// ── Parse params ──────────────────────────────────────────────────
 	tenantID, _ := strconv.ParseInt(r.URL.Query().Get("tenant_id"), 10, 64)
 	instanceID := r.URL.Query().Get("instance_id")
 	sshKeyID, _ := strconv.ParseInt(r.URL.Query().Get("ssh_key_id"), 10, 64)
+	loginUser := strings.TrimSpace(r.URL.Query().Get("ssh_user"))
 	rows, _ := strconv.Atoi(r.URL.Query().Get("rows"))
 	cols, _ := strconv.Atoi(r.URL.Query().Get("cols"))
 	if rows < 1 {
@@ -154,16 +174,15 @@ func (s *Server) handleShellWS(w http.ResponseWriter, r *http.Request) {
 	}
 	wsConn.SetReadLimit(65536)
 
-	// ── Parse key and extract public key string ────────────────────────
+	// ── Parse key and extract signer (used to log into the instance) ────
 	signer, err := gossh.ParsePrivateKey(privPEM)
 	if err != nil {
 		sendWSError(wsConn, "parse private key: "+err.Error())
 		return
 	}
-	pubKeyStr := strings.TrimSpace(string(gossh.MarshalAuthorizedKey(signer.PublicKey())))
 
 	// ── Establish SSH session ─────────────────────────────────────────
-	sshClient, cleanup, err := s.connectSSH(tenant, inst, signer, pubKeyStr)
+	sshClient, cleanup, err := s.connectSSH(tenant, inst, signer, loginUser)
 	if err != nil {
 		sendWSError(wsConn, "SSH connection failed: "+err.Error())
 		return
@@ -300,18 +319,21 @@ func (s *Server) handleShellWS(w http.ResponseWriter, r *http.Request) {
 
 // connectSSH establishes an SSH connection to the instance.
 // Tries direct SSH to PublicIP first, then private IP, then OCI Console Connection proxy.
+// loginUser pins the SSH username (e.g. "debian"); empty means conventional
+// users are tried in order.
 // Returns a cleanup function (non-nil only for console proxy path) that the caller
 // MUST defer/run when done with the client.
-func (s *Server) connectSSH(tenant *db.Tenant, inst *db.Instance, signer gossh.Signer, pubKeyStr string) (*gossh.Client, func(), error) {
+func (s *Server) connectSSH(tenant *db.Tenant, inst *db.Instance, signer gossh.Signer, loginUser string) (*gossh.Client, func(), error) {
 	config := &gossh.ClientConfig{
 		Auth:            []gossh.AuthMethod{gossh.PublicKeys(signer)},
 		HostKeyCallback: tofuHostKeyCallback(inst.PublicIP),
 		Timeout:         10 * time.Second,
 	}
+	users := userCandidates(loginUser)
 
 	// ── Strategy 1: Direct SSH to public IP ───────────────────────────
 	if inst.PublicIP != "" {
-		for _, user := range []string{"opc", "root", "ubuntu"} {
+		for _, user := range users {
 			cfg := *config
 			cfg.User = user
 			client, dialErr := gossh.Dial("tcp", net.JoinHostPort(inst.PublicIP, "22"), &cfg)
@@ -319,12 +341,12 @@ func (s *Server) connectSSH(tenant *db.Tenant, inst *db.Instance, signer gossh.S
 				return client, nil, nil
 			}
 		}
-		log.Printf("[shell] direct ssh to %s:22 failed, trying console proxy", inst.PublicIP)
+		log.Printf("[shell] direct ssh to %s:22 failed (tried %v), trying console proxy", inst.PublicIP, users)
 	}
 
 	// ── Strategy 2: Try private IP ────────────────────────────────────
 	if inst.PrivateIP != "" && inst.PrivateIP != inst.PublicIP {
-		for _, user := range []string{"opc", "root", "ubuntu"} {
+		for _, user := range users {
 			cfg := *config
 			cfg.User = user
 			client, dialErr := gossh.Dial("tcp", net.JoinHostPort(inst.PrivateIP, "22"), &cfg)
@@ -335,14 +357,21 @@ func (s *Server) connectSSH(tenant *db.Tenant, inst *db.Instance, signer gossh.S
 	}
 
 	// ── Strategy 3: OCI Console Connection proxy ──────────────────────
-	return s.connectViaConsoleProxy(tenant, inst, config, pubKeyStr)
+	return s.connectViaConsoleProxy(tenant, inst, config, loginUser)
 }
 
 // connectViaConsoleProxy creates an OCI Console Connection and uses it as an SSH tunnel.
 // On success, returns the instance SSH client and a cleanup function the caller MUST
 // defer/run when done with the client. The cleanup closes the proxy SSH tunnel and
 // deletes the OCI console connection.
-func (s *Server) connectViaConsoleProxy(tenant *db.Tenant, inst *db.Instance, config *gossh.ClientConfig, pubKeyStr string) (*gossh.Client, func(), error) {
+//
+// OCI only accepts ssh-rsa public keys when creating an instance console
+// connection (an ed25519/ecdsa key fails with "Invalid ssh public key type"),
+// so this path authenticates to the console proxy with a throwaway RSA-2048
+// key generated per session. The caller's own signer (config.Auth) is used
+// only for the final hop into the instance, against the instance's own
+// authorized_keys.
+func (s *Server) connectViaConsoleProxy(tenant *db.Tenant, inst *db.Instance, config *gossh.ClientConfig, loginUser string) (*gossh.Client, func(), error) {
 	client, err := s.clientFor(tenant)
 	if err != nil {
 		return nil, nil, fmt.Errorf("oci client: %w", err)
@@ -353,8 +382,13 @@ func (s *Server) connectViaConsoleProxy(tenant *db.Tenant, inst *db.Instance, co
 
 	ctx := context.Background()
 
+	consoleSigner, consolePub, err := newConsoleRSAKey()
+	if err != nil {
+		return nil, nil, err
+	}
+
 	log.Printf("[shell] creating console connection for %s...", inst.Name)
-	conn, err := client.CreateConsoleConnection(ctx, instanceOCID, pubKeyStr)
+	conn, err := client.CreateConsoleConnection(ctx, instanceOCID, consolePub)
 	if err != nil {
 		return nil, nil, fmt.Errorf("create console connection: %w", err)
 	}
@@ -392,10 +426,11 @@ func (s *Server) connectViaConsoleProxy(tenant *db.Tenant, inst *db.Instance, co
 
 	log.Printf("[shell] console proxy: %s:%d user=%s", proxyInfo.ProxyHost, proxyInfo.ProxyPort, proxyInfo.ProxyUser)
 
-	// SSH to the OCI console proxy
+	// SSH to the OCI console proxy, authenticating with the throwaway RSA
+	// key registered on the console connection (OCI requires ssh-rsa here).
 	proxyConfig := &gossh.ClientConfig{
 		User:            proxyInfo.ProxyUser,
-		Auth:            config.Auth,
+		Auth:            []gossh.AuthMethod{gossh.PublicKeys(consoleSigner)},
 		HostKeyCallback: tofuHostKeyCallback(proxyInfo.ProxyHost),
 		Timeout:         15 * time.Second,
 	}
@@ -430,8 +465,10 @@ func (s *Server) connectViaConsoleProxy(tenant *db.Tenant, inst *db.Instance, co
 		}
 	}
 
-	// SSH handshake with the instance through the proxied connection
-	for _, user := range []string{"opc", "root", "ubuntu"} {
+	// SSH handshake with the instance through the proxied connection. The
+	// instance login uses the caller's own key/signer; the user list matches
+	// the direct-SSH strategy.
+	for _, user := range userCandidates(loginUser) {
 		cfg := *config
 		cfg.User = user
 		sshConn, chans, reqs, sshErr := gossh.NewClientConn(proxyConn, targetAddr, &cfg)
@@ -442,7 +479,7 @@ func (s *Server) connectViaConsoleProxy(tenant *db.Tenant, inst *db.Instance, co
 
 	proxyConn.Close()
 	cleanup()
-	return nil, nil, fmt.Errorf("all auth attempts through console proxy failed")
+	return nil, nil, fmt.Errorf("all auth attempts through console proxy failed (tried users %v)", userCandidates(loginUser))
 }
 
 // consoleProxyInfo holds parsed OCI console connection proxy details.
@@ -452,6 +489,23 @@ type consoleProxyInfo struct {
 	ProxyUser  string
 	TargetHost string
 	TargetPort int
+}
+
+// newConsoleRSAKey generates a throwaway RSA-2048 keypair used to
+// authenticate to the OCI instance-console proxy. OCI rejects every key type
+// except ssh-rsa when creating a console connection, so the user's own key
+// (often ed25519) must never be submitted there.
+func newConsoleRSAKey() (gossh.Signer, string, error) {
+	priv, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		return nil, "", fmt.Errorf("generate console rsa key: %w", err)
+	}
+	signer, err := gossh.NewSignerFromKey(priv)
+	if err != nil {
+		return nil, "", fmt.Errorf("parse console rsa key: %w", err)
+	}
+	pub := strings.TrimSpace(string(gossh.MarshalAuthorizedKey(signer.PublicKey())))
+	return signer, pub, nil
 }
 
 // parseConsoleConnectionString extracts proxy info from an OCI ConnectionString.

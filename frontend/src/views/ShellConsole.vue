@@ -26,6 +26,9 @@
             </el-button>
           </div>
         </el-form-item>
+        <el-form-item :label="$t('shell.username')">
+          <el-input v-model="form.username" :placeholder="$t('shell.usernamePlaceholder')" clearable />
+        </el-form-item>
         <el-form-item>
           <el-button type="primary" @click="connect" :loading="connecting" :disabled="!canConnect">
             {{ $t('shell.connect') }}
@@ -133,6 +136,7 @@ const form = reactive({
   tenantId: null,
   instanceId: '',
   sshKeyId: null,
+  username: '',
 })
 
 const canConnect = computed(() => form.tenantId && form.instanceId && form.sshKeyId && !connected.value)
@@ -281,7 +285,7 @@ async function connect() {
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
     const host = location.host
     const { rows, cols } = term
-    const wsUrl = `${proto}//${host}/api/shell/ws?tenant_id=${form.tenantId}&instance_id=${encodeURIComponent(form.instanceId)}&ssh_key_id=${form.sshKeyId}&rows=${rows}&cols=${cols}`
+    const wsUrl = `${proto}//${host}/api/shell/ws?tenant_id=${form.tenantId}&instance_id=${encodeURIComponent(form.instanceId)}&ssh_key_id=${form.sshKeyId}${form.username ? `&ssh_user=${encodeURIComponent(form.username.trim())}` : ''}&rows=${rows}&cols=${cols}`
 
     ws = new WebSocket(wsUrl)
 

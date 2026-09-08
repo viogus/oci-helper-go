@@ -754,7 +754,7 @@ func (s *Server) handleChangeIP(w http.ResponseWriter, r *http.Request) {
 	}
 	dnsErr := ""
 	if req.ChangeCfDNS {
-		if err := s.updateCfDNSAfterChangeIP(req.TenantID, req.SelectedDomainCfgID, req.DomainPrefix, newIP, req.EnableProxy, req.TTL, req.Remark); err != nil {
+		if err := s.updateCfDNSAfterChangeIP(req.TenantID, req.SelectedDomainCfgID, req.InstanceID, req.DomainPrefix, newIP, req.EnableProxy, req.TTL, req.Remark); err != nil {
 			dnsErr = err.Error()
 			log.Printf("[change-ip] cloudflare dns update: %v", err)
 		}

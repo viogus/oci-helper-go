@@ -30,6 +30,83 @@
       </div>
     </el-card>
 
+    <!-- Per-instance DNS bindings: ties an instance's public IP to a named
+         record in a Cloudflare zone. Auto-sync / change-IP update exactly the
+         bound record(s) instead of guessing from the instance name. -->
+    <el-card shadow="never" class="autosync-card">
+      <template #header>
+        <div class="autosync-header">
+          <span>Instance ↔ DNS Bindings</span>
+          <el-button type="primary" size="small" @click="openAddBindingDialog">
+            Add Binding
+          </el-button>
+        </div>
+      </template>
+      <div style="margin-bottom:12px;display:flex;gap:8px;align-items:center">
+        <el-select
+          v-model="bindingInstanceFilter"
+          filterable
+          clearable
+          placeholder="Filter by instance..."
+          style="width: 280px"
+          @change="onBindingInstanceFilter"
+        >
+          <el-option
+            v-for="inst in instances"
+            :key="inst.id"
+            :label="inst.name + ' (' + (inst.publicIp || 'no-ip') + ')'"
+            :value="inst.id"
+          />
+        </el-select>
+        <el-button @click="loadBindings" :loading="bindingsLoading">Refresh</el-button>
+      </div>
+      <el-table
+        :data="filteredBindings"
+        v-loading="bindingsLoading"
+        border
+        stripe
+        size="small"
+        style="width: 100%"
+      >
+        <el-table-column prop="instance" label="Instance" min-width="160">
+          <template #default="{ row }">
+            {{ instanceName(row.instanceId) }}<span v-if="instanceName(row.instanceId) !== row.instanceId" class="muted"> ({{ row.instanceId }})</span>
+          </template>
+        </el-table-column>
+        <el-table-column prop="name" label="DNS Name" min-width="180" />
+        <el-table-column label="Zone" min-width="120">
+          <template #default="{ row }">
+            {{ zoneName(row.zoneId) }}
+          </template>
+        </el-table-column>
+        <el-table-column label="CF Config" width="120">
+          <template #default="{ row }">
+            {{ cfCfgName(row.cfCfgId) }}
+          </template>
+        </el-table-column>
+        <el-table-column prop="ttl" label="TTL" width="70" align="center" />
+        <el-table-column label="Proxied" width="90" align="center">
+          <template #default="{ row }">
+            <el-tag :type="row.proxied ? 'success' : 'info'" size="small">{{ row.proxied ? 'Yes' : 'No' }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="Enabled" width="90" align="center">
+          <template #default="{ row }">
+            <el-tag :type="row.enabled ? 'success' : 'info'" size="small">{{ row.enabled ? 'On' : 'Off' }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="Actions" width="130" fixed="right" align="center">
+          <template #default="{ row }">
+            <el-button type="primary" link size="small" @click="openEditBindingDialog(row)">Edit</el-button>
+            <el-button type="danger" link size="small" @click="handleDeleteBinding(row)">Delete</el-button>
+          </template>
+        </el-table-column>
+        <template #empty>
+          <el-empty description="No bindings yet. Add one to pin an instance's IP to a DNS name." />
+        </template>
+      </el-table>
+    </el-card>
+
     <!-- Zone selector and actions -->
     <div class="filter-bar">
       <el-select
@@ -175,13 +252,76 @@
         </el-button>
       </template>
     </el-dialog>
+
+    <!-- Add / Edit Binding Dialog -->
+    <el-dialog
+      v-model="bindingDialog"
+      :title="bindingEditing ? 'Edit DNS Binding' : 'Add DNS Binding'"
+      width="560px"
+      :close-on-click-modal="false"
+    >
+      <el-form :model="bindingForm" label-width="110px">
+        <el-form-item label="Instance" required>
+          <el-select
+            v-model="bindingForm.instanceId"
+            filterable
+            placeholder="Select instance"
+            style="width: 100%"
+            :disabled="bindingEditing"
+          >
+            <el-option
+              v-for="inst in instances"
+              :key="inst.id"
+              :label="inst.name + ' · ' + (inst.publicIp || 'no-ip')"
+              :value="inst.id"
+            >
+              <span>{{ inst.name }}</span>&nbsp;
+              <span style="float:right;color:#909399;font-size:12px">{{ inst.publicIp || '—' }}</span>
+            </el-option>
+          </el-select>
+        </el-form-item>
+        <el-form-item label="DNS Name" required>
+          <el-input v-model="bindingForm.name" placeholder="e.g. vps1.example.com (full record name)" />
+        </el-form-item>
+        <el-form-item label="Zone" required>
+          <el-select v-model="bindingForm.zoneId" filterable placeholder="Zone ID" style="width: 100%">
+            <el-option v-for="z in zones" :key="z.id" :label="z.name + ' · ' + z.id" :value="z.id" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="CF Config">
+          <el-select v-model="bindingForm.cfCfgId" clearable placeholder="(token fallback)" style="width: 100%">
+            <el-option v-for="c in cfConfigs" :key="c.id" :label="c.name" :value="c.id" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="Proxied">
+          <el-switch v-model="bindingForm.proxied" />
+        </el-form-item>
+        <el-form-item label="TTL">
+          <el-input-number v-model="bindingForm.ttl" :min="1" :max="2147483647" :step="60" controls-position="right" />
+        </el-form-item>
+        <el-form-item label="Enabled">
+          <el-switch v-model="bindingForm.enabled" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="bindingDialog = false">Cancel</el-button>
+        <el-button type="primary" :loading="savingBinding" @click="handleSaveBinding">
+          {{ bindingEditing ? 'Update' : 'Create' }}
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, onMounted, computed } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { listZones, listRecords, createRecord, updateRecord, deleteRecord } from '../api/cloudflare.js'
+import {
+  listZones, listRecords, createRecord, updateRecord, deleteRecord,
+  listBindings, createBinding, updateBinding, deleteBinding,
+  listCfConfigs
+} from '../api/cloudflare.js'
+import { listInstances } from '../api/instances.js'
 import { get, post } from '../api/index.js'
 
 // ---------------------------------------------------------------------------
@@ -329,6 +469,9 @@ async function handleDelete(row) {
 onMounted(() => {
   loadZones()
   loadAutoSync()
+  loadBindings()
+  loadInstances()
+  loadCfConfigs()
 })
 
 // ---------------------------------------------------------------------------
@@ -381,6 +524,164 @@ async function triggerAutoSync() {
     syncing.value = false
   }
 }
+
+// ---------------------------------------------------------------------------
+// Instance ↔ DNS Bindings
+// ---------------------------------------------------------------------------
+const bindings = ref([])
+const instances = ref([])
+const cfConfigs = ref([])
+const bindingsLoading = ref(false)
+const bindingInstanceFilter = ref('')
+const bindingDialog = ref(false)
+const bindingEditing = ref(false)
+const editingBindingId = ref('')
+const savingBinding = ref(false)
+const bindingForm = reactive({
+  instanceId: '',
+  name: '',
+  zoneId: '',
+  cfCfgId: null,
+  proxied: false,
+  ttl: 120,
+  enabled: true
+})
+
+const filteredBindings = computed(() => {
+  if (!bindingInstanceFilter.value) return bindings.value
+  return bindings.value.filter(b => b.instanceId === bindingInstanceFilter.value)
+})
+
+function instanceName(id) {
+  const inst = instances.value.find(i => i.id === id)
+  return inst ? (inst.name || id) : id
+}
+
+function zoneName(id) {
+  const z = zones.value.find(z => z.id === id)
+  return z ? z.name : (id || '—')
+}
+
+function cfCfgName(id) {
+  const c = cfConfigs.value.find(c => c.id === id)
+  return c ? c.name : 'default token'
+}
+
+async function loadBindings() {
+  bindingsLoading.value = true
+  try {
+    const res = await listBindings()
+    bindings.value = res?.data || []
+  } catch (e) {
+    ElMessage.error('Failed to load bindings: ' + (e.response?.data?.error || e.message))
+  } finally {
+    bindingsLoading.value = false
+  }
+}
+
+async function loadInstances() {
+  try {
+    const res = await listInstances({ size: 500 })
+    instances.value = res?.data || []
+  } catch {
+    // list may fail if no OCI configured; keep empty
+  }
+}
+
+async function loadCfConfigs() {
+  try {
+    const res = await listCfConfigs()
+    cfConfigs.value = res?.data || []
+  } catch {
+    cfConfigs.value = []
+  }
+}
+
+function onBindingInstanceFilter() {
+  // no-op; template uses computed filter
+}
+
+function resetBindingForm() {
+  bindingForm.instanceId = ''
+  bindingForm.name = ''
+  bindingForm.zoneId = ''
+  bindingForm.cfCfgId = null
+  bindingForm.proxied = false
+  bindingForm.ttl = 120
+  bindingForm.enabled = true
+}
+
+function openAddBindingDialog() {
+  bindingEditing.value = false
+  editingBindingId.value = ''
+  resetBindingForm()
+  bindingDialog.value = true
+}
+
+function openEditBindingDialog(row) {
+  bindingEditing.value = true
+  editingBindingId.value = row.id
+  bindingForm.instanceId = row.instanceId
+  bindingForm.name = row.name
+  bindingForm.zoneId = row.zoneId
+  bindingForm.cfCfgId = row.cfCfgId || null
+  bindingForm.proxied = !!row.proxied
+  bindingForm.ttl = row.ttl || 120
+  bindingForm.enabled = row.enabled !== false
+  bindingDialog.value = true
+}
+
+async function handleSaveBinding() {
+  if (!bindingForm.instanceId || !bindingForm.name || !bindingForm.zoneId) {
+    ElMessage.warning('Instance, DNS Name and Zone are required')
+    return
+  }
+  savingBinding.value = true
+  try {
+    const payload = {
+      instanceId: bindingForm.instanceId,
+      tenantId: instances.value.find(i => i.id === bindingForm.instanceId)?.tenantId || 0,
+      name: bindingForm.name,
+      zoneId: bindingForm.zoneId,
+      cfCfgId: bindingForm.cfCfgId || 0,
+      proxied: bindingForm.proxied,
+      ttl: bindingForm.ttl || 120,
+      enabled: bindingForm.enabled
+    }
+    if (bindingEditing.value) {
+      await updateBinding(editingBindingId.value, payload)
+      ElMessage.success('Binding updated')
+    } else {
+      await createBinding(payload)
+      ElMessage.success('Binding created')
+    }
+    bindingDialog.value = false
+    await loadBindings()
+  } catch (e) {
+    ElMessage.error('Save binding failed: ' + (e.response?.data?.error || e.message))
+  } finally {
+    savingBinding.value = false
+  }
+}
+
+async function handleDeleteBinding(row) {
+  try {
+    await ElMessageBox.confirm(
+      `Delete binding "${row.name}" for ${instanceName(row.instanceId)}?`,
+      'Confirm Delete',
+      {
+        confirmButtonText: 'Delete',
+        cancelButtonText: 'Cancel',
+        type: 'warning'
+      }
+    )
+    await deleteBinding(row.id)
+    ElMessage.success('Binding deleted')
+    await loadBindings()
+  } catch {
+    // cancelled or error
+  }
+}
 </script>
 
 <style scoped>
@@ -421,5 +722,10 @@ async function triggerAutoSync() {
 
 .record-content {
   word-break: break-all;
+}
+
+.muted {
+  color: #909399;
+  font-size: 12px;
 }
 </style>

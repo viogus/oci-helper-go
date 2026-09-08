@@ -234,6 +234,27 @@ var migrations = []struct {
 			`CREATE INDEX IF NOT EXISTS idx_create_tasks_paused ON create_tasks(paused)`,
 		},
 	},
+	{
+		Version: 10,
+		Name:    "instance_dns_bindings",
+		SQL: []string{
+			`CREATE TABLE IF NOT EXISTS instance_dns_bindings (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				instance_id TEXT NOT NULL,
+				tenant_id INTEGER NOT NULL DEFAULT 0,
+				name TEXT NOT NULL DEFAULT '',
+				cf_cfg_id INTEGER NOT NULL DEFAULT 0,
+				zone_id TEXT NOT NULL DEFAULT '',
+				proxied INTEGER NOT NULL DEFAULT 0,
+				ttl INTEGER NOT NULL DEFAULT 120,
+				enabled INTEGER NOT NULL DEFAULT 1,
+				created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+				updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+			)`,
+			`CREATE INDEX IF NOT EXISTS idx_inst_dns_bindings_instance_id ON instance_dns_bindings(instance_id)`,
+			`CREATE INDEX IF NOT EXISTS idx_inst_dns_bindings_zone_id ON instance_dns_bindings(zone_id)`,
+		},
+	},
 }
 
 func (s *Store) runMigrations() error {

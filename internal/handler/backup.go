@@ -19,17 +19,18 @@ import (
 )
 
 type backupData struct {
-	Tenants       []dbTenant        `json:"tenants"`
-	Instances     []dbInstance      `json:"instances"`
-	Config        []dbConfig        `json:"config"`
-	Users         []dbUser          `json:"users"`
-	CfCfgs        []db.CfCfg        `json:"cf_configs"`
-	IpData        []db.IpData       `json:"ip_data"`
-	SSHKeys       []db.SSHKey       `json:"ssh_keys"`
-	InstancePlans []db.InstancePlan `json:"instance_plans"`
-	StockAlerts   []db.StockAlert   `json:"stock_alerts"`
-	Tasks         []db.Task         `json:"tasks"`
-	KeyFiles      []dbKeyFile       `json:"key_files"`
+	Tenants       []dbTenant              `json:"tenants"`
+	Instances     []dbInstance            `json:"instances"`
+	Config        []dbConfig              `json:"config"`
+	Users         []dbUser                `json:"users"`
+	CfCfgs        []db.CfCfg              `json:"cf_configs"`
+	IpData        []db.IpData             `json:"ip_data"`
+	SSHKeys       []db.SSHKey             `json:"ssh_keys"`
+	InstancePlans []db.InstancePlan       `json:"instance_plans"`
+	StockAlerts   []db.StockAlert         `json:"stock_alerts"`
+	Tasks         []db.Task               `json:"tasks"`
+	DNGBindings   []db.InstanceDNSBinding `json:"dns_bindings"`
+	KeyFiles      []dbKeyFile             `json:"key_files"`
 }
 
 // lightweight copies to avoid import cycle (handler already imports db)
@@ -164,6 +165,10 @@ func (s *Server) handleBackup(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, "list tasks: "+err.Error())
 		return
 	}
+	if data.DNGBindings, err = s.store.ListInstanceDNSBindings(""); err != nil {
+		jsonErr(w, "list dns bindings: "+err.Error())
+		return
+	}
 	if entries, err := os.ReadDir(s.cfg.KeysDir); err == nil {
 		for _, e := range entries {
 			if e.IsDir() {
@@ -296,6 +301,11 @@ func (s *Server) restoreData(password, data string) (int, int, error) {
 	for i := range payload.Tasks {
 		if err := s.store.CreateTaskImportTx(tx, &payload.Tasks[i]); err != nil {
 			return 0, 0, fmt.Errorf("restore task: %w", err)
+		}
+	}
+	for i := range payload.DNGBindings {
+		if err := s.store.CreateInstanceDNSBindingImportTx(tx, &payload.DNGBindings[i]); err != nil {
+			return 0, 0, fmt.Errorf("restore dns binding: %w", err)
 		}
 	}
 

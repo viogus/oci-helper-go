@@ -134,7 +134,7 @@ func (s *Store) ListInstances(tenantID int64) ([]Instance, error) {
 	if tenantID != 0 {
 		rows, err = s.db.Query(sel+` WHERE tenant_id=? ORDER BY created_at DESC`, tenantID)
 	} else {
-		rows, err = s.db.Query(sel+` ORDER BY created_at DESC`)
+		rows, err = s.db.Query(sel + ` ORDER BY created_at DESC`)
 	}
 	if err != nil {
 		return nil, err
@@ -321,6 +321,9 @@ func (s *Store) ClearAllTx(tx *sql.Tx) error {
 		return err
 	}
 	if _, err := tx.Exec(`DELETE FROM cf_configs`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM instance_dns_bindings`); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(`DELETE FROM users`); err != nil {
@@ -676,7 +679,7 @@ func (s *Store) ListCreateTasks(tenantID int64) ([]CreateTask, error) {
 	if tenantID != 0 {
 		rows, err = s.db.Query(createTaskSelect+` WHERE tenant_id=? ORDER BY id DESC`, tenantID)
 	} else {
-		rows, err = s.db.Query(createTaskSelect+` ORDER BY id DESC`)
+		rows, err = s.db.Query(createTaskSelect + ` ORDER BY id DESC`)
 	}
 	if err != nil {
 		return nil, err
@@ -828,6 +831,89 @@ func (s *Store) DeleteCfCfg(id int64) error {
 	return err
 }
 
+// ── InstanceDNSBinding ─────────────────────────────────────────────────
+
+const instDNSBindingCols = `id, instance_id, tenant_id, name, cf_cfg_id, zone_id, proxied, ttl, enabled, created_at, updated_at`
+
+func scanInstanceDNSBinding(row interface{ Scan(...any) error }) (*InstanceDNSBinding, error) {
+	var b InstanceDNSBinding
+	err := row.Scan(&b.ID, &b.InstanceID, &b.TenantID, &b.Name, &b.CfCfgID, &b.ZoneID, &b.Proxied, &b.TTL, &b.Enabled, &b.CreatedAt, &b.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return &b, nil
+}
+
+// ListInstanceDNSBindings returns bindings for an instance (or all instances
+// when instanceID is empty).
+func (s *Store) ListInstanceDNSBindings(instanceID string) ([]InstanceDNSBinding, error) {
+	var q string
+	var args []any
+	if instanceID != "" {
+		q = `SELECT ` + instDNSBindingCols + ` FROM instance_dns_bindings WHERE instance_id=? ORDER BY id`
+		args = append(args, instanceID)
+	} else {
+		q = `SELECT ` + instDNSBindingCols + ` FROM instance_dns_bindings ORDER BY id`
+	}
+	rows, err := s.db.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var list []InstanceDNSBinding
+	for rows.Next() {
+		b, err := scanInstanceDNSBinding(rows)
+		if err != nil {
+			return nil, err
+		}
+		list = append(list, *b)
+	}
+	return list, rows.Err()
+}
+
+func (s *Store) GetInstanceDNSBinding(id int64) (*InstanceDNSBinding, error) {
+	b, err := scanInstanceDNSBinding(s.db.QueryRow(`SELECT `+instDNSBindingCols+` FROM instance_dns_bindings WHERE id=?`, id))
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	return b, err
+}
+
+func (s *Store) CreateInstanceDNSBinding(b *InstanceDNSBinding) error {
+	res, err := s.db.Exec(`INSERT INTO instance_dns_bindings (instance_id, tenant_id, name, cf_cfg_id, zone_id, proxied, ttl, enabled)
+		VALUES (?,?,?,?,?,?,?,?)`,
+		b.InstanceID, b.TenantID, b.Name, b.CfCfgID, b.ZoneID, b.Proxied, b.TTL, b.Enabled)
+	if err != nil {
+		return err
+	}
+	id, _ := res.LastInsertId()
+	b.ID = id
+	return nil
+}
+
+func (s *Store) UpdateInstanceDNSBinding(b *InstanceDNSBinding) error {
+	_, err := s.db.Exec(`UPDATE instance_dns_bindings SET instance_id=?, tenant_id=?, name=?, cf_cfg_id=?, zone_id=?, proxied=?, ttl=?, enabled=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`,
+		b.InstanceID, b.TenantID, b.Name, b.CfCfgID, b.ZoneID, b.Proxied, b.TTL, b.Enabled, b.ID)
+	return err
+}
+
+func (s *Store) DeleteInstanceDNSBinding(id int64) error {
+	_, err := s.db.Exec(`DELETE FROM instance_dns_bindings WHERE id=?`, id)
+	return err
+}
+
+func (s *Store) DeleteInstanceDNSBindingsByInstance(instanceID string) error {
+	_, err := s.db.Exec(`DELETE FROM instance_dns_bindings WHERE instance_id=?`, instanceID)
+	return err
+}
+
+func (s *Store) CreateInstanceDNSBindingImportTx(tx *sql.Tx, b *InstanceDNSBinding) error {
+	_, err := tx.Exec(`INSERT INTO instance_dns_bindings (instance_id, tenant_id, name, cf_cfg_id, zone_id, proxied, ttl, enabled, created_at, updated_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?)`,
+		b.InstanceID, b.TenantID, b.Name, b.CfCfgID, b.ZoneID, b.Proxied, b.TTL, b.Enabled, b.CreatedAt, b.UpdatedAt)
+	return err
+}
+
 // ── IpData ─────────────────────────────────────────────────────────────
 
 func (s *Store) ListIpData(tenantID int64, dataType string) ([]IpData, error) {
@@ -891,7 +977,7 @@ func (s *Store) ListSSHKeys(tenantID int64) ([]SSHKey, error) {
 	if tenantID != 0 {
 		rows, err = s.db.Query(sel+` WHERE k.tenant_id=? ORDER BY k.id DESC`, tenantID)
 	} else {
-		rows, err = s.db.Query(sel+` ORDER BY k.id DESC`)
+		rows, err = s.db.Query(sel + ` ORDER BY k.id DESC`)
 	}
 	if err != nil {
 		return nil, err
@@ -943,7 +1029,7 @@ func (s *Store) ListInstancePlans(tenantID int64) ([]InstancePlan, error) {
 	if tenantID != 0 {
 		rows, err = s.db.Query(sel+` WHERE tenant_id=? ORDER BY id DESC`, tenantID)
 	} else {
-		rows, err = s.db.Query(sel+` ORDER BY id DESC`)
+		rows, err = s.db.Query(sel + ` ORDER BY id DESC`)
 	}
 	if err != nil {
 		return nil, err
@@ -1105,7 +1191,7 @@ func (s *Store) ListStockAlerts(tenantID int64) ([]StockAlert, error) {
 	if tenantID != 0 {
 		rows, err = s.db.Query(sel+` WHERE tenant_id=? ORDER BY id DESC`, tenantID)
 	} else {
-		rows, err = s.db.Query(sel+` ORDER BY id DESC`)
+		rows, err = s.db.Query(sel + ` ORDER BY id DESC`)
 	}
 	if err != nil {
 		return nil, err

@@ -22,25 +22,25 @@ type Tenant struct {
 // Instance represents a single OCI compute instance, keyed by composite
 // ID (tenantID:ocid). Synced by the sync worker.
 type Instance struct {
-	ID            string    `json:"id"`
-	TenantID      int64     `json:"tenantId"`
-	Name          string    `json:"name"`
-	OCID          string    `json:"ocid"`
-	Shape         string    `json:"shape"`
-	OCPU          float64   `json:"ocpu"`
-	MemoryGB      float64   `json:"memoryGB"`
-	BootVolumeGB  int64     `json:"bootVolumeGB"`
-	PublicIP      string    `json:"publicIp"`
-	PrivateIP     string    `json:"privateIp"`
-	State         string    `json:"state"`
-	AvailabilityDomain string `json:"availabilityDomain"`
-	FaultDomain   string    `json:"faultDomain"`
-	ImageID       string    `json:"imageId"`
-	SubnetID      string    `json:"subnetId"`
-	Region        string    `json:"region"`
-	DNSLastIP     string    `json:"dnsLastIp"`
-	CreatedAt     time.Time `json:"createdAt"`
-	SyncedAt      time.Time `json:"syncedAt"`
+	ID                 string    `json:"id"`
+	TenantID           int64     `json:"tenantId"`
+	Name               string    `json:"name"`
+	OCID               string    `json:"ocid"`
+	Shape              string    `json:"shape"`
+	OCPU               float64   `json:"ocpu"`
+	MemoryGB           float64   `json:"memoryGB"`
+	BootVolumeGB       int64     `json:"bootVolumeGB"`
+	PublicIP           string    `json:"publicIp"`
+	PrivateIP          string    `json:"privateIp"`
+	State              string    `json:"state"`
+	AvailabilityDomain string    `json:"availabilityDomain"`
+	FaultDomain        string    `json:"faultDomain"`
+	ImageID            string    `json:"imageId"`
+	SubnetID           string    `json:"subnetId"`
+	Region             string    `json:"region"`
+	DNSLastIP          string    `json:"dnsLastIp"`
+	CreatedAt          time.Time `json:"createdAt"`
+	SyncedAt           time.Time `json:"syncedAt"`
 }
 
 // Task represents an asynchronous background operation (batch create, batch start, etc.).
@@ -118,14 +118,33 @@ type CfCfg struct {
 	UpdatedAt time.Time `json:"updatedAt"`
 }
 
+// InstanceDNSBinding associates one DNS name (in a Cloudflare zone) with an
+// instance. An instance may have zero, one, or many bindings, each pointing at
+// a distinct DNS name. Bindings let users control which domain an instance's
+// public IP is synced to, instead of relying on the implicit
+// "instance name + global domain suffix" convention.
+type InstanceDNSBinding struct {
+	ID         int64     `json:"id"`
+	InstanceID string    `json:"instanceId"`
+	TenantID   int64     `json:"tenantId"`
+	Name       string    `json:"name"`
+	CfCfgID    int64     `json:"cfCfgId"`
+	ZoneID     string    `json:"zoneId"`
+	Proxied    bool      `json:"proxied"`
+	TTL        int       `json:"ttl"`
+	Enabled    bool      `json:"enabled"`
+	CreatedAt  time.Time `json:"createdAt"`
+	UpdatedAt  time.Time `json:"updatedAt"`
+}
+
 // IpData stores IP address data (CIDR ranges) used for IP management and filtering.
 type IpData struct {
-	ID        int64     `json:"id"`
-	TenantID  int64     `json:"tenantId"`
-	CIDR      string    `json:"cidr"`
-	Label     string    `json:"label"`
-	Type      string    `json:"type"`
-	Enabled   bool      `json:"enabled"`
+	ID       int64  `json:"id"`
+	TenantID int64  `json:"tenantId"`
+	CIDR     string `json:"cidr"`
+	Label    string `json:"label"`
+	Type     string `json:"type"`
+	Enabled  bool   `json:"enabled"`
 	// Geolocation fields populated via IP lookup on creation.
 	Lat       float64   `json:"lat,omitempty"`
 	Lng       float64   `json:"lng,omitempty"`
@@ -152,17 +171,17 @@ type SSHKey struct {
 // InstancePlan is a saved launch template with predefined shape, image, subnet,
 // and resource sizing for quick instance creation.
 type InstancePlan struct {
-	ID                int64     `json:"id"`
-	Name              string    `json:"name"`
-	TenantID          int64     `json:"tenantId"`
-	Shape             string    `json:"shape"`
-	ImageID           string    `json:"imageId"`
-	SubnetID          string    `json:"subnetId"`
-	AvailabilityDomain string   `json:"availabilityDomain"`
-	BootVolumeSizeGB  int64     `json:"bootVolumeSizeGB"`
-	OCPUs             float64   `json:"ocpus"`
-	MemoryGB          float64   `json:"memoryGB"`
-	CreatedAt         time.Time `json:"createdAt"`
+	ID                 int64     `json:"id"`
+	Name               string    `json:"name"`
+	TenantID           int64     `json:"tenantId"`
+	Shape              string    `json:"shape"`
+	ImageID            string    `json:"imageId"`
+	SubnetID           string    `json:"subnetId"`
+	AvailabilityDomain string    `json:"availabilityDomain"`
+	BootVolumeSizeGB   int64     `json:"bootVolumeSizeGB"`
+	OCPUs              float64   `json:"ocpus"`
+	MemoryGB           float64   `json:"memoryGB"`
+	CreatedAt          time.Time `json:"createdAt"`
 }
 
 // StockAlert represents a stock availability monitor for an OCI shape in a

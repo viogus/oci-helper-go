@@ -20,3 +20,27 @@ export function updateRecord(zoneId, recordId, data) {
 export function deleteRecord(zoneId, recordId) {
   return del(`/cloudflare/${zoneId}/records/${recordId}`)
 }
+
+// ── Instance ↔ DNS bindings ─────────────────────────────────────────────
+// A binding ties a specific instance's public IP to a named DNS record in a
+// Cloudflare zone, so auto-sync / change-IP update exactly that record.
+
+export function listBindings(instanceId) {
+  return get('/cloudflare/bindings', instanceId ? { instance_id: instanceId } : {})
+}
+
+export function createBinding(data) {
+  return post('/cloudflare/bindings', data)
+}
+
+export function updateBinding(id, data) {
+  return api.put(`/cloudflare/bindings/${id}`, data).then(r => r.data)
+}
+
+export function deleteBinding(id) {
+  return del(`/cloudflare/bindings/${id}`)
+}
+
+export function listCfConfigs() {
+  return get('/cloudflare/cfgs')
+}

@@ -249,7 +249,7 @@ func (s *Server) runChangeIPAttempt(task *memTask) bool {
 	}
 	log.Printf("[mem-task] change-ip done: %s -> %s", task.InstanceID, newIP)
 	if task.ChangeCfDNS {
-		if err := s.updateCfDNSAfterChangeIP(task.TenantID, task.SelectedDomainCfgID, task.DomainPrefix, newIP, task.EnableProxy, task.TTL, task.Remark); err != nil {
+		if err := s.updateCfDNSAfterChangeIP(task.TenantID, task.SelectedDomainCfgID, task.InstanceID, task.DomainPrefix, newIP, task.EnableProxy, task.TTL, task.Remark); err != nil {
 			log.Printf("[mem-task] change-ip dns: %v", err)
 		}
 	}

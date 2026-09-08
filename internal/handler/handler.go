@@ -335,6 +335,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/shell/", s.withAuth(s.handleShell))
 	s.mux.HandleFunc("/api/cloudflare/auto-sync/status", s.withAuth(s.handleCloudflareAutoSyncStatus))
 	s.mux.HandleFunc("/api/cloudflare/auto-sync/trigger", s.withAuth(s.handleCloudflareAutoSyncTrigger))
+	s.mux.HandleFunc("/api/cloudflare/bindings", s.withAuth(s.handleDNSBindings))
+	s.mux.HandleFunc("/api/cloudflare/bindings/", s.withAuth(s.handleDNSBindingByID))
 	s.mux.HandleFunc("/api/cloudflare/", s.withAuth(s.handleCloudflare))
 	s.mux.HandleFunc("/api/cloudflare/cfgs", s.withAuth(s.handleCloudflareCfgs))
 	s.mux.HandleFunc("/api/cloudflare/cfgs/", s.withAuth(s.handleCloudflareCfgByID))

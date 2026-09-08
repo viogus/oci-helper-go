@@ -1,24 +1,27 @@
 import { get, post, del } from './index.js'
 import api from './index.js'
 
-export function listZones() {
-  return get('/cloudflare/zones')
+// cfgId (optional) selects a named CF config from /cloudflare/cfgs; when
+// omitted the server falls back to the global cloudflare_token config.
+
+export function listZones(cfgId) {
+  return get('/cloudflare/zones', cfgId ? { cfg_id: cfgId } : {})
 }
 
-export function listRecords(zoneId) {
-  return get(`/cloudflare/${zoneId}/records`)
+export function listRecords(zoneId, cfgId) {
+  return get(`/cloudflare/${zoneId}/records`, cfgId ? { cfg_id: cfgId } : {})
 }
 
-export function createRecord(zoneId, data) {
-  return post(`/cloudflare/${zoneId}/records`, data)
+export function createRecord(zoneId, data, cfgId) {
+  return post(`/cloudflare/${zoneId}/records`, data, cfgId ? { params: { cfg_id: cfgId } } : {})
 }
 
-export function updateRecord(zoneId, recordId, data) {
-  return api.put(`/cloudflare/${zoneId}/records/${recordId}`, data).then(r => r.data)
+export function updateRecord(zoneId, recordId, data, cfgId) {
+  return api.put(`/cloudflare/${zoneId}/records/${recordId}`, data, cfgId ? { params: { cfg_id: cfgId } } : {}).then(r => r.data)
 }
 
-export function deleteRecord(zoneId, recordId) {
-  return del(`/cloudflare/${zoneId}/records/${recordId}`)
+export function deleteRecord(zoneId, recordId, cfgId) {
+  return del(`/cloudflare/${zoneId}/records/${recordId}`, cfgId ? { params: { cfg_id: cfgId } } : {})
 }
 
 // ── Instance ↔ DNS bindings ─────────────────────────────────────────────

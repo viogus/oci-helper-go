@@ -734,6 +734,7 @@ func (s *Server) handleChangeIP(w http.ResponseWriter, r *http.Request) {
 		ChangeCfDNS         bool     `json:"change_cf_dns"`
 		SelectedDomainCfgID int64    `json:"selected_domain_cfg_id"`
 		DomainPrefix        string   `json:"domain_prefix"`
+		Domain              string   `json:"domain"` // explicit domain suffix; empty falls back to cfg name
 		EnableProxy         *bool    `json:"enable_proxy"`
 		TTL                 int      `json:"ttl"`
 		Remark              string   `json:"remark"`
@@ -754,7 +755,7 @@ func (s *Server) handleChangeIP(w http.ResponseWriter, r *http.Request) {
 	}
 	dnsErr := ""
 	if req.ChangeCfDNS {
-		if err := s.updateCfDNSAfterChangeIP(req.TenantID, req.SelectedDomainCfgID, req.InstanceID, req.DomainPrefix, newIP, req.EnableProxy, req.TTL, req.Remark); err != nil {
+		if err := s.updateCfDNSAfterChangeIP(req.TenantID, req.SelectedDomainCfgID, req.InstanceID, req.DomainPrefix, req.Domain, newIP, req.EnableProxy, req.TTL, req.Remark); err != nil {
 			dnsErr = err.Error()
 			log.Printf("[change-ip] cloudflare dns update: %v", err)
 		}

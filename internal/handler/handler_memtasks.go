@@ -26,6 +26,7 @@ type memTask struct {
 	ChangeCfDNS         bool          `json:"change_cf_dns"`
 	SelectedDomainCfgID int64         `json:"selected_domain_cfg_id"`
 	DomainPrefix        string        `json:"domain_prefix"`
+	Domain              string        `json:"domain"`
 	EnableProxy         *bool         `json:"enable_proxy"`
 	TTL                 int           `json:"ttl"`
 	Remark              string        `json:"remark"`
@@ -106,6 +107,7 @@ func (s *Server) handleMemTasks(w http.ResponseWriter, r *http.Request, taskType
 			ChangeCfDNS         bool     `json:"change_cf_dns"`
 			SelectedDomainCfgID int64    `json:"selected_domain_cfg_id"`
 			DomainPrefix        string   `json:"domain_prefix"`
+			Domain              string   `json:"domain"`
 			EnableProxy         *bool    `json:"enable_proxy"`
 			TTL                 int      `json:"ttl"`
 			Remark              string   `json:"remark"`
@@ -129,6 +131,7 @@ func (s *Server) handleMemTasks(w http.ResponseWriter, r *http.Request, taskType
 				ChangeCfDNS:         req.ChangeCfDNS,
 				SelectedDomainCfgID: req.SelectedDomainCfgID,
 				DomainPrefix:        req.DomainPrefix,
+				Domain:              req.Domain,
 				EnableProxy:         req.EnableProxy,
 				TTL:                 req.TTL,
 				Remark:              req.Remark,
@@ -249,7 +252,7 @@ func (s *Server) runChangeIPAttempt(task *memTask) bool {
 	}
 	log.Printf("[mem-task] change-ip done: %s -> %s", task.InstanceID, newIP)
 	if task.ChangeCfDNS {
-		if err := s.updateCfDNSAfterChangeIP(task.TenantID, task.SelectedDomainCfgID, task.InstanceID, task.DomainPrefix, newIP, task.EnableProxy, task.TTL, task.Remark); err != nil {
+		if err := s.updateCfDNSAfterChangeIP(task.TenantID, task.SelectedDomainCfgID, task.InstanceID, task.DomainPrefix, task.Domain, newIP, task.EnableProxy, task.TTL, task.Remark); err != nil {
 			log.Printf("[mem-task] change-ip dns: %v", err)
 		}
 	}

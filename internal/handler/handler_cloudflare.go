@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -180,18 +181,58 @@ func (s *Server) handleCloudflareCfgByID(w http.ResponseWriter, r *http.Request)
 
 	switch r.Method {
 	case http.MethodPut:
-		var cfg db.CfCfg
-		if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
+		// Partial update: omitted fields keep their current values, so an
+		// edit that only touches e.g. zone_id no longer blanks token/email.
+		var req struct {
+			Name    *string `json:"name"`
+			Token   *string `json:"token"`
+			Email   *string `json:"email"`
+			APIKey  *string `json:"apiKey"`
+			ZoneID  *string `json:"zoneId"`
+			Enabled *bool   `json:"enabled"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			jsonErr(w, "invalid body: "+err.Error())
 			return
 		}
-		cfg.ID = id
-		if err := s.store.UpdateCfCfg(&cfg); err != nil {
+		cur, gerr := s.store.GetCfCfg(id)
+		if gerr != nil || cur == nil {
+			jsonErr(w, "cf config not found")
+			return
+		}
+		merged := *cur
+		if req.Name != nil {
+			merged.Name = *req.Name
+		}
+		if req.Token != nil {
+			merged.Token = *req.Token
+		}
+		if req.Email != nil {
+			merged.Email = *req.Email
+		}
+		if req.APIKey != nil {
+			merged.APIKey = *req.APIKey
+		}
+		if req.ZoneID != nil {
+			merged.ZoneID = *req.ZoneID
+		}
+		if req.Enabled != nil {
+			merged.Enabled = *req.Enabled
+		}
+		if merged.Name == "" {
+			jsonErr(w, "name required")
+			return
+		}
+		if err := s.store.UpdateCfCfg(&merged); err != nil {
 			jsonErr(w, "update cf config: "+err.Error())
 			return
 		}
-		s.audit(0, "cloudflare:cfg:update", cfg.Name, r)
-		jsonOK(w, cfg)
+		s.audit(0, "cloudflare:cfg:update", merged.Name, r)
+		fresh, _ := s.store.GetCfCfg(id)
+		if fresh == nil {
+			fresh = &merged
+		}
+		jsonOK(w, fresh)
 
 	case http.MethodDelete:
 		if err := s.store.DeleteCfCfg(id); err != nil {
@@ -235,6 +276,19 @@ func (s *Server) handleDNSBindings(w http.ResponseWriter, r *http.Request) {
 			jsonErr(w, "instance_id required")
 			return
 		}
+		// The binding must reference an instance that exists and belong to
+		// that instance's tenant — a composite instance id already embeds the
+		// tenant, so any mismatched tenant_id is rejected.
+		inst, ierr := s.store.GetInstanceByID(b.InstanceID)
+		if ierr != nil || inst == nil {
+			jsonErr(w, "instance not found")
+			return
+		}
+		if b.TenantID != 0 && b.TenantID != inst.TenantID {
+			jsonErr(w, "tenant_id does not match the instance")
+			return
+		}
+		b.TenantID = inst.TenantID
 		if b.Name == "" {
 			jsonErr(w, "name (DNS record name) required")
 			return
@@ -276,49 +330,101 @@ func (s *Server) handleDNSBindingByID(w http.ResponseWriter, r *http.Request) {
 
 	switch r.Method {
 	case http.MethodPut:
-		var b db.InstanceDNSBinding
-		if err := json.NewDecoder(r.Body).Decode(&b); err != nil {
+		// Pointer fields distinguish "field omitted" from an explicit zero
+		// value (e.g. cfCfgId: 0 clears the config, enabled: false disables),
+		// so partial updates never clobber the untouched columns.
+		var req struct {
+			InstanceID *string `json:"instanceId"`
+			TenantID   *int64  `json:"tenantId"`
+			Name       *string `json:"name"`
+			CfCfgID    *int64  `json:"cfCfgId"`
+			ZoneID     *string `json:"zoneId"`
+			Proxied    *bool   `json:"proxied"`
+			TTL        *int    `json:"ttl"`
+			Enabled    *bool   `json:"enabled"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			jsonErr(w, "invalid body: "+err.Error())
 			return
 		}
-		cur, _ := s.store.GetInstanceDNSBinding(id)
-		if cur == nil {
+		cur, gerr := s.store.GetInstanceDNSBinding(id)
+		if gerr != nil || cur == nil {
 			jsonErr(w, "binding not found")
 			return
 		}
-		b.ID = id
-		if b.InstanceID == "" {
-			b.InstanceID = cur.InstanceID
+		merged := *cur
+		if req.InstanceID != nil {
+			merged.InstanceID = *req.InstanceID
 		}
-		if b.TenantID == 0 {
-			b.TenantID = cur.TenantID
+		if req.TenantID != nil {
+			merged.TenantID = *req.TenantID
 		}
-		if b.Name == "" {
-			b.Name = cur.Name
+		if req.Name != nil {
+			merged.Name = *req.Name
 		}
-		if !validDNSName(b.Name) {
+		if req.CfCfgID != nil {
+			merged.CfCfgID = *req.CfCfgID
+		}
+		if req.ZoneID != nil {
+			merged.ZoneID = *req.ZoneID
+		}
+		if req.Proxied != nil {
+			merged.Proxied = *req.Proxied
+		}
+		if req.TTL != nil {
+			merged.TTL = *req.TTL
+		}
+		if req.Enabled != nil {
+			merged.Enabled = *req.Enabled
+		}
+		inst, ierr := s.store.GetInstanceByID(merged.InstanceID)
+		if ierr != nil || inst == nil {
+			jsonErr(w, "instance not found")
+			return
+		}
+		if merged.TenantID != 0 && merged.TenantID != inst.TenantID {
+			jsonErr(w, "tenant_id does not match the instance")
+			return
+		}
+		merged.TenantID = inst.TenantID
+		if merged.Name == "" {
+			jsonErr(w, "name (DNS record name) required")
+			return
+		}
+		if !validDNSName(merged.Name) {
 			jsonErr(w, "invalid DNS record name")
 			return
 		}
-		if b.ZoneID == "" {
-			b.ZoneID = cur.ZoneID
+		if merged.ZoneID == "" {
+			jsonErr(w, "zone_id required")
+			return
 		}
-		if b.TTL == 0 {
-			b.TTL = cur.TTL
+		if merged.TTL == 0 {
+			merged.TTL = 120
 		}
-		if err := s.store.UpdateInstanceDNSBinding(&b); err != nil {
+		if err := s.store.UpdateInstanceDNSBinding(&merged); err != nil {
 			jsonErr(w, "update dns binding: "+err.Error())
 			return
 		}
-		s.audit(b.TenantID, "cloudflare:binding:update", b.InstanceID+" -> "+b.Name, r)
-		jsonOK(w, b)
+		s.audit(merged.TenantID, "cloudflare:binding:update", merged.InstanceID+" -> "+merged.Name, r)
+		// Re-read so created_at/updated_at reflect the stored row.
+		fresh, _ := s.store.GetInstanceDNSBinding(id)
+		if fresh == nil {
+			fresh = &merged
+		}
+		jsonOK(w, fresh)
 
 	case http.MethodDelete:
+		cur, _ := s.store.GetInstanceDNSBinding(id)
 		if err := s.store.DeleteInstanceDNSBinding(id); err != nil {
 			jsonErr(w, "delete dns binding: "+err.Error())
 			return
 		}
-		s.audit(0, "cloudflare:binding:delete", fmt.Sprintf("%d", id), r)
+		tenantID := int64(0)
+		if cur != nil {
+			tenantID = cur.TenantID
+		}
+		s.audit(tenantID, "cloudflare:binding:delete", fmt.Sprintf("%d", id), r)
 		jsonOK(w, map[string]string{"status": "ok"})
 
 	default:
@@ -560,14 +666,29 @@ func parseInt64(s string) (int64, error) {
 	return strconv.ParseInt(s, 10, 64)
 }
 
-// validDNSName does a light sanity check on a DNS record name: it must be
-// non-empty and contain no spaces or wildcards. The apex name "@" is allowed.
+// dnsNameRe admits letters, digits and the DNS punctuation used in record
+// names: dots (labels), hyphens, underscores and "@" for the zone apex.
+// Anything else — spaces, wildcards, non-ASCII characters — is rejected.
+var dnsNameRe = regexp.MustCompile(`^[A-Za-z0-9@._-]+$`)
+
+// validDNSName does a sanity check on a full DNS record name: total length
+// ≤ 253, per-label length ≤ 63, no empty labels, no leading/trailing dots and
+// no characters outside the ASCII hostname set. The apex name "@" is allowed.
 func validDNSName(s string) bool {
-	if s == "" {
+	if s == "" || len(s) > 253 {
 		return false
 	}
-	for _, r := range s {
-		if r == ' ' || r == '\t' || r == '\n' || r == '*' {
+	if s == "@" {
+		return true
+	}
+	if !dnsNameRe.MatchString(s) || strings.HasPrefix(s, ".") || strings.HasSuffix(s, ".") {
+		return false
+	}
+	for _, label := range strings.Split(s, ".") {
+		if label == "" || len(label) > 63 {
+			return false
+		}
+		if strings.HasPrefix(label, "-") || strings.HasSuffix(label, "-") {
 			return false
 		}
 	}
@@ -584,8 +705,10 @@ func errStr(err error) string {
 // updateCfDNSAfterChangeIP mirrors the Java change-IP flow's optional
 // Cloudflare DNS update. If the instance has one or more explicit DNS
 // bindings, it updates each of them to point at the new public IP. Otherwise
-// it falls back to the legacy prefix.domain convention using the given cfgID.
-func (s *Server) updateCfDNSAfterChangeIP(tenantID, cfgID int64, instanceID, prefix, newIP string, proxied *bool, ttl int, remark string) error {
+// it falls back to the legacy prefix.domain convention: an explicit domain
+// argument wins, and when it is empty the CfCfg name is used as the suffix
+// (legacy behaviour — the config name doubled as the domain).
+func (s *Server) updateCfDNSAfterChangeIP(tenantID, cfgID int64, instanceID, prefix, domain, newIP string, proxied *bool, ttl int, remark string) error {
 	// Prefer explicit per-instance bindings, if any.
 	if instanceID != "" {
 		bindings, _ := s.instanceBindings(instanceID)
@@ -613,7 +736,11 @@ func (s *Server) updateCfDNSAfterChangeIP(tenantID, cfgID int64, instanceID, pre
 	if prefix == "" || cfg.ZoneID == "" {
 		return fmt.Errorf("domain prefix and zone required")
 	}
-	dnsName := prefix + "." + cfg.Name
+	suffix := domain
+	if suffix == "" {
+		suffix = cfg.Name // legacy: config name doubles as the domain suffix
+	}
+	dnsName := prefix + "." + suffix
 	cf := cloudflare.New(cfg.Token)
 	records, err := cf.ListDNSRecords(cfg.ZoneID)
 	if err != nil {
@@ -745,6 +872,19 @@ func (s *Server) runDNSAutoSync() {
 	domain, _ := s.store.GetConfig("dns_auto_sync_domain")
 	cfgIDStr, _ := s.store.GetConfig("dns_auto_sync_cfg_id")
 
+	// Resolve the named CF config (if any): its token is preferred over the
+	// global cloudflare_token, and its zone falls back when no global
+	// dns_auto_sync_zone_id is set.
+	var autoCfg *db.CfCfg
+	if cfgID, err := strconv.ParseInt(cfgIDStr, 10, 64); err == nil && cfgID > 0 {
+		if cfg, cfgErr := s.store.GetCfCfg(cfgID); cfgErr == nil && cfg != nil && cfg.Token != "" {
+			autoCfg = cfg
+		}
+	}
+
+	if zoneID == "" && autoCfg != nil {
+		zoneID = autoCfg.ZoneID
+	}
 	if zoneID == "" {
 		log.Println("[dns-auto-sync] zone_id not configured, skipping")
 		return
@@ -752,11 +892,8 @@ func (s *Server) runDNSAutoSync() {
 
 	// Resolve Cloudflare token: prefer named CfCfg, fall back to global config.
 	var token string
-	if cfgID, err := strconv.ParseInt(cfgIDStr, 10, 64); err == nil && cfgID > 0 {
-		cfg, cfgErr := s.store.GetCfCfg(cfgID)
-		if cfgErr == nil && cfg != nil {
-			token = cfg.Token
-		}
+	if autoCfg != nil {
+		token = autoCfg.Token
 	}
 	if token == "" {
 		token, _ = s.store.GetConfig("cloudflare_token")
@@ -941,8 +1078,6 @@ func (s *Server) syncBindingToDNS(inst db.Instance, b db.InstanceDNSBinding) map
 		entry["error"] = "list records: " + err.Error()
 		return entry
 	}
-	normalize := func(s string) string { return strings.ToLower(strings.TrimRight(s, ".")) }
-	target := normalize(b.Name)
 	ttl := b.TTL
 	if ttl == 0 {
 		ttl = 120
@@ -951,14 +1086,11 @@ func (s *Server) syncBindingToDNS(inst db.Instance, b db.InstanceDNSBinding) map
 	if b.Proxied {
 		ttl = 1
 	}
-	var existing *cloudflare.DNSRecord
-	for i := range records {
-		// Only match A records for the same name — an AAAA/CNAME/MX with the
-		// same name must not be overwritten or deleted.
-		if normalize(records[i].Name) == target && records[i].Type == "A" {
-			existing = &records[i]
-			break
-		}
+	existing, conflict := findBindingTarget(records, b.Name)
+	if conflict != "" {
+		entry["action"] = "error"
+		entry["error"] = fmt.Sprintf("conflicting %s record already exists for %s", conflict, b.Name)
+		return entry
 	}
 
 	if existing != nil && existing.Content == inst.PublicIP {
@@ -967,29 +1099,71 @@ func (s *Server) syncBindingToDNS(inst db.Instance, b db.InstanceDNSBinding) map
 		return entry
 	}
 
+	record := cloudflare.DNSRecord{
+		Type:    "A",
+		Name:    b.Name,
+		Content: inst.PublicIP,
+		Proxied: &b.Proxied,
+		TTL:     ttl,
+	}
+	// Transient failures (network blips, Cloudflare 5xx/rate limits) are
+	// retried once with a short pause before giving up.
+	for attempt := 1; attempt <= 2; attempt++ {
+		if existing != nil {
+			_, err = cf.UpdateDNSRecord(zoneID, existing.ID, record)
+		} else {
+			_, err = cf.CreateDNSRecord(zoneID, record)
+		}
+		if err == nil {
+			break
+		}
+		if attempt == 1 {
+			time.Sleep(300 * time.Millisecond)
+		}
+	}
 	if existing != nil {
-		_, err = cf.UpdateDNSRecord(zoneID, existing.ID, cloudflare.DNSRecord{
-			Type:    "A",
-			Name:    b.Name,
-			Content: inst.PublicIP,
-			Proxied: &b.Proxied,
-			TTL:     ttl,
-		})
 		entry["action"] = "update"
 	} else {
-		_, err = cf.CreateDNSRecord(zoneID, cloudflare.DNSRecord{
-			Type:    "A",
-			Name:    b.Name,
-			Content: inst.PublicIP,
-			Proxied: &b.Proxied,
-			TTL:     ttl,
-		})
 		entry["action"] = "create"
 	}
 	if err != nil {
 		entry["error"] = err.Error()
 	}
 	return entry
+}
+
+// findBindingTarget scans a zone's records for the A record that a binding
+// should manage. Non-A records with the same name (CNAME/AAAA/MX/TXT/...) are
+// never matched — they must not be overwritten or deleted by the A-record
+// sync. If such a record exists and no A record does, the type is returned as
+// a conflict so the caller can surface a clear error instead of silently
+// creating a second, conflicting record.
+func findBindingTarget(records []cloudflare.DNSRecord, name string) (existing *cloudflare.DNSRecord, conflict string) {
+	normalize := func(s string) string { return strings.ToLower(strings.TrimRight(s, ".")) }
+	target := normalize(name)
+	var conflicting string
+	for i := range records {
+		if normalize(records[i].Name) != target {
+			continue
+		}
+		if records[i].Type != "A" {
+			if conflicting == "" {
+				conflicting = records[i].Type
+			}
+			continue
+		}
+		if existing == nil {
+			existing = &records[i]
+		}
+	}
+	if existing == nil {
+		return nil, conflicting
+	}
+	if conflicting != "" {
+		// A record and a conflicting record share the name — refuse to guess.
+		return nil, conflicting
+	}
+	return existing, ""
 }
 
 // ── DNS Auto-Sync API Handlers ──────────────────────────────────────────

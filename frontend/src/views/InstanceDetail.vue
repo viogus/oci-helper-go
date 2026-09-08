@@ -207,6 +207,9 @@
           <el-form-item label="域名前缀">
             <el-input v-model="domainPrefix" placeholder="sub" />
           </el-form-item>
+          <el-form-item label="域名(完整)">
+            <el-input v-model="changeIpDomain" placeholder="example.com（留空则回退用所选 CF 配置名作为域名）" />
+          </el-form-item>
           <el-form-item label="代理">
             <el-switch v-model="enableProxy" />
           </el-form-item>
@@ -296,8 +299,8 @@
           <el-input v-model="bindingForm.name" placeholder="e.g. vps1.example.com (full record name)" />
         </el-form-item>
         <el-form-item label="Zone" required>
-          <el-select v-model="bindingForm.zoneId" filterable placeholder="Zone ID" style="width:100%">
-            <el-option v-for="z in zones" :key="z.id" :label="z.name + ' · ' + z.id" :value="z.id" />
+          <el-select v-model="bindingForm.zoneId" filterable placeholder="Zone ID (zones of the CF config above)" style="width:100%" :loading="bindingZonesLoading">
+            <el-option v-for="z in bindingZones" :key="z.id" :label="z.name + ' · ' + z.id" :value="z.id" />
           </el-select>
         </el-form-item>
         <el-form-item label="CF Config">
@@ -326,7 +329,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { get, post } from '../api/index.js'
@@ -351,6 +354,7 @@ const changeIpResult = ref('')
 const changeCfDns = ref(false)
 const selectedDomainCfgId = ref(null)
 const domainPrefix = ref('')
+const changeIpDomain = ref('')
 const enableProxy = ref(false)
 const ttl = ref(120)
 const remark = ref('')
@@ -556,6 +560,7 @@ async function doChangeIp() {
       change_cf_dns: changeCfDns.value,
       selected_domain_cfg_id: selectedDomainCfgId.value,
       domain_prefix: domainPrefix.value,
+      domain: changeIpDomain.value,
       enable_proxy: enableProxy.value,
       ttl: ttl.value,
       remark: remark.value
@@ -644,6 +649,9 @@ const bindingDialog = ref(false)
 const bindingEditing = ref(false)
 const editingBindingId = ref('')
 const savingBinding = ref(false)
+// Zone picker follows the binding's CF config (null = global token).
+const bindingZones = ref([])
+const bindingZonesLoading = ref(false)
 const bindingForm = reactive({
   name: '',
   zoneId: '',
@@ -658,7 +666,8 @@ function currentInstanceID() {
 }
 
 function zoneName(id) {
-  const z = zones.value.find(z => z.id === id)
+  const all = zones.value.concat(bindingZones.value)
+  const z = all.find(z => z.id === id)
   return z ? z.name : (id || '—')
 }
 
@@ -666,6 +675,23 @@ function cfCfgName(id) {
   const c = cfConfigs.value.find(c => c.id === id)
   return c ? c.name : 'default token'
 }
+
+async function loadBindingZones() {
+  bindingZonesLoading.value = true
+  try {
+    bindingZones.value = await cfListZones(bindingForm.cfCfgId || undefined) || []
+  } catch {
+    bindingZones.value = []
+  } finally {
+    bindingZonesLoading.value = false
+  }
+}
+
+// Reload the zone picker whenever the binding's CF config changes.
+watch(() => bindingForm.cfCfgId, () => {
+  bindingForm.zoneId = ''
+  loadBindingZones()
+})
 
 async function loadZones() {
   try {
@@ -706,6 +732,7 @@ function openAddBindingDialog() {
   editingBindingId.value = ''
   resetBindingForm()
   bindingDialog.value = true
+  loadBindingZones()
 }
 
 function openEditBindingDialog(row) {
@@ -718,6 +745,7 @@ function openEditBindingDialog(row) {
   bindingForm.ttl = row.ttl || 120
   bindingForm.enabled = row.enabled !== false
   bindingDialog.value = true
+  loadBindingZones()
 }
 
 async function handleSaveBinding() {

@@ -9,6 +9,15 @@
         </div>
       </template>
       <div class="autosync-row">
+        <el-select
+          v-model="autoSync.cfgId"
+          clearable
+          filterable
+          placeholder="CF config (default: global token)"
+          style="width: 230px"
+        >
+          <el-option v-for="c in cfConfigs" :key="c.id" :label="c.name" :value="c.id" />
+        </el-select>
         <el-input v-model="autoSync.zoneId" placeholder="Zone ID" style="width: 200px" />
         <el-input
           v-model="autoSync.domain"
@@ -109,6 +118,16 @@
 
     <!-- Zone selector and actions -->
     <div class="filter-bar">
+      <el-select
+        v-model="selectedCfgId"
+        clearable
+        filterable
+        placeholder="Account (default: global token)"
+        style="width: 240px"
+        @change="onCfgChange"
+      >
+        <el-option v-for="c in cfConfigs" :key="c.id" :label="c.name" :value="c.id" />
+      </el-select>
       <el-select
         v-model="selectedZoneId"
         placeholder="Select a zone..."
@@ -284,8 +303,8 @@
           <el-input v-model="bindingForm.name" placeholder="e.g. vps1.example.com (full record name)" />
         </el-form-item>
         <el-form-item label="Zone" required>
-          <el-select v-model="bindingForm.zoneId" filterable placeholder="Zone ID" style="width: 100%">
-            <el-option v-for="z in zones" :key="z.id" :label="z.name + ' · ' + z.id" :value="z.id" />
+          <el-select v-model="bindingForm.zoneId" filterable placeholder="Zone ID (zones of the CF config above)" style="width: 100%" :loading="bindingZonesLoading">
+            <el-option v-for="z in bindingZones" :key="z.id" :label="z.name + ' · ' + z.id" :value="z.id" />
           </el-select>
         </el-form-item>
         <el-form-item label="CF Config">
@@ -314,7 +333,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted, computed } from 'vue'
+import { ref, reactive, onMounted, computed, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   listZones, listRecords, createRecord, updateRecord, deleteRecord,
@@ -330,6 +349,8 @@ import { get, post } from '../api/index.js'
 const zones = ref([])
 const records = ref([])
 const selectedZoneId = ref('')
+// Which named CF config the zone/record views operate on; null = global token.
+const selectedCfgId = ref(null)
 const zonesLoading = ref(false)
 const recordsLoading = ref(false)
 const saving = ref(false)
@@ -352,7 +373,7 @@ const recordForm = reactive({
 async function loadZones() {
   zonesLoading.value = true
   try {
-    zones.value = await listZones() || []
+    zones.value = await listZones(selectedCfgId.value || undefined) || []
   } catch (e) {
     const msg = e.response?.data?.error || e.message
     ElMessage.error('Failed to load zones: ' + msg)
@@ -365,13 +386,20 @@ async function loadRecords() {
   if (!selectedZoneId.value) return
   recordsLoading.value = true
   try {
-    records.value = await listRecords(selectedZoneId.value) || []
+    records.value = await listRecords(selectedZoneId.value, selectedCfgId.value || undefined) || []
   } catch (e) {
     const msg = e.response?.data?.error || e.message
     ElMessage.error('Failed to load records: ' + msg)
   } finally {
     recordsLoading.value = false
   }
+}
+
+function onCfgChange() {
+  selectedZoneId.value = ''
+  records.value = []
+  zones.value = []
+  loadZones()
 }
 
 function onZoneChange() {
@@ -425,10 +453,10 @@ async function handleSave() {
       proxied: recordForm.proxied
     }
     if (isEditing.value) {
-      await updateRecord(selectedZoneId.value, editingRecordId.value, payload)
+      await updateRecord(selectedZoneId.value, editingRecordId.value, payload, selectedCfgId.value || undefined)
       ElMessage.success('Record updated')
     } else {
-      await createRecord(selectedZoneId.value, payload)
+      await createRecord(selectedZoneId.value, payload, selectedCfgId.value || undefined)
       ElMessage.success('Record created')
     }
     dialogVisible.value = false
@@ -455,7 +483,7 @@ async function handleDelete(row) {
         type: 'warning'
       }
     )
-    await deleteRecord(selectedZoneId.value, row.id)
+    await deleteRecord(selectedZoneId.value, row.id, selectedCfgId.value || undefined)
     ElMessage.success('Record deleted')
     await loadRecords()
   } catch {
@@ -477,13 +505,14 @@ onMounted(() => {
 // ---------------------------------------------------------------------------
 // OCI DNS Auto-Sync
 // ---------------------------------------------------------------------------
-const autoSync = ref({ enabled: false, zoneId: '', domain: '', lastSync: '', lastCount: 0 })
+const autoSync = ref({ enabled: false, zoneId: '', domain: '', cfgId: null, lastSync: '', lastCount: 0 })
 const savingAutoSync = ref(false)
 const syncing = ref(false)
 
 async function loadAutoSync() {
   try {
-    autoSync.value = await get('/cloudflare/auto-sync/status')
+    const st = await get('/cloudflare/auto-sync/status')
+    autoSync.value = { ...st, cfgId: st && st.cfgId ? Number(st.cfgId) : null }
   } catch {
     // monitor endpoint unavailable — keep defaults
   }
@@ -502,6 +531,7 @@ async function toggleAutoSync(val) {
 async function saveAutoSync() {
   savingAutoSync.value = true
   try {
+    await post('/config', { key: 'dns_auto_sync_cfg_id', value: autoSync.value.cfgId ? String(autoSync.value.cfgId) : '' })
     await post('/config', { key: 'dns_auto_sync_zone_id', value: autoSync.value.zoneId })
     await post('/config', { key: 'dns_auto_sync_domain', value: autoSync.value.domain })
     ElMessage.success('Auto-sync config saved')
@@ -537,6 +567,10 @@ const bindingDialog = ref(false)
 const bindingEditing = ref(false)
 const editingBindingId = ref('')
 const savingBinding = ref(false)
+// Zones offered in the binding dialog: they follow the binding's own CF
+// config (null = global token), not the record-view account selector.
+const bindingZones = ref([])
+const bindingZonesLoading = ref(false)
 const bindingForm = reactive({
   instanceId: '',
   name: '',
@@ -558,7 +592,8 @@ function instanceName(id) {
 }
 
 function zoneName(id) {
-  const z = zones.value.find(z => z.id === id)
+  const all = zones.value.concat(bindingZones.value)
+  const z = all.find(z => z.id === id)
   return z ? z.name : (id || '—')
 }
 
@@ -566,6 +601,23 @@ function cfCfgName(id) {
   const c = cfConfigs.value.find(c => c.id === id)
   return c ? c.name : 'default token'
 }
+
+async function loadBindingZones() {
+  bindingZonesLoading.value = true
+  try {
+    bindingZones.value = await listZones(bindingForm.cfCfgId || undefined) || []
+  } catch {
+    bindingZones.value = []
+  } finally {
+    bindingZonesLoading.value = false
+  }
+}
+
+// Reload the zone picker whenever the binding's CF config changes.
+watch(() => bindingForm.cfCfgId, () => {
+  bindingForm.zoneId = ''
+  loadBindingZones()
+})
 
 async function loadBindings() {
   bindingsLoading.value = true
@@ -616,6 +668,7 @@ function openAddBindingDialog() {
   editingBindingId.value = ''
   resetBindingForm()
   bindingDialog.value = true
+  loadBindingZones()
 }
 
 function openEditBindingDialog(row) {
@@ -629,6 +682,7 @@ function openEditBindingDialog(row) {
   bindingForm.ttl = row.ttl || 120
   bindingForm.enabled = row.enabled !== false
   bindingDialog.value = true
+  loadBindingZones()
 }
 
 async function handleSaveBinding() {

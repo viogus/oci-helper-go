@@ -868,6 +868,20 @@ func (s *Server) runDNSAutoSync() {
 		return
 	}
 
+	// Get ALL instances across all tenants.
+	instances, err := s.store.ListInstances(0) // tenantID=0 means all
+	if err != nil {
+		log.Printf("[dns-auto-sync] list instances: %v", err)
+		return
+	}
+
+	// ── Phase 1: explicit per-instance bindings ───────────────────────
+	// Each binding carries its own CF config + zone, so reconciling it must
+	// not depend on the global dns_auto_sync_zone_id — otherwise bindings
+	// are silently never created when that global zone is left unset.
+	phase1Results := s.reconcileExplicitBindings(instances)
+	results := append([]map[string]interface{}{}, phase1Results...)
+
 	zoneID, _ := s.store.GetConfig("dns_auto_sync_zone_id")
 	domain, _ := s.store.GetConfig("dns_auto_sync_domain")
 	cfgIDStr, _ := s.store.GetConfig("dns_auto_sync_cfg_id")
@@ -881,71 +895,70 @@ func (s *Server) runDNSAutoSync() {
 			autoCfg = cfg
 		}
 	}
-
 	if zoneID == "" && autoCfg != nil {
 		zoneID = autoCfg.ZoneID
 	}
+
+	// ── Phase 2: implicit "instance name + global domain" convention ──
+	// Requires a global zone + token. Without them only the explicit
+	// bindings (Phase 1) are reconciled — a skip here, never an early
+	// return, otherwise bindings would never be created when the global
+	// zone is left unset.
 	if zoneID == "" {
-		log.Println("[dns-auto-sync] zone_id not configured, skipping")
-		return
+		log.Println("[dns-auto-sync] zone_id not configured; explicit bindings synced, implicit sync skipped")
+	} else {
+		token := ""
+		if autoCfg != nil {
+			token = autoCfg.Token
+		}
+		if token == "" {
+			token, _ = s.store.GetConfig("cloudflare_token")
+		}
+		if token == "" {
+			log.Println("[dns-auto-sync] no Cloudflare token configured; implicit sync skipped")
+		} else {
+			results = append(results, s.syncImplicitDNS(instances, zoneID, domain, token)...)
+		}
 	}
 
-	// Resolve Cloudflare token: prefer named CfCfg, fall back to global config.
-	var token string
-	if autoCfg != nil {
-		token = autoCfg.Token
-	}
-	if token == "" {
-		token, _ = s.store.GetConfig("cloudflare_token")
-	}
-	if token == "" {
-		log.Println("[dns-auto-sync] no Cloudflare token configured, skipping")
-		return
+	// Save last sync time and results summary.
+	s.setConfig("dns_auto_sync_last_time", time.Now().UTC().Format(time.RFC3339))
+	if len(results) > 0 {
+		summary, _ := json.Marshal(results)
+		s.setConfig("dns_auto_sync_last_results", string(summary))
 	}
 
+	s.dnsSyncState.mu.Lock()
+	s.dnsSyncState.lastResults = results
+	s.dnsSyncState.mu.Unlock()
+}
+
+// syncImplicitDNS reconciles instances without explicit bindings against the
+// global zone using the legacy "instance name [+ domain]" convention. Returns
+// per-instance result entries (update/create/error).
+func (s *Server) syncImplicitDNS(instances []db.Instance, zoneID, domain, token string) []map[string]interface{} {
 	cf := cloudflare.New(token)
-
-	// Get ALL instances across all tenants that have public IPs.
-	instances, err := s.store.ListInstances(0) // tenantID=0 means all
-	if err != nil {
-		log.Printf("[dns-auto-sync] list instances: %v", err)
-		return
-	}
-
 	existingRecords, err := cf.ListDNSRecords(zoneID)
 	if err != nil {
 		log.Printf("[dns-auto-sync] list dns records: %v", err)
-		return
+		return nil
 	}
 
 	var results []map[string]interface{}
+	normalize := func(s string) string {
+		return strings.ToLower(strings.TrimRight(s, "."))
+	}
 
 	for _, inst := range instances {
 		if inst.PublicIP == "" {
 			continue
 		}
-
-		// Prefer explicit per-instance DNS bindings over the implicit
-		// "name + global domain" convention. Bindings are always reconciled
-		// (even if dns_last_ip is unchanged) because a binding may have been
-		// added after the instance was last synced.
+		// Instances with explicit bindings were reconciled in Phase 1.
 		bindings, bErr := s.instanceBindings(inst.ID)
 		if bErr == nil && len(bindings) > 0 {
-			for _, b := range bindings {
-				entry := s.syncBindingToDNS(inst, b)
-				results = append(results, entry)
-				if entry["error"] != nil {
-					log.Printf("[dns-auto-sync] binding %s -> %s: %v", inst.Name, b.Name, entry["error"])
-				}
-			}
-			// Persist last known IP (bindings share the instance's dns_last_ip).
-			if err := s.store.UpdateInstanceDNSIP(inst.ID, inst.PublicIP); err != nil {
-				log.Printf("[dns-auto-sync] save last IP for %s: %v", inst.Name, err)
-			}
 			continue
 		}
-
-		// Implicit convention: fast path — nothing changed since last sync.
+		// Nothing changed since the last sync.
 		if inst.DNSLastIP == inst.PublicIP {
 			continue
 		}
@@ -955,17 +968,7 @@ func (s *Server) runDNSAutoSync() {
 		if domain != "" {
 			dnsName = inst.Name + "." + domain
 		}
-
 		lastIP := inst.DNSLastIP
-
-		if lastIP == inst.PublicIP {
-			continue // no change
-		}
-
-		// Normalize names for comparison (strip trailing dot, lowercase).
-		normalize := func(s string) string {
-			return strings.ToLower(strings.TrimRight(s, "."))
-		}
 		target := normalize(dnsName)
 
 		// Check if a DNS record already exists for this instance.
@@ -1038,17 +1041,36 @@ func (s *Server) runDNSAutoSync() {
 			log.Printf("[dns-auto-sync] save last IP for %s: %v", inst.Name, err)
 		}
 	}
+	return results
+}
 
-	// Save last sync time and results summary.
-	s.setConfig("dns_auto_sync_last_time", time.Now().UTC().Format(time.RFC3339))
-	if len(results) > 0 {
-		summary, _ := json.Marshal(results)
-		s.setConfig("dns_auto_sync_last_results", string(summary))
+// reconcileExplicitBindings reconciles every enabled per-instance DNS binding
+// across all tenants. Bindings carry their own CF config + zone, so this runs
+// independently of the global auto-sync zone/domain settings — an instance
+// that only has bindings must still get its records created/updated.
+func (s *Server) reconcileExplicitBindings(instances []db.Instance) []map[string]interface{} {
+	var results []map[string]interface{}
+	for _, inst := range instances {
+		if inst.PublicIP == "" {
+			continue
+		}
+		bindings, bErr := s.instanceBindings(inst.ID)
+		if bErr != nil || len(bindings) == 0 {
+			continue
+		}
+		for _, b := range bindings {
+			entry := s.syncBindingToDNS(inst, b)
+			results = append(results, entry)
+			if entry["error"] != nil {
+				log.Printf("[dns-auto-sync] binding %s -> %s: %v", inst.Name, b.Name, entry["error"])
+			}
+		}
+		// Bindings share the instance's dns_last_ip.
+		if err := s.store.UpdateInstanceDNSIP(inst.ID, inst.PublicIP); err != nil {
+			log.Printf("[dns-auto-sync] save last IP for %s: %v", inst.Name, err)
+		}
 	}
-
-	s.dnsSyncState.mu.Lock()
-	s.dnsSyncState.lastResults = results
-	s.dnsSyncState.mu.Unlock()
+	return results
 }
 
 // syncBindingToDNS ensures the DNS record named by binding.Name (inside

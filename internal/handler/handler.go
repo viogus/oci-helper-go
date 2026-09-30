@@ -288,6 +288,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/traffic/getCondition", s.withAuth(s.handleTrafficCondition))
 	s.mux.HandleFunc("/api/traffic/fetchVnics", s.withAuth(s.handleTrafficVnics))
 	s.mux.HandleFunc("/api/traffic/fetchInstances", s.withAuth(s.handleTrafficInstances))
+	s.mux.HandleFunc("/api/traffic/accountStats", s.withAuth(s.handleTrafficAccountStats))
 	s.mux.HandleFunc("/api/traffic", s.withAuth(s.handleTraffic))
 	s.mux.HandleFunc("/api/limits/services", s.withAuth(s.handleLimitsServices))
 	s.mux.HandleFunc("/api/limits", s.withAuth(s.handleLimits))
@@ -787,6 +788,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			"ai_search_enabled", "telegram_chat_id", "telegram_webhook_secret",
 			"daily_broadcast_enabled", "daily_broadcast_cron",
 			"version_update_notifications_enabled", "update_repo", "panel_url",
+			"traffic_quota_gb",
 		}
 		secretKeys := map[string]bool{
 			"telegram_token": true, "cloudflare_token": true,

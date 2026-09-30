@@ -316,8 +316,8 @@ func (c *Client) LaunchInstance(ctx context.Context, region, ad, shape, imageID,
 
 func (c *Client) TerminateInstance(ctx context.Context, instanceID string, preserveBootVolume, preserveDataVolumes bool) error {
 	req := core.TerminateInstanceRequest{
-		InstanceId:                      common.String(instanceID),
-		PreserveBootVolume:              common.Bool(preserveBootVolume),
+		InstanceId:                         common.String(instanceID),
+		PreserveBootVolume:                 common.Bool(preserveBootVolume),
 		PreserveDataVolumesCreatedAtLaunch: common.Bool(preserveDataVolumes),
 	}
 	_, err := c.compute.TerminateInstance(ctx, req)
@@ -1115,76 +1115,76 @@ func (c *Client) ensureIPv6Route(ctx context.Context, vcnID string, routeTableID
 	return nil
 }
 
-	// mirrorToIPv6 copies each 0.0.0.0/0 ingress and egress rule to a ::/0
-	// equivalent, skipping duplicates. Applies the update per security list.
-	func (c *Client) mirrorToIPv6(ctx context.Context, securityListIDs []string) error {
-		for _, slID := range securityListIDs {
-			sl, err := c.vcn.GetSecurityList(ctx, core.GetSecurityListRequest{SecurityListId: common.String(slID)})
-			if err != nil {
-				return fmt.Errorf("get security list: %w", err)
-			}
+// mirrorToIPv6 copies each 0.0.0.0/0 ingress and egress rule to a ::/0
+// equivalent, skipping duplicates. Applies the update per security list.
+func (c *Client) mirrorToIPv6(ctx context.Context, securityListIDs []string) error {
+	for _, slID := range securityListIDs {
+		sl, err := c.vcn.GetSecurityList(ctx, core.GetSecurityListRequest{SecurityListId: common.String(slID)})
+		if err != nil {
+			return fmt.Errorf("get security list: %w", err)
+		}
 
-			// --- Ingress: mirror 0.0.0.0/0 → ::/0 ---
-			ingressRules := sl.IngressSecurityRules
-			ingressExisting := map[string]bool{}
-			for _, r := range ingressRules {
-				if r.Source != nil && strings.Contains(*r.Source, ":") {
-					ingressExisting[ingressRuleKey(r)] = true
-				}
-			}
-			ingressAdded := false
-			for _, r := range ingressRules {
-				if r.Source == nil || *r.Source != "0.0.0.0/0" {
-					continue
-				}
-				v6 := r
-				v6.Source = common.String("::/0")
-				v6.SourceType = core.IngressSecurityRuleSourceTypeCidrBlock
-				if ingressExisting[ingressRuleKey(v6)] {
-					continue
-				}
-				ingressRules = append(ingressRules, v6)
-				ingressAdded = true
-			}
-
-			// --- Egress: mirror 0.0.0.0/0 → ::/0 ---
-			egressRules := sl.EgressSecurityRules
-			egressExisting := map[string]bool{}
-			for _, r := range egressRules {
-				if r.Destination != nil && strings.Contains(*r.Destination, ":") {
-					egressExisting[egressRuleKey(r)] = true
-				}
-			}
-			egressAdded := false
-			for _, r := range egressRules {
-				if r.Destination == nil || *r.Destination != "0.0.0.0/0" {
-					continue
-				}
-				v6 := r
-				v6.Destination = common.String("::/0")
-				v6.DestinationType = core.EgressSecurityRuleDestinationTypeCidrBlock
-				if egressExisting[egressRuleKey(v6)] {
-					continue
-				}
-				egressRules = append(egressRules, v6)
-				egressAdded = true
-			}
-
-			if !ingressAdded && !egressAdded {
-				continue
-			}
-			if _, err := c.vcn.UpdateSecurityList(ctx, core.UpdateSecurityListRequest{
-				SecurityListId: common.String(slID),
-				UpdateSecurityListDetails: core.UpdateSecurityListDetails{
-					IngressSecurityRules: ingressRules,
-					EgressSecurityRules:  egressRules,
-				},
-			}); err != nil {
-				return fmt.Errorf("update security list: %w", err)
+		// --- Ingress: mirror 0.0.0.0/0 → ::/0 ---
+		ingressRules := sl.IngressSecurityRules
+		ingressExisting := map[string]bool{}
+		for _, r := range ingressRules {
+			if r.Source != nil && strings.Contains(*r.Source, ":") {
+				ingressExisting[ingressRuleKey(r)] = true
 			}
 		}
-		return nil
+		ingressAdded := false
+		for _, r := range ingressRules {
+			if r.Source == nil || *r.Source != "0.0.0.0/0" {
+				continue
+			}
+			v6 := r
+			v6.Source = common.String("::/0")
+			v6.SourceType = core.IngressSecurityRuleSourceTypeCidrBlock
+			if ingressExisting[ingressRuleKey(v6)] {
+				continue
+			}
+			ingressRules = append(ingressRules, v6)
+			ingressAdded = true
+		}
+
+		// --- Egress: mirror 0.0.0.0/0 → ::/0 ---
+		egressRules := sl.EgressSecurityRules
+		egressExisting := map[string]bool{}
+		for _, r := range egressRules {
+			if r.Destination != nil && strings.Contains(*r.Destination, ":") {
+				egressExisting[egressRuleKey(r)] = true
+			}
+		}
+		egressAdded := false
+		for _, r := range egressRules {
+			if r.Destination == nil || *r.Destination != "0.0.0.0/0" {
+				continue
+			}
+			v6 := r
+			v6.Destination = common.String("::/0")
+			v6.DestinationType = core.EgressSecurityRuleDestinationTypeCidrBlock
+			if egressExisting[egressRuleKey(v6)] {
+				continue
+			}
+			egressRules = append(egressRules, v6)
+			egressAdded = true
+		}
+
+		if !ingressAdded && !egressAdded {
+			continue
+		}
+		if _, err := c.vcn.UpdateSecurityList(ctx, core.UpdateSecurityListRequest{
+			SecurityListId: common.String(slID),
+			UpdateSecurityListDetails: core.UpdateSecurityListDetails{
+				IngressSecurityRules: ingressRules,
+				EgressSecurityRules:  egressRules,
+			},
+		}); err != nil {
+			return fmt.Errorf("update security list: %w", err)
+		}
 	}
+	return nil
+}
 
 // ingressRuleKey identifies an ingress rule by protocol, source and dest port range.
 func ingressRuleKey(r core.IngressSecurityRule) string {
@@ -1324,7 +1324,7 @@ func (c *Client) GetMetrics(ctx context.Context, compartmentID, instanceID strin
 
 			mv := MetricValue{Unit: q.unit}
 			req := monitoring.SummarizeMetricsDataRequest{
-				CompartmentId: common.String(compartmentID),
+				CompartmentId:          common.String(compartmentID),
 				CompartmentIdInSubtree: common.Bool(compartmentID == c.tenant.TenancyOCID),
 				SummarizeMetricsDataDetails: monitoring.SummarizeMetricsDataDetails{
 					Namespace: common.String("oci_computeagent"),
@@ -1389,8 +1389,8 @@ type TrafficDataPoint struct {
 // to roughly 7 days, 5-minute to 30 days, and 1-hour beyond that.
 func intervalForDuration(d time.Duration) (string, time.Duration) {
 	const (
-		day    = 24 * time.Hour
-		seven  = 7 * day
+		day   = 24 * time.Hour
+		seven = 7 * day
 	)
 	const thirty = 30 * day
 	switch {
@@ -1418,7 +1418,7 @@ func (c *Client) GetVNICTtraffic(ctx context.Context, compartmentID, vnicID stri
 	for _, name := range metricNames {
 		query := fmt.Sprintf("%s%s{resourceId=\"%s\"}.mean()", name, intervalStr, vnicID)
 		req := monitoring.SummarizeMetricsDataRequest{
-			CompartmentId: common.String(compartmentID),
+			CompartmentId:          common.String(compartmentID),
 			CompartmentIdInSubtree: common.Bool(compartmentID == c.tenant.TenancyOCID),
 			SummarizeMetricsDataDetails: monitoring.SummarizeMetricsDataDetails{
 				Namespace: common.String(namespace),
@@ -1486,86 +1486,198 @@ func (c *Client) GetVNICTtraffic(ctx context.Context, compartmentID, vnicID stri
 
 // FetchInstancesTrafficResult holds monthly traffic totals for one instance.
 type FetchInstancesTrafficResult struct {
-	InstanceCount    int    `json:"instanceCount"`
-	InboundTraffic   string `json:"inboundTraffic"`
-	OutboundTraffic  string `json:"outboundTraffic"`
+	InstanceCount   int    `json:"instanceCount"`
+	InboundTraffic  string `json:"inboundTraffic"`
+	OutboundTraffic string `json:"outboundTraffic"`
 }
 
-// FetchInstancesTraffic sums traffic across all VNICs for all instances in a region
-// over the given time range, returning human-readable totals.
+// InstanceTrafficRef identifies an instance whose traffic should be summed.
+type InstanceTrafficRef struct {
+	OCID string
+	Name string
+}
+
+// VnicTrafficStat holds summed traffic for a single VNIC over a time range.
+type VnicTrafficStat struct {
+	VnicID   string  `json:"vnicId"`
+	VnicName string  `json:"vnicName"`
+	Inbound  float64 `json:"inboundBytes"`
+	Outbound float64 `json:"outboundBytes"`
+}
+
+// InstanceTrafficStat holds summed traffic for one instance across all VNICs.
+type InstanceTrafficStat struct {
+	InstanceID   string            `json:"instanceId"`
+	InstanceName string            `json:"instanceName"`
+	Region       string            `json:"region"`
+	Inbound      float64           `json:"inboundBytes"`
+	Outbound     float64           `json:"outboundBytes"`
+	Vnics        []VnicTrafficStat `json:"vnics,omitempty"`
+}
+
+// InstancesTrafficDetail is a per-instance traffic rollup plus the number of
+// measurements that could not be read. The failure counts matter: a missing
+// measurement understates usage, so callers must be able to tell "no traffic"
+// apart from "could not measure".
+type InstancesTrafficDetail struct {
+	Stats []InstanceTrafficStat
+	// UnreadableVNICs counts instances whose VNIC list could not be fetched
+	// (their traffic is missing entirely).
+	UnreadableVNICs int
+	// FailedMetrics counts individual monitoring queries that errored.
+	FailedMetrics int
+}
+
+// sumVnicMetric sums one oci_vcn byte metric for a VNIC over the window.
+// Datapoints are rates in bytes/minute, so each is scaled by the step size.
+func (c *Client) sumVnicMetric(ctx context.Context, compartmentID, vnicID, metricName, intervalStr string, step time.Duration, startTime, endTime time.Time) (float64, error) {
+	req := monitoring.SummarizeMetricsDataRequest{
+		CompartmentId:          common.String(compartmentID),
+		CompartmentIdInSubtree: common.Bool(true),
+		SummarizeMetricsDataDetails: monitoring.SummarizeMetricsDataDetails{
+			Namespace: common.String("oci_vcn"),
+			Query:     common.String(fmt.Sprintf("%s%s{resourceId=\"%s\"}.mean()", metricName, intervalStr, vnicID)),
+			StartTime: &common.SDKTime{Time: startTime},
+			EndTime:   &common.SDKTime{Time: endTime},
+		},
+	}
+	resp, err := c.monitoring.SummarizeMetricsData(ctx, req)
+	if err != nil {
+		return 0, err
+	}
+	var sum float64
+	for _, item := range resp.Items {
+		for _, dp := range item.AggregatedDatapoints {
+			if dp.Value != nil {
+				sum += *dp.Value * step.Minutes()
+			}
+		}
+	}
+	return sum, nil
+}
+
+// FetchInstancesTrafficDetail sums inbound/outbound traffic per instance for
+// the given instances. VNIC discovery and the monitoring queries each run with
+// bounded concurrency, and every goroutine writes to its own slice slot so no
+// locking is needed on the hot path.
+func (c *Client) FetchInstancesTrafficDetail(ctx context.Context, compartmentID, region string, instances []InstanceTrafficRef, startTime, endTime time.Time) (*InstancesTrafficDetail, error) {
+	intervalStr, step := intervalForDuration(endTime.Sub(startTime))
+
+	// Phase 1: resolve each instance's VNICs. Each goroutine owns one slot.
+	type instanceVNICs struct{ vnics []VnicTrafficStat }
+	resolved := make([]instanceVNICs, len(instances))
+	unreadable := make([]bool, len(instances))
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, 10)
+	for i := range instances {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(i int) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			vnics, err := c.GetInstanceVNICs(ctx, compartmentID, instances[i].OCID)
+			if err != nil {
+				unreadable[i] = true
+				return
+			}
+			var out []VnicTrafficStat
+			for _, v := range vnics {
+				if v.Id == nil {
+					continue
+				}
+				out = append(out, VnicTrafficStat{VnicID: *v.Id, VnicName: pointerToString(v.DisplayName)})
+			}
+			resolved[i].vnics = out
+		}(i)
+	}
+	wg.Wait()
+
+	// Phase 2: one monitoring query per metric per VNIC, indexed by task.
+	type metricTask struct {
+		instIdx, vnicIdx int
+		vnicID, metric   string
+		inbound          bool
+	}
+	var tasks []metricTask
+	stats := make([]InstanceTrafficStat, len(instances))
+	for i := range instances {
+		stats[i] = InstanceTrafficStat{
+			InstanceID:   instances[i].OCID,
+			InstanceName: instances[i].Name,
+			Region:       region,
+			Vnics:        resolved[i].vnics,
+		}
+		for j := range resolved[i].vnics {
+			tasks = append(tasks,
+				metricTask{i, j, resolved[i].vnics[j].VnicID, "VnicFromNetworkBytes", true},
+				metricTask{i, j, resolved[i].vnics[j].VnicID, "VnicToNetworkBytes", false},
+			)
+		}
+	}
+	sums := make([]float64, len(tasks))
+	failed := make([]bool, len(tasks))
+	for k := range tasks {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(k int) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			sum, err := c.sumVnicMetric(ctx, compartmentID, tasks[k].vnicID, tasks[k].metric, intervalStr, step, startTime, endTime)
+			if err != nil {
+				failed[k] = true
+				return
+			}
+			sums[k] = sum
+		}(k)
+	}
+	wg.Wait()
+
+	detail := &InstancesTrafficDetail{Stats: stats}
+	for _, bad := range unreadable {
+		if bad {
+			detail.UnreadableVNICs++
+		}
+	}
+	for k, tk := range tasks {
+		if failed[k] {
+			detail.FailedMetrics++
+		}
+		if tk.inbound {
+			stats[tk.instIdx].Vnics[tk.vnicIdx].Inbound = sums[k]
+			stats[tk.instIdx].Inbound += sums[k]
+		} else {
+			stats[tk.instIdx].Vnics[tk.vnicIdx].Outbound = sums[k]
+			stats[tk.instIdx].Outbound += sums[k]
+		}
+	}
+	return detail, nil
+}
+
+// FetchInstancesTraffic sums traffic across all VNICs for all instances in a
+// region over the given time range, returning human-readable totals.
 func (c *Client) FetchInstancesTraffic(ctx context.Context, compartmentID, region string, startTime, endTime time.Time) (*FetchInstancesTrafficResult, error) {
 	instances, err := c.ListInstances(ctx, compartmentID)
 	if err != nil {
 		return nil, fmt.Errorf("list instances: %w", err)
 	}
-
-	var (
-		totalIn, totalOut float64
-		mu                sync.Mutex
-		wg                sync.WaitGroup
-	)
-	instanceCount := len(instances)
-	totalDuration := endTime.Sub(startTime)
-	intervalStr, step := intervalForDuration(totalDuration)
-	namespace := "oci_vcn"
-
-	// Bounded concurrency for monitoring API calls — avoids overwhelming
-	// the OCI API rate limit while still parallelizing across instances.
-	sem := make(chan struct{}, 10)
-
+	refs := make([]InstanceTrafficRef, 0, len(instances))
 	for _, inst := range instances {
-		vnics, err := c.GetInstanceVNICs(ctx, compartmentID, *inst.Id)
-		if err != nil {
+		if inst.Id == nil {
 			continue
 		}
-		for _, vnic := range vnics {
-			vnicID := *vnic.Id
-			for _, metric := range []struct {
-				name  string
-				accum *float64
-			}{
-				{"VnicFromNetworkBytes", &totalIn},
-				{"VnicToNetworkBytes", &totalOut},
-			} {
-				wg.Add(1)
-				sem <- struct{}{}
-				go func(metricName string, accum *float64) {
-					defer wg.Done()
-					defer func() { <-sem }()
-
-					req := monitoring.SummarizeMetricsDataRequest{
-						CompartmentId:          common.String(compartmentID),
-						CompartmentIdInSubtree: common.Bool(true),
-						SummarizeMetricsDataDetails: monitoring.SummarizeMetricsDataDetails{
-							Namespace: common.String(namespace),
-							Query:     common.String(fmt.Sprintf("%s%s{resourceId=\"%s\"}.mean()", metricName, intervalStr, vnicID)),
-							StartTime: &common.SDKTime{Time: startTime},
-							EndTime:   &common.SDKTime{Time: endTime},
-						},
-					}
-					resp, err := c.monitoring.SummarizeMetricsData(ctx, req)
-					if err != nil {
-						return
-					}
-					var localSum float64
-					for _, item := range resp.Items {
-						for _, dp := range item.AggregatedDatapoints {
-							if dp.Value != nil {
-								localSum += *dp.Value * step.Minutes()
-							}
-						}
-					}
-					mu.Lock()
-					*accum += localSum
-					mu.Unlock()
-				}(metric.name, metric.accum)
-			}
-		}
+		refs = append(refs, InstanceTrafficRef{OCID: *inst.Id, Name: pointerToString(inst.DisplayName)})
 	}
-	wg.Wait()
-
+	detail, err := c.FetchInstancesTrafficDetail(ctx, compartmentID, region, refs, startTime, endTime)
+	if err != nil {
+		return nil, err
+	}
+	var totalIn, totalOut float64
+	for _, st := range detail.Stats {
+		totalIn += st.Inbound
+		totalOut += st.Outbound
+	}
 	return &FetchInstancesTrafficResult{
-		InstanceCount:   instanceCount,
+		InstanceCount:   len(instances),
 		InboundTraffic:  FormatBytes(totalIn),
 		OutboundTraffic: FormatBytes(totalOut),
 	}, nil
@@ -1920,15 +2032,15 @@ func (c *Client) AddEgressRule(ctx context.Context, vcnID, protocol, port, dest 
 				return fmt.Errorf("invalid port %s: %w", parts[1], err)
 			}
 		}
-			portRange := &core.PortRange{
-				Min: common.Int(minPort),
-				Max: common.Int(maxPort),
-			}
-			if protocol == "UDP" {
-				newRule.UdpOptions = &core.UdpOptions{DestinationPortRange: portRange}
-			} else {
-				newRule.TcpOptions = &core.TcpOptions{DestinationPortRange: portRange}
-			}
+		portRange := &core.PortRange{
+			Min: common.Int(minPort),
+			Max: common.Int(maxPort),
+		}
+		if protocol == "UDP" {
+			newRule.UdpOptions = &core.UdpOptions{DestinationPortRange: portRange}
+		} else {
+			newRule.TcpOptions = &core.TcpOptions{DestinationPortRange: portRange}
+		}
 	}
 
 	// Apply to ALL security lists in the VCN, not just the first.
@@ -2383,8 +2495,8 @@ func nlbPublicIP(addrs []networkloadbalancer.IpAddress) string {
 // ensureNatGateway finds or creates a NAT gateway in the VCN.
 func (c *Client) ensureNatGateway(ctx context.Context, compartmentID, vcnID string) (*core.NatGateway, error) {
 	listResp, err := c.vcn.ListNatGateways(ctx, core.ListNatGatewaysRequest{
-		CompartmentId: common.String(compartmentID),
-		VcnId:         common.String(vcnID),
+		CompartmentId:  common.String(compartmentID),
+		VcnId:          common.String(vcnID),
 		LifecycleState: core.NatGatewayLifecycleStateAvailable,
 	})
 	if err != nil {
@@ -2562,10 +2674,10 @@ func (c *Client) Enable500Mbps(ctx context.Context, instanceID string, sshPort i
 				bsName: {
 					Policy:     networkloadbalancer.NetworkLoadBalancingPolicyFiveTuple,
 					IsFailOpen: common.Bool(true),
-				HealthChecker: &networkloadbalancer.HealthChecker{
-					Protocol: networkloadbalancer.HealthCheckProtocolsTcp,
-					Port:     common.Int(sshPort),
-				},
+					HealthChecker: &networkloadbalancer.HealthChecker{
+						Protocol: networkloadbalancer.HealthCheckProtocolsTcp,
+						Port:     common.Int(sshPort),
+					},
 					Backends: []networkloadbalancer.Backend{
 						{IpAddress: common.String(privateIP), Port: common.Int(0), Name: common.String(instanceID)},
 					},
@@ -3156,10 +3268,10 @@ type CostAnalysisParams struct {
 
 // CostAnalysisResult wraps the full cost analysis response.
 type CostAnalysisResult struct {
-	Total     int         `json:"total"`
-	TotalCost float64     `json:"totalCost"`
-	Currency  string      `json:"currency"`
-	Items     []CostItem  `json:"items"`
+	Total     int        `json:"total"`
+	TotalCost float64    `json:"totalCost"`
+	Currency  string     `json:"currency"`
+	Items     []CostItem `json:"items"`
 }
 
 // CostItem represents a single cost/usage entry.
@@ -3227,12 +3339,12 @@ func (c *Client) CostAnalysis(ctx context.Context, params CostAnalysisParams) (*
 	isAggregateByTime := false
 
 	details := usageapi.RequestSummarizedUsagesDetails{
-		TenantId:         &c.tenant.TenancyOCID,
-		Granularity:      granularity,
-		GroupBy:          groupBy,
-		TimeUsageStarted: &sdkStart,
-		TimeUsageEnded:   &sdkEnd,
-		QueryType:        queryType,
+		TenantId:          &c.tenant.TenancyOCID,
+		Granularity:       granularity,
+		GroupBy:           groupBy,
+		TimeUsageStarted:  &sdkStart,
+		TimeUsageEnded:    &sdkEnd,
+		QueryType:         queryType,
 		IsAggregateByTime: &isAggregateByTime,
 	}
 

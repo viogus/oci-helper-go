@@ -77,6 +77,97 @@
           <el-empty v-if="!summaryLoading && !summaryResult" :description="$t('traffic.selectRegionPrompt')" />
         </el-card>
       </el-tab-pane>
+
+      <el-tab-pane :label="$t('traffic.accountStats')" name="accounts">
+        <el-card>
+          <el-form :inline="true">
+            <el-form-item :label="$t('traffic.account')">
+              <el-select v-model="statsTenant" style="width:200px">
+                <el-option :label="$t('traffic.allAccounts')" value="all" />
+                <el-option v-for="t in tenants" :key="t.id" :label="t.name" :value="t.id" />
+              </el-select>
+            </el-form-item>
+            <el-form-item :label="$t('traffic.timeRange')">
+              <el-date-picker v-model="statsRange" type="datetimerange" :range-separator="$t('traffic.to')" :start-placeholder="$t('traffic.start')" :end-placeholder="$t('traffic.end')" value-format="YYYY-MM-DDTHH:mm:ss" style="width:380px" />
+            </el-form-item>
+            <el-form-item>
+              <el-button type="primary" @click="loadAccountStats" :loading="statsLoading">{{ $t('traffic.query') }}</el-button>
+            </el-form-item>
+          </el-form>
+
+          <div class="stats-hint">{{ $t('traffic.statsHint') }}</div>
+
+          <div v-if="statsLoading" class="stats-progress">
+            {{ $t('traffic.statsQuerying', { done: statsProgress, total: statsTotal }) }}
+          </div>
+
+          <el-alert v-if="exceededCount > 0" :title="$t('traffic.quotaExceededAlert', { count: exceededCount })" type="error" :closable="false" show-icon style="margin-bottom:12px" />
+
+          <el-table v-if="statsRows.length" :data="statsRows" row-key="tenantId" v-loading="statsLoading" style="margin-top:8px">
+            <el-table-column type="expand">
+              <template #default="{ row }">
+                <el-table :data="row.regions || []" size="small" style="margin:0 12px 12px 48px;width:calc(100% - 60px)">
+                  <el-table-column type="expand">
+                    <template #default="{ row: reg }">
+                      <el-table :data="reg.instances || []" size="small" style="margin:0 12px 12px 60px;width:calc(100% - 72px)">
+                        <el-table-column prop="instanceName" :label="$t('traffic.instance')" min-width="200" show-overflow-tooltip />
+                        <el-table-column :label="$t('traffic.inbound')" width="140">
+                          <template #default="{ row: inst }">{{ fmtBytes(inst.inboundBytes) }}</template>
+                        </el-table-column>
+                        <el-table-column :label="$t('traffic.outbound')" width="140">
+                          <template #default="{ row: inst }">{{ fmtBytes(inst.outboundBytes) }}</template>
+                        </el-table-column>
+                      </el-table>
+                      <el-empty v-if="!(reg.instances || []).length" :description="$t('traffic.noData')" :image-size="40" />
+                    </template>
+                  </el-table-column>
+                  <el-table-column prop="region" :label="$t('traffic.region')" min-width="160" />
+                  <el-table-column prop="instanceCount" :label="$t('traffic.instanceCount')" width="90" />
+                  <el-table-column :label="$t('traffic.inboundTotal')" width="140">
+                    <template #default="{ row: reg }">{{ fmtBytes(reg.inboundBytes) }}</template>
+                  </el-table-column>
+                  <el-table-column :label="$t('traffic.outboundTotal')" width="140">
+                    <template #default="{ row: reg }">{{ fmtBytes(reg.outboundBytes) }}</template>
+                  </el-table-column>
+                  <el-table-column :label="$t('traffic.status')" width="140">
+                    <template #default="{ row: reg }">
+                      <el-tag v-if="reg.error" type="danger" size="small">{{ reg.error }}</el-tag>
+                      <el-tag v-else-if="reg.partial" type="warning" size="small">{{ $t('traffic.partialData') }}</el-tag>
+                      <el-tag v-else type="success" size="small">OK</el-tag>
+                    </template>
+                  </el-table-column>
+                </el-table>
+                <el-alert v-if="(row.errors || []).length" :title="row.errors.join('; ')" type="warning" :closable="false" style="margin:0 12px 12px 48px" />
+              </template>
+            </el-table-column>
+            <el-table-column prop="tenantName" :label="$t('traffic.account')" min-width="160" show-overflow-tooltip />
+            <el-table-column prop="instanceCount" :label="$t('traffic.instanceCount')" width="90" />
+            <el-table-column prop="regionCount" :label="$t('traffic.regionCount')" width="90" />
+            <el-table-column :label="$t('traffic.inboundTotal')" width="130">
+              <template #default="{ row }">{{ fmtBytes(row.inboundBytes) }}</template>
+            </el-table-column>
+            <el-table-column :label="$t('traffic.outboundTotal')" width="130">
+              <template #default="{ row }">{{ fmtBytes(row.outboundBytes) }}</template>
+            </el-table-column>
+            <el-table-column :label="$t('traffic.quota')" width="120">
+              <template #default="{ row }">{{ fmtBytes(row.quotaBytes) }}</template>
+            </el-table-column>
+            <el-table-column :label="$t('traffic.quotaUsage')" width="200">
+              <template #default="{ row }">
+                <el-progress :percentage="Math.min(row.quotaPercent || 0, 100)" :status="row.exceeded ? 'exception' : ((row.quotaPercent || 0) > 80 ? 'warning' : 'success')" :format="() => (row.quotaPercent || 0).toFixed(1) + '%'" />
+              </template>
+            </el-table-column>
+            <el-table-column :label="$t('traffic.status')" width="140">
+              <template #default="{ row }">
+                <el-tag v-if="row.exceeded" type="danger" size="small">{{ $t('traffic.exceeded') }}</el-tag>
+                <el-tag v-else-if="row.partial" type="warning" size="small">{{ $t('traffic.partialData') }}</el-tag>
+                <el-tag v-else type="success" size="small">{{ $t('traffic.withinQuota') }}</el-tag>
+              </template>
+            </el-table-column>
+          </el-table>
+          <el-empty v-else-if="!statsLoading" :description="$t('traffic.statsPrompt')" />
+        </el-card>
+      </el-tab-pane>
     </el-tabs>
 
     <el-alert v-if="error" :title="error" type="error" :closable="false" show-icon style="margin-top:12px" />
@@ -84,8 +175,9 @@
 </template>
 
 <script setup>
-import { ref, onMounted, nextTick } from 'vue'
+import { ref, computed, onMounted, nextTick } from 'vue'
 import { get, post } from '../api/index.js'
+import { getAccountStats } from '../api/traffic.js'
 import { listTenants } from '../api/tenants.js'
 import { use, init } from 'echarts/core'
 import { LineChart } from 'echarts/charts'
@@ -133,6 +225,7 @@ const summaryLoading = ref(false)
 // Load tenants then cascade on mount
 onMounted(async () => {
   initTimeRange()
+  initStatsRange()
   try {
     const tRes = await listTenants()
     tenants.value = tRes?.data || []
@@ -235,6 +328,68 @@ async function loadSummary() {
   }
   summaryLoading.value = false
 }
+
+// ── Account stats (free-allowance view) ──
+const statsTenant = ref('all')
+const statsRange = ref([])
+const statsLoading = ref(false)
+const statsRows = ref([])
+const statsProgress = ref(0)
+const statsTotal = ref(0)
+const exceededCount = computed(() => statsRows.value.filter(r => r.exceeded).length)
+
+// Local wall-clock string for the picker (value-format has no timezone suffix).
+function toLocalDT(d) {
+  const p = n => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
+}
+
+function initStatsRange() {
+  const now = new Date()
+  // OCI bills the free egress allowance per calendar month.
+  statsRange.value = [toLocalDT(new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0)), toLocalDT(now)]
+}
+
+function fmtBytes(bytes) {
+  const n = Number(bytes) || 0
+  if (n >= 1024 ** 5) return (n / 1024 ** 5).toFixed(2) + ' PiB'
+  if (n >= 1024 ** 4) return (n / 1024 ** 4).toFixed(2) + ' TiB'
+  if (n >= 1024 ** 3) return (n / 1024 ** 3).toFixed(2) + ' GiB'
+  if (n >= 1024 ** 2) return (n / 1024 ** 2).toFixed(2) + ' MiB'
+  if (n >= 1024) return (n / 1024).toFixed(2) + ' KiB'
+  return n.toFixed(0) + ' B'
+}
+
+async function loadAccountStats() {
+  if (!statsRange.value || statsRange.value.length !== 2) return
+  const list = statsTenant.value === 'all'
+    ? tenants.value
+    : tenants.value.filter(t => t.id === statsTenant.value)
+  if (!list.length) return
+
+  const start = new Date(statsRange.value[0]).toISOString()
+  const end = new Date(statsRange.value[1]).toISOString()
+
+  statsLoading.value = true
+  statsRows.value = []
+  statsProgress.value = 0
+  statsTotal.value = list.length
+  error.value = ''
+
+  const collected = []
+  // Two accounts in flight: every account already fans out across its regions.
+  for (let i = 0; i < list.length; i += 2) {
+    const batch = list.slice(i, i + 2)
+    const batchResults = await Promise.all(batch.map(t =>
+      getAccountStats({ tenant_id: t.id, start_time: start, end_time: end })
+        .catch(e => ({ tenant_id: t.id, tenant_name: t.name, regions: [], errors: [e.response?.data?.error || 'query failed'] }))
+    ))
+    collected.push(...batchResults.map((r, idx) => ({ ...r, tenantId: r.tenantId ?? r.tenant_id ?? batch[idx].id, tenantName: r.tenantName || r.tenant_name || batch[idx].name })))
+    statsProgress.value = Math.min(i + batch.length, list.length)
+    statsRows.value = [...collected].sort((a, b) => (b.outboundBytes || 0) - (a.outboundBytes || 0))
+  }
+  statsLoading.value = false
+}
 </script>
 
 <style scoped>
@@ -249,4 +404,6 @@ async function loadSummary() {
 .cost-card.outbound { border-left:3px solid #F56C6C }
 .cost-value { font-size:22px; font-weight:700; color:var(--text-primary) }
 .cost-label { font-size:12px; color:var(--text-muted); margin-top:4px }
+.stats-hint { font-size:12px; color:var(--text-muted); margin-bottom:8px }
+.stats-progress { font-size:13px; color:var(--text-muted); margin-bottom:8px }
 </style>

@@ -304,6 +304,23 @@
       </el-form>
     </el-card>
 
+    <el-card shadow="never" class="settings-card">
+      <template #header>
+        <div class="card-header">
+          <span>Traffic</span>
+        </div>
+      </template>
+      <el-form label-position="top" @submit.prevent>
+        <el-form-item label="每月免费出站额度 (GB)">
+          <div class="setting-row">
+            <el-input v-model="config.traffic_quota_gb" placeholder="10240" :disabled="saving" />
+            <el-button type="primary" :loading="saving" @click="saveSetting('traffic_quota_gb', config.traffic_quota_gb)">Save</el-button>
+          </div>
+        </el-form-item>
+        <div class="setting-hint">OCI 默认每月 10 TiB（10240 GB）免费出站流量，超出部分按量计费。仅用于「网络 → 流量 → 账号统计」的额度占比展示。</div>
+      </el-form>
+    </el-card>
+
     <!-- About & Update -->
     <el-card shadow="never" class="settings-card">
       <template #header>

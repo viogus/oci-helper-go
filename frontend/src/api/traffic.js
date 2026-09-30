@@ -11,3 +11,9 @@ export function getInstances(tenantId) {
 export function getLimits(data) {
   return post('/limits', data)
 }
+
+// Account-wide traffic aggregation fans out across every subscribed region, so
+// it needs a longer budget than the default 30s client timeout.
+export function getAccountStats(data) {
+  return post('/traffic/accountStats', data, { timeout: 90000 })
+}

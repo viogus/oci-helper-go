@@ -130,12 +130,14 @@ func TestParseTrafficWindow(t *testing.T) {
 	})
 
 	t.Run("explicit RFC3339 bounds", func(t *testing.T) {
-		start, end, errMsg := parseTrafficWindow("2026-01-02T03:04:05Z", "2026-01-03T03:04:05Z")
+		wantStart := time.Now().UTC().Add(-2 * time.Hour).Truncate(time.Second)
+		wantEnd := wantStart.Add(time.Hour)
+		start, end, errMsg := parseTrafficWindow(wantStart.Format(time.RFC3339), wantEnd.Format(time.RFC3339))
 		if errMsg != "" {
 			t.Fatalf("errMsg = %q, want empty", errMsg)
 		}
-		if start.UTC().Format(time.RFC3339) != "2026-01-02T03:04:05Z" || end.UTC().Format(time.RFC3339) != "2026-01-03T03:04:05Z" {
-			t.Fatalf("window = %v..%v, want the parsed bounds", start, end)
+		if !start.Equal(wantStart) || !end.Equal(wantEnd) {
+			t.Fatalf("window = %v..%v, want %v..%v", start, end, wantStart, wantEnd)
 		}
 	})
 
@@ -150,6 +152,9 @@ func TestParseTrafficWindow(t *testing.T) {
 		{"bad end", now.Add(-time.Hour).Format(time.RFC3339), "nope", "invalid end_time: "},
 		{"end equals start", now.Format(time.RFC3339), now.Format(time.RFC3339), "end_time must be after start_time"},
 		{"span 33 days", now.Add(-33 * 24 * time.Hour).Format(time.RFC3339), now.Format(time.RFC3339), "time range too long"},
+		// A window that starts past the 90-day retention is unusable, even
+		// though its span is well within the 32-day cap.
+		{"start beyond retention", now.Add(-120 * 24 * time.Hour).Format(time.RFC3339), now.Add(-100 * 24 * time.Hour).Format(time.RFC3339), "time range too old"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

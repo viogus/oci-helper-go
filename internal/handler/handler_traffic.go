@@ -102,6 +102,12 @@ func parseTrafficWindow(startRaw, endRaw string) (start, end time.Time, errMsg s
 	if end.Sub(start) > maxTrafficStatsSpan {
 		return start, end, "time range too long: max " + strconv.Itoa(int(maxTrafficStatsSpan.Hours()/24)) + " days"
 	}
+	// OCI Monitoring only reaches back 90 days, counted from now: an older
+	// window cannot be measured, and must not be reported as zero traffic.
+	if now.Sub(start) > oci.MonitoringRetention {
+		return start, end, "time range too old: OCI Monitoring only returns the last " +
+			strconv.Itoa(int(oci.MonitoringRetention.Hours()/24)) + " days"
+	}
 	return start, end, ""
 }
 

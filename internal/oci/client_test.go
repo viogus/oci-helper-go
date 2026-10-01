@@ -3,6 +3,7 @@ package oci
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/oracle/oci-go-sdk/v65/common"
 )
@@ -51,6 +52,38 @@ type wrapError struct{ inner error }
 
 func (w *wrapError) Error() string { return "wrapped: " + w.inner.Error() }
 func (w *wrapError) Unwrap() error { return w.inner }
+
+func TestMonitoringInterval(t *testing.T) {
+	now := time.Now()
+	tests := []struct {
+		name       string
+		start, end time.Time
+		wantStr    string
+		wantStep   time.Duration
+		wantErr    error
+	}{
+		{"recent hour", now.Add(-time.Hour), now, "[1m]", time.Minute, nil},
+		{"six days long, recent", now.Add(-6 * 24 * time.Hour), now, "[1m]", time.Minute, nil},
+		{"twenty days back, one hour long", now.Add(-20 * 24 * time.Hour), now.Add(-20*24*time.Hour + time.Hour), "[5m]", 5 * time.Minute, nil},
+		{"window longer than the lookback", now.Add(-24 * time.Hour), now.Add(20 * 24 * time.Hour), "[5m]", 5 * time.Minute, nil},
+		// A 30-day window that ended last month is past the 5-minute cap, which
+		// OCI measures from now: [5m] would return no data points at all.
+		{"last month, thirty days long", now.Add(-61 * 24 * time.Hour), now.Add(-31 * 24 * time.Hour), "[1h]", time.Hour, nil},
+		{"eighty-five days back", now.Add(-85 * 24 * time.Hour), now.Add(-60 * 24 * time.Hour), "[1h]", time.Hour, nil},
+		{"beyond retention", now.Add(-120 * 24 * time.Hour), now.Add(-100 * 24 * time.Hour), "", 0, ErrMetricsTooOld},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			gotStr, gotStep, err := monitoringInterval(tc.start, tc.end)
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("err = %v, want %v", err, tc.wantErr)
+			}
+			if gotStr != tc.wantStr || gotStep != tc.wantStep {
+				t.Fatalf("interval = %q/%v, want %q/%v", gotStr, gotStep, tc.wantStr, tc.wantStep)
+			}
+		})
+	}
+}
 
 func TestIpInCIDR(t *testing.T) {
 	tests := []struct {

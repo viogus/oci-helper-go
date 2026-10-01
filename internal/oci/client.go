@@ -1384,22 +1384,36 @@ type TrafficDataPoint struct {
 	PacketsOutPerSec float64 `json:"packetsOutPerSec"`
 }
 
-// intervalForDuration returns an OCI monitoring query interval that is
-// compatible with the given time range. 1-minute intervals are limited
-// to roughly 7 days, 5-minute to 30 days, and 1-hour beyond that.
-func intervalForDuration(d time.Duration) (string, time.Duration) {
-	const (
-		day   = 24 * time.Hour
-		seven = 7 * day
-	)
-	const thirty = 30 * day
+// MonitoringRetention is how far back OCI Monitoring serves metric data. The
+// service caps the returned range by the query resolution, measured from the
+// current time: 1-minute resolution reaches 7 days back, 5-minute reaches 30
+// days, and 1-hour reaches 90 days
+// (https://docs.oracle.com/en-us/iaas/Content/Monitoring/Tasks/query-metric-time-range.htm).
+const MonitoringRetention = 90 * 24 * time.Hour
+
+// ErrMetricsTooOld reports a window OCI Monitoring no longer retains.
+var ErrMetricsTooOld = errors.New("metric data is older than the 90 days OCI Monitoring retains")
+
+// monitoringInterval picks the monitoring query interval and its data-point step
+// for a window. The interval must satisfy two independent caps: the window's
+// length, and how far back from *now* the window starts (the resolution cap is
+// measured from the current time, not from the window's end time). A 30-day
+// window that ended last month therefore needs [1h], not [5m], even though its
+// length alone would allow [5m] — otherwise OCI returns no data points at all.
+func monitoringInterval(startTime, endTime time.Time) (string, time.Duration, error) {
+	need := endTime.Sub(startTime)
+	if lookback := time.Since(startTime); lookback > need {
+		need = lookback
+	}
 	switch {
-	case d <= seven:
-		return "[1m]", time.Minute
-	case d <= thirty:
-		return "[5m]", 5 * time.Minute
+	case need <= 7*24*time.Hour:
+		return "[1m]", time.Minute, nil
+	case need <= 30*24*time.Hour:
+		return "[5m]", 5 * time.Minute, nil
+	case need <= MonitoringRetention:
+		return "[1h]", time.Hour, nil
 	default:
-		return "[1h]", time.Hour
+		return "", 0, ErrMetricsTooOld
 	}
 }
 
@@ -1412,7 +1426,10 @@ func (c *Client) GetVNICTtraffic(ctx context.Context, compartmentID, vnicID stri
 	metricNames := []string{"VnicFromNetworkBytes", "VnicToNetworkBytes", "VnicFromNetworkPackets", "VnicToNetworkPackets"}
 
 	totalDuration := endTime.Sub(startTime)
-	intervalStr, step := intervalForDuration(totalDuration)
+	intervalStr, step, err := monitoringInterval(startTime, endTime)
+	if err != nil {
+		return nil, err
+	}
 	log.Printf("[GetVNICTtraffic] vnic=%s compartment=%s range=%v interval=%s step=%v", vnicID, compartmentID, totalDuration, intervalStr, step)
 
 	for _, name := range metricNames {
@@ -1554,7 +1571,10 @@ func (c *Client) sumVnicMetric(ctx context.Context, compartmentID, vnicID, metri
 // bounded concurrency, and every goroutine writes to its own slice slot so no
 // locking is needed on the hot path.
 func (c *Client) FetchInstancesTrafficDetail(ctx context.Context, compartmentID, region string, instances []InstanceTrafficRef, startTime, endTime time.Time) (*InstancesTrafficDetail, error) {
-	intervalStr, step := intervalForDuration(endTime.Sub(startTime))
+	intervalStr, step, err := monitoringInterval(startTime, endTime)
+	if err != nil {
+		return nil, err
+	}
 
 	// Phase 1: resolve each instance's VNICs. Each goroutine owns one slot.
 	type instanceVNICs struct{ vnics []VnicTrafficStat }

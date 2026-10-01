@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"math"
 	"net/http"
 	"strings"
@@ -24,6 +25,7 @@ func TestTrafficAccountStatsValidation(t *testing.T) {
 	}{
 		{"missing tenant", `{}`, "tenant_id required"},
 		{"unknown tenant", `{"tenant_id":9999}`, "tenant not found"},
+		{"invalid region", `{"tenant_id":` + itoa(tenantID) + `,"region":"not a region"}`, "invalid region"},
 		{"bad start_time", `{"tenant_id":` + itoa(tenantID) + `,"start_time":"nope"}`, "invalid start_time"},
 		{"bad end_time", `{"tenant_id":` + itoa(tenantID) + `,"end_time":"nope"}`, "invalid end_time"},
 		{
@@ -106,4 +108,109 @@ func TestTrafficAccountStatsMethodAndAuth(t *testing.T) {
 	if anon.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("anonymous status = %d, want 401", anon.StatusCode)
 	}
+}
+
+// TestParseTrafficWindow pins the window semantics every traffic view shares:
+// both bounds default to the current billing month, and every view enforces the
+// same ordering and span limits.
+func TestParseTrafficWindow(t *testing.T) {
+	t.Run("defaults to current month", func(t *testing.T) {
+		before := time.Now()
+		start, end, errMsg := parseTrafficWindow("", "")
+		if errMsg != "" {
+			t.Fatalf("errMsg = %q, want empty", errMsg)
+		}
+		wantStart := time.Date(before.Year(), before.Month(), 1, 0, 0, 0, 0, before.Location())
+		if !start.Equal(wantStart) {
+			t.Fatalf("start = %v, want %v", start, wantStart)
+		}
+		if end.Before(before) {
+			t.Fatalf("end = %v, want >= %v", end, before)
+		}
+	})
+
+	t.Run("explicit RFC3339 bounds", func(t *testing.T) {
+		start, end, errMsg := parseTrafficWindow("2026-01-02T03:04:05Z", "2026-01-03T03:04:05Z")
+		if errMsg != "" {
+			t.Fatalf("errMsg = %q, want empty", errMsg)
+		}
+		if start.UTC().Format(time.RFC3339) != "2026-01-02T03:04:05Z" || end.UTC().Format(time.RFC3339) != "2026-01-03T03:04:05Z" {
+			t.Fatalf("window = %v..%v, want the parsed bounds", start, end)
+		}
+	})
+
+	now := time.Now().UTC()
+	cases := []struct {
+		name    string
+		start   string
+		end     string
+		wantErr string
+	}{
+		{"bad start", "nope", now.Format(time.RFC3339), "invalid start_time: "},
+		{"bad end", now.Add(-time.Hour).Format(time.RFC3339), "nope", "invalid end_time: "},
+		{"end equals start", now.Format(time.RFC3339), now.Format(time.RFC3339), "end_time must be after start_time"},
+		{"span 33 days", now.Add(-33 * 24 * time.Hour).Format(time.RFC3339), now.Format(time.RFC3339), "time range too long"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, _, errMsg := parseTrafficWindow(tc.start, tc.end)
+			if !strings.HasPrefix(errMsg, tc.wantErr) {
+				t.Fatalf("errMsg = %q, want prefix %q", errMsg, tc.wantErr)
+			}
+		})
+	}
+
+	// The span cap is inclusive: exactly maxTrafficStatsSpan is still allowed.
+	t.Run("span at the cap", func(t *testing.T) {
+		if _, _, errMsg := parseTrafficWindow(now.Add(-maxTrafficStatsSpan).Format(time.RFC3339), now.Format(time.RFC3339)); errMsg != "" {
+			t.Fatalf("errMsg = %q, want empty", errMsg)
+		}
+	})
+}
+
+// TestCollectTrafficStatsFinalization covers the shared aggregation rollup
+// without touching OCI: unusable regions must surface as errors, never as a
+// clean "within allowance" answer.
+func TestCollectTrafficStatsFinalization(t *testing.T) {
+	srv, store, _, cleanup := setupTestServer(t)
+	defer cleanup()
+
+	tenantID := seedTenant(t, store)
+	tenant, err := store.GetTenant(tenantID)
+	if err != nil || tenant == nil {
+		t.Fatalf("get tenant: %v", err)
+	}
+	start, end, errMsg := parseTrafficWindow("", "")
+	if errMsg != "" {
+		t.Fatalf("window: %q", errMsg)
+	}
+
+	t.Run("no regions", func(t *testing.T) {
+		resp := srv.collectTrafficStats(context.Background(), tenant, nil, start, end)
+		if resp.RegionCount != 0 || resp.InstanceCount != 0 || len(resp.Regions) != 0 {
+			t.Fatalf("empty region list must roll up to zero, got %+v", resp)
+		}
+		if want := float64(defaultTrafficQuotaGB) * 1024 * 1024 * 1024; resp.QuotaBytes != want {
+			t.Fatalf("quota = %v, want %v", resp.QuotaBytes, want)
+		}
+		if resp.QuotaPercent != 0 || resp.Exceeded || resp.Partial {
+			t.Fatalf("zero usage must be within allowance, got %+v", resp)
+		}
+		if resp.TenantID != tenantID || resp.TenantName != tenant.Name {
+			t.Fatalf("response tenant = %d/%q, want %d/%q", resp.TenantID, resp.TenantName, tenantID, tenant.Name)
+		}
+	})
+
+	t.Run("unusable region", func(t *testing.T) {
+		resp := srv.collectTrafficStats(context.Background(), tenant, []string{"not a region"}, start, end)
+		if len(resp.Regions) != 1 || resp.Regions[0].Error != "invalid region" {
+			t.Fatalf("regions = %+v, want one invalid-region error", resp.Regions)
+		}
+		if resp.RegionCount != 0 {
+			t.Fatalf("RegionCount = %d, want 0", resp.RegionCount)
+		}
+		if len(resp.Errors) != 1 || !strings.HasPrefix(resp.Errors[0], "not a region: ") {
+			t.Fatalf("Errors = %v, want one region-prefixed error", resp.Errors)
+		}
+	})
 }

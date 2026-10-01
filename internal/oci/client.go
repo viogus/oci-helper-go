@@ -1484,13 +1484,6 @@ func (c *Client) GetVNICTtraffic(ctx context.Context, compartmentID, vnicID stri
 	return data, nil
 }
 
-// FetchInstancesTrafficResult holds monthly traffic totals for one instance.
-type FetchInstancesTrafficResult struct {
-	InstanceCount   int    `json:"instanceCount"`
-	InboundTraffic  string `json:"inboundTraffic"`
-	OutboundTraffic string `json:"outboundTraffic"`
-}
-
 // InstanceTrafficRef identifies an instance whose traffic should be summed.
 type InstanceTrafficRef struct {
 	OCID string
@@ -1651,51 +1644,6 @@ func (c *Client) FetchInstancesTrafficDetail(ctx context.Context, compartmentID,
 		}
 	}
 	return detail, nil
-}
-
-// FetchInstancesTraffic sums traffic across all VNICs for all instances in a
-// region over the given time range, returning human-readable totals.
-func (c *Client) FetchInstancesTraffic(ctx context.Context, compartmentID, region string, startTime, endTime time.Time) (*FetchInstancesTrafficResult, error) {
-	instances, err := c.ListInstances(ctx, compartmentID)
-	if err != nil {
-		return nil, fmt.Errorf("list instances: %w", err)
-	}
-	refs := make([]InstanceTrafficRef, 0, len(instances))
-	for _, inst := range instances {
-		if inst.Id == nil {
-			continue
-		}
-		refs = append(refs, InstanceTrafficRef{OCID: *inst.Id, Name: pointerToString(inst.DisplayName)})
-	}
-	detail, err := c.FetchInstancesTrafficDetail(ctx, compartmentID, region, refs, startTime, endTime)
-	if err != nil {
-		return nil, err
-	}
-	var totalIn, totalOut float64
-	for _, st := range detail.Stats {
-		totalIn += st.Inbound
-		totalOut += st.Outbound
-	}
-	return &FetchInstancesTrafficResult{
-		InstanceCount:   len(instances),
-		InboundTraffic:  FormatBytes(totalIn),
-		OutboundTraffic: FormatBytes(totalOut),
-	}, nil
-}
-
-// FormatBytes converts bytes to a human-readable string (B/KB/MB/GB/TB).
-func FormatBytes(bytes float64) string {
-	units := []string{"B", "KB", "MB", "GB", "TB"}
-	v := bytes
-	idx := 0
-	for idx < len(units)-1 && v >= 1024 {
-		v /= 1024
-		idx++
-	}
-	if idx == 0 {
-		return fmt.Sprintf("%.0f %s", v, units[idx])
-	}
-	return fmt.Sprintf("%.2f %s", v, units[idx])
 }
 
 // helper for nil-safe pointer-to-string logging

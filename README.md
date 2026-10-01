@@ -358,6 +358,7 @@ All API routes return JSON. Most require a valid session cookie obtained via `/a
 | GET | `/api/metrics` | ✓ | OCI instance metrics (CPU/memory of an instance) |
 | GET | `/api/system/metrics` | ✓ | Host system metrics (CPU/mem/disk/network of the machine running oci-helper) |
 | POST | `/api/traffic` | ✓ | VNIC traffic over time range |
+| POST | `/api/traffic/accountStats` | ✓ | Per-account traffic totals for a time window (all regions or one), incl. free egress allowance usage |
 | GET | `/api/limits` | ✓ | OCI service limits |
 | GET | `/api/logs` | ✓ | System logs |
 
@@ -503,7 +504,7 @@ Implemented routes not listed in the tables above (registered in `internal/handl
 | GET | `/api/instances/vnc/stop`, `/api/instances/vnc/wait` | ✓ | VNC console lifecycle |
 | GET | `/api/instances/vnc/proxy` | ✓ | noVNC WebSocket proxy |
 | POST | `/api/security-rules/release` | ✓ | Release a security rule |
-| GET | `/api/traffic/getCondition`, `/api/traffic/fetchVnics`, `/api/traffic/fetchInstances` | ✓ | Traffic query helpers |
+| GET | `/api/traffic/getCondition`, `/api/traffic/fetchVnics` | ✓ | Traffic query helpers |
 | GET | `/api/limits/services` | ✓ | List OCI limit services |
 | POST | `/api/tenants/refresh-plan-type/batch` | ✓ | Batch refresh tenant plan type |
 | POST | `/api/tenants/{id}/proxy`, `/api/tenants/{id}/users/delete`, `/api/tenants/{id}/mfa/clear`, `/api/tenants/{id}/api-keys/clear`, `/api/tenants/{id}/password-policy`, `/api/tenants/{id}/refresh-plan-type` | ✓ | Tenant sub-actions (proxy, IAM user, MFA devices, API keys, password policy, plan type) |

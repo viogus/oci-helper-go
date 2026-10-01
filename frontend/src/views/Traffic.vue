@@ -2,25 +2,40 @@
   <div>
     <h3>{{ $t('traffic.title') }}</h3>
 
-    <!-- Tenant selector -->
-    <el-select v-model="tenantId" @change="loadCondition" :placeholder="$t('traffic.selectTenant')" style="width:200px;margin-bottom:8px">
-      <el-option v-for="t in tenants" :key="t.id" :label="t.name" :value="t.id" />
-    </el-select>
+    <!-- Shared scope: one account, one region and one time range drive all three tabs -->
+    <el-card class="query-bar">
+      <el-form :inline="true">
+        <el-form-item :label="$t('traffic.account')">
+          <el-select v-model="accountId" style="width:200px" @change="onAccountChange">
+            <el-option :label="$t('traffic.allAccounts')" value="all" />
+            <el-option v-for="t in tenants" :key="t.id" :label="t.name" :value="t.id" />
+          </el-select>
+        </el-form-item>
+        <el-form-item :label="$t('traffic.region')">
+          <el-select v-model="region" :placeholder="$t('traffic.selectRegion')" :disabled="!singleAccount" style="width:200px" @change="onRegionChange">
+            <el-option :label="$t('traffic.allRegions')" value="" />
+            <el-option v-for="r in regionOptions" :key="r.value" :label="r.label" :value="r.value" />
+          </el-select>
+        </el-form-item>
+        <el-form-item :label="$t('traffic.timeRange')">
+          <el-date-picker v-model="range" type="datetimerange" :range-separator="$t('traffic.to')" :start-placeholder="$t('traffic.start')" :end-placeholder="$t('traffic.end')" value-format="YYYY-MM-DDTHH:mm:ss" style="width:380px" />
+        </el-form-item>
+        <el-form-item>
+          <el-button type="primary" :loading="activeLoading" @click="runQuery">{{ $t('traffic.query') }}</el-button>
+          <el-button :disabled="activeLoading" @click="resetQuery">{{ $t('traffic.reset') }}</el-button>
+        </el-form-item>
+      </el-form>
+      <div class="query-hint">{{ $t('traffic.scopeHint') }}</div>
+    </el-card>
 
-    <!-- Tab: query mode vs monthly summary -->
     <el-tabs v-model="activeTab" style="margin-top:8px">
+      <!-- Live query: one VNIC over time -->
       <el-tab-pane :label="$t('traffic.liveQuery')" name="live">
         <el-card>
-          <!-- Region → Instance → VNIC cascade -->
           <el-form :inline="true">
-            <el-form-item :label="$t('traffic.region')">
-              <el-select v-model="selectedRegion" :placeholder="$t('traffic.selectRegion')" @change="onRegionChange" style="width:200px">
-                <el-option v-for="r in regionOptions" :key="r.value" :label="r.label" :value="r.value" />
-              </el-select>
-            </el-form-item>
             <el-form-item :label="$t('traffic.instance')">
-              <el-select v-model="selectedInstance" :placeholder="$t('traffic.selectInstance')" @change="onInstanceChange" :disabled="!selectedRegion" style="width:280px">
-                <el-option v-for="inst in (instanceOptions[selectedRegion] || [])" :key="inst.value" :label="inst.label" :value="inst.value" />
+              <el-select v-model="selectedInstance" :placeholder="$t('traffic.selectInstance')" :disabled="!scopeReady" style="width:280px" @change="onInstanceChange">
+                <el-option v-for="inst in instanceList" :key="inst.value" :label="inst.label" :value="inst.value" />
               </el-select>
             </el-form-item>
             <el-form-item :label="$t('traffic.vnic')">
@@ -30,71 +45,45 @@
             </el-form-item>
           </el-form>
 
-          <el-form :inline="true">
-            <el-form-item :label="$t('traffic.timeRange')">
-              <el-date-picker v-model="timeRange" type="datetimerange" :range-separator="$t('traffic.to')" :start-placeholder="$t('traffic.start')" :end-placeholder="$t('traffic.end')" value-format="YYYY-MM-DDTHH:mm:ss" style="width:380px" />
-            </el-form-item>
-            <el-form-item>
-              <el-button type="primary" @click="loadTraffic" :loading="loading">{{ $t('traffic.query') }}</el-button>
-              <el-button @click="resetTimeRange">{{ $t('traffic.reset') }}</el-button>
-            </el-form-item>
-          </el-form>
-
-          <!-- Chart -->
-          <div v-if="trafficData && trafficData.length > 0" ref="trafficChart" class="chart-box"></div>
-          <el-empty v-if="!loading && trafficData && trafficData.length === 0 && selectedVnic" :description="$t('traffic.noData')" />
+          <div v-if="!scopeReady" class="tab-hint">{{ $t(scopeHintText) }}</div>
+          <template v-else>
+            <div v-if="trafficData && trafficData.length > 0" ref="trafficChart" class="chart-box"></div>
+            <el-empty v-else-if="!loading" :description="$t('traffic.noData')" />
+          </template>
         </el-card>
       </el-tab-pane>
 
+      <!-- Monthly summary: one account over the shared window -->
       <el-tab-pane :label="$t('traffic.monthlySummary')" name="summary">
         <el-card>
-          <el-form :inline="true">
-            <el-form-item :label="$t('traffic.region')">
-              <el-select v-model="summaryRegion" :placeholder="$t('traffic.selectRegion')" style="width:200px">
-                <el-option v-for="r in regionOptions" :key="r.value" :label="r.label" :value="r.value" />
-              </el-select>
-            </el-form-item>
-            <el-form-item>
-              <el-button type="primary" @click="loadSummary" :loading="summaryLoading">{{ $t('traffic.query') }}</el-button>
-            </el-form-item>
-          </el-form>
-
-          <!-- Summary cards -->
-          <div v-if="summaryResult" class="summary-cards">
-            <div class="cost-card total">
-              <div class="cost-value">{{ summaryResult.instanceCount }}</div>
-              <div class="cost-label">{{ $t('traffic.instanceCount') }}</div>
+          <div v-if="!singleAccount" class="tab-hint">{{ $t('traffic.needSingleAccount') }}</div>
+          <template v-else>
+            <div v-if="summaryRow" class="summary-cards">
+              <div class="cost-card total">
+                <div class="cost-value">{{ summaryRow.instanceCount || 0 }}</div>
+                <div class="cost-label">{{ $t('traffic.instanceCount') }}</div>
+              </div>
+              <div class="cost-card inbound">
+                <div class="cost-value">{{ formatBytes(summaryRow.inboundBytes) }}</div>
+                <div class="cost-label">{{ $t('traffic.inboundTotal') }}</div>
+              </div>
+              <div class="cost-card outbound">
+                <div class="cost-value">{{ formatBytes(summaryRow.outboundBytes) }}</div>
+                <div class="cost-label">{{ $t('traffic.outboundTotal') }}</div>
+              </div>
+              <div class="cost-card quota" :class="{ danger: summaryRow.exceeded, warning: summaryRow.partial && !summaryRow.exceeded }">
+                <div class="cost-value">{{ quotaPercentText(summaryRow) }}</div>
+                <div class="cost-label">{{ $t('traffic.quotaUsage') }} · {{ formatBytes(summaryRow.quotaBytes) }}</div>
+              </div>
             </div>
-            <div class="cost-card inbound">
-              <div class="cost-value">{{ summaryResult.inboundTraffic }}</div>
-              <div class="cost-label">{{ $t('traffic.inboundTotal') }}</div>
-            </div>
-            <div class="cost-card outbound">
-              <div class="cost-value">{{ summaryResult.outboundTraffic }}</div>
-              <div class="cost-label">{{ $t('traffic.outboundTotal') }}</div>
-            </div>
-          </div>
-          <el-empty v-if="!summaryLoading && !summaryResult" :description="$t('traffic.selectRegionPrompt')" />
+            <TrafficStatsTable :rows="summaryRow ? [summaryRow] : []" :loading="summaryLoading" :show-account="false" :empty-text="$t('traffic.selectRegionPrompt')" />
+          </template>
         </el-card>
       </el-tab-pane>
 
+      <!-- Account stats: free-allowance overview across accounts -->
       <el-tab-pane :label="$t('traffic.accountStats')" name="accounts">
         <el-card>
-          <el-form :inline="true">
-            <el-form-item :label="$t('traffic.account')">
-              <el-select v-model="statsTenant" style="width:200px">
-                <el-option :label="$t('traffic.allAccounts')" value="all" />
-                <el-option v-for="t in tenants" :key="t.id" :label="t.name" :value="t.id" />
-              </el-select>
-            </el-form-item>
-            <el-form-item :label="$t('traffic.timeRange')">
-              <el-date-picker v-model="statsRange" type="datetimerange" :range-separator="$t('traffic.to')" :start-placeholder="$t('traffic.start')" :end-placeholder="$t('traffic.end')" value-format="YYYY-MM-DDTHH:mm:ss" style="width:380px" />
-            </el-form-item>
-            <el-form-item>
-              <el-button type="primary" @click="loadAccountStats" :loading="statsLoading">{{ $t('traffic.query') }}</el-button>
-            </el-form-item>
-          </el-form>
-
           <div class="stats-hint">{{ $t('traffic.statsHint') }}</div>
 
           <div v-if="statsLoading" class="stats-progress">
@@ -103,69 +92,7 @@
 
           <el-alert v-if="exceededCount > 0" :title="$t('traffic.quotaExceededAlert', { count: exceededCount })" type="error" :closable="false" show-icon style="margin-bottom:12px" />
 
-          <el-table v-if="statsRows.length" :data="statsRows" row-key="tenantId" v-loading="statsLoading" style="margin-top:8px">
-            <el-table-column type="expand">
-              <template #default="{ row }">
-                <el-table :data="row.regions || []" size="small" style="margin:0 12px 12px 48px;width:calc(100% - 60px)">
-                  <el-table-column type="expand">
-                    <template #default="{ row: reg }">
-                      <el-table :data="reg.instances || []" size="small" style="margin:0 12px 12px 60px;width:calc(100% - 72px)">
-                        <el-table-column prop="instanceName" :label="$t('traffic.instance')" min-width="200" show-overflow-tooltip />
-                        <el-table-column :label="$t('traffic.inbound')" width="140">
-                          <template #default="{ row: inst }">{{ fmtBytes(inst.inboundBytes) }}</template>
-                        </el-table-column>
-                        <el-table-column :label="$t('traffic.outbound')" width="140">
-                          <template #default="{ row: inst }">{{ fmtBytes(inst.outboundBytes) }}</template>
-                        </el-table-column>
-                      </el-table>
-                      <el-empty v-if="!(reg.instances || []).length" :description="$t('traffic.noData')" :image-size="40" />
-                    </template>
-                  </el-table-column>
-                  <el-table-column prop="region" :label="$t('traffic.region')" min-width="160" />
-                  <el-table-column prop="instanceCount" :label="$t('traffic.instanceCount')" width="90" />
-                  <el-table-column :label="$t('traffic.inboundTotal')" width="140">
-                    <template #default="{ row: reg }">{{ fmtBytes(reg.inboundBytes) }}</template>
-                  </el-table-column>
-                  <el-table-column :label="$t('traffic.outboundTotal')" width="140">
-                    <template #default="{ row: reg }">{{ fmtBytes(reg.outboundBytes) }}</template>
-                  </el-table-column>
-                  <el-table-column :label="$t('traffic.status')" width="140">
-                    <template #default="{ row: reg }">
-                      <el-tag v-if="reg.error" type="danger" size="small">{{ reg.error }}</el-tag>
-                      <el-tag v-else-if="reg.partial" type="warning" size="small">{{ $t('traffic.partialData') }}</el-tag>
-                      <el-tag v-else type="success" size="small">OK</el-tag>
-                    </template>
-                  </el-table-column>
-                </el-table>
-                <el-alert v-if="(row.errors || []).length" :title="row.errors.join('; ')" type="warning" :closable="false" style="margin:0 12px 12px 48px" />
-              </template>
-            </el-table-column>
-            <el-table-column prop="tenantName" :label="$t('traffic.account')" min-width="160" show-overflow-tooltip />
-            <el-table-column prop="instanceCount" :label="$t('traffic.instanceCount')" width="90" />
-            <el-table-column prop="regionCount" :label="$t('traffic.regionCount')" width="90" />
-            <el-table-column :label="$t('traffic.inboundTotal')" width="130">
-              <template #default="{ row }">{{ fmtBytes(row.inboundBytes) }}</template>
-            </el-table-column>
-            <el-table-column :label="$t('traffic.outboundTotal')" width="130">
-              <template #default="{ row }">{{ fmtBytes(row.outboundBytes) }}</template>
-            </el-table-column>
-            <el-table-column :label="$t('traffic.quota')" width="120">
-              <template #default="{ row }">{{ fmtBytes(row.quotaBytes) }}</template>
-            </el-table-column>
-            <el-table-column :label="$t('traffic.quotaUsage')" width="200">
-              <template #default="{ row }">
-                <el-progress :percentage="Math.min(row.quotaPercent || 0, 100)" :status="row.exceeded ? 'exception' : ((row.quotaPercent || 0) > 80 ? 'warning' : 'success')" :format="() => (row.quotaPercent || 0).toFixed(1) + '%'" />
-              </template>
-            </el-table-column>
-            <el-table-column :label="$t('traffic.status')" width="140">
-              <template #default="{ row }">
-                <el-tag v-if="row.exceeded" type="danger" size="small">{{ $t('traffic.exceeded') }}</el-tag>
-                <el-tag v-else-if="row.partial" type="warning" size="small">{{ $t('traffic.partialData') }}</el-tag>
-                <el-tag v-else type="success" size="small">{{ $t('traffic.withinQuota') }}</el-tag>
-              </template>
-            </el-table-column>
-          </el-table>
-          <el-empty v-else-if="!statsLoading" :description="$t('traffic.statsPrompt')" />
+          <TrafficStatsTable :rows="statsRows" :loading="statsLoading" :empty-text="$t('traffic.statsPrompt')" />
         </el-card>
       </el-tab-pane>
     </el-tabs>
@@ -179,103 +106,197 @@ import { ref, computed, onMounted, nextTick } from 'vue'
 import { get, post } from '../api/index.js'
 import { getAccountStats } from '../api/traffic.js'
 import { listTenants } from '../api/tenants.js'
+import { formatBytes, quotaPercentText } from '../utils/format.js'
 import { use, init } from 'echarts/core'
 import { LineChart } from 'echarts/charts'
 import { GridComponent, TooltipComponent } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
+import TrafficStatsTable from '../components/TrafficStatsTable.vue'
 
 use([LineChart, GridComponent, TooltipComponent, CanvasRenderer])
 
+// Two accounts in flight: each account already fans out across its own regions server-side.
+const ACCOUNT_BATCH = 2
+
 const activeTab = ref('live')
 
-// ── Tenant ──
+// ── Shared scope ──
 const tenants = ref([])
-const tenantId = ref(null)
-
-// ── Cascade data ──
+const accountId = ref('all') // 'all' aggregates every account; the live/summary views need one
+const region = ref('') // '' means all regions for the aggregate views
+const range = ref([])
 const regionOptions = ref([])
 const instanceOptions = ref({})
 const vnicOptions = ref([])
-
-const selectedRegion = ref('')
 const selectedInstance = ref('')
 const selectedVnic = ref('')
+const error = ref('')
 
-// ── Time range ──
-const timeRange = ref([])
-function initTimeRange() {
-  const now = new Date()
-  const oneHourAgo = new Date(now.getTime() - 3600000)
-  timeRange.value = [oneHourAgo.toISOString().slice(0, 19), now.toISOString().slice(0, 19)]
-}
-function resetTimeRange() { initTimeRange() }
+const singleAccount = computed(() => accountId.value !== 'all' && accountId.value != null)
+const currentTenant = computed(() => tenants.value.find(t => t.id === accountId.value) || null)
+const instanceList = computed(() => instanceOptions.value[region.value] || [])
+const scopeReady = computed(() => singleAccount.value && !!region.value)
+const scopeHintText = computed(() => (singleAccount.value ? 'traffic.needRegion' : 'traffic.needSingleAccount'))
 
 // ── Live query ──
 const trafficData = ref(null)
 const loading = ref(false)
-const error = ref('')
 const trafficChart = ref(null)
 let chart = null
 
 // ── Monthly summary ──
-const summaryRegion = ref('')
-const summaryResult = ref(null)
+const summaryRow = ref(null)
 const summaryLoading = ref(false)
 
-// Load tenants then cascade on mount
+// ── Account stats ──
+const statsRows = ref([])
+const statsLoading = ref(false)
+const statsProgress = ref(0)
+const statsTotal = ref(0)
+const exceededCount = computed(() => statsRows.value.filter(r => r.exceeded).length)
+
+const activeLoading = computed(() => {
+  if (activeTab.value === 'live') return loading.value
+  if (activeTab.value === 'summary') return summaryLoading.value
+  return statsLoading.value
+})
+
+// Local wall-clock string for the picker (value-format has no timezone suffix).
+function toLocalDT(d) {
+  const p = n => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
+}
+
+// OCI bills the free egress allowance per calendar month, so every tab defaults to it.
+function initRange() {
+  const now = new Date()
+  range.value = [toLocalDT(new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0)), toLocalDT(now)]
+}
+
 onMounted(async () => {
-  initTimeRange()
-  initStatsRange()
+  initRange()
   try {
     const tRes = await listTenants()
     tenants.value = tRes?.data || []
-    if (tenants.value.length > 0) {
-      tenantId.value = tenants.value[0].id
-      loadCondition()
-    }
   } catch {}
 })
 
 async function loadCondition() {
-  if (!tenantId.value) return
+  if (!singleAccount.value) return
   try {
-    const res = await get('/traffic/getCondition', { tenant_id: tenantId.value })
+    const res = await get('/traffic/getCondition', { tenant_id: accountId.value })
     regionOptions.value = res?.regionOptions || []
     instanceOptions.value = res?.instanceOptions || {}
   } catch {}
 }
 
-// Region changed → clear downstream
-async function onRegionChange() {
+function resetCascade() {
   selectedInstance.value = ''
   selectedVnic.value = ''
   vnicOptions.value = []
 }
 
-// Instance changed → fetch VNICs
+// Scope changed → previous results no longer describe the current query.
+function clearResults() {
+  trafficData.value = null
+  summaryRow.value = null
+  statsRows.value = []
+  statsProgress.value = 0
+  statsTotal.value = 0
+  error.value = ''
+  if (chart) { chart.dispose(); chart = null }
+}
+
+function onAccountChange() {
+  region.value = ''
+  regionOptions.value = []
+  resetCascade()
+  clearResults()
+  if (singleAccount.value) loadCondition()
+}
+
+function onRegionChange() {
+  resetCascade()
+  clearResults()
+}
+
 async function onInstanceChange() {
   selectedVnic.value = ''
   vnicOptions.value = []
-  if (!selectedRegion.value || !selectedInstance.value) return
+  if (!region.value || !selectedInstance.value) return
   try {
-    const res = await get('/traffic/fetchVnics', { tenant_id: tenantId.value, instance_id: selectedInstance.value, region: selectedRegion.value })
-    vnicOptions.value = (Array.isArray(res) ? res : [])
+    const res = await get('/traffic/fetchVnics', { tenant_id: accountId.value, instance_id: selectedInstance.value, region: region.value })
+    vnicOptions.value = Array.isArray(res) ? res : []
     if (vnicOptions.value.length === 1) selectedVnic.value = vnicOptions.value[0].value
   } catch {}
 }
 
-// Query traffic
+function resetQuery() {
+  initRange()
+  region.value = ''
+  resetCascade()
+  clearResults()
+}
+
+// Both aggregate views read the same endpoint: region '' means every subscribed region.
+function windowBody() {
+  return {
+    start_time: new Date(range.value[0]).toISOString(),
+    end_time: new Date(range.value[1]).toISOString(),
+  }
+}
+
+function normalizeStats(row, tenant) {
+  return {
+    ...row,
+    tenantId: row.tenantId ?? row.tenant_id ?? tenant?.id,
+    tenantName: row.tenantName || row.tenant_name || tenant?.name || '',
+  }
+}
+
+function requireWindow() {
+  if (!range.value || range.value.length !== 2) {
+    error.value = 'Invalid time range'
+    return false
+  }
+  return true
+}
+
+async function fetchAccountStats(list, onBatch) {
+  const body = windowBody()
+  const out = []
+  statsProgress.value = 0
+  statsTotal.value = list.length
+  for (let i = 0; i < list.length; i += ACCOUNT_BATCH) {
+    const batch = list.slice(i, i + ACCOUNT_BATCH)
+    const got = await Promise.all(batch.map(t =>
+      getAccountStats({ ...body, tenant_id: t.id, region: region.value })
+        .catch(e => ({ tenant_id: t.id, tenant_name: t.name, regions: [], errors: [e.response?.data?.error || 'query failed'] }))
+    ))
+    out.push(...got.map((r, idx) => normalizeStats(r, batch[idx])))
+    statsProgress.value = Math.min(i + batch.length, list.length)
+    if (onBatch) onBatch(out)
+  }
+  return out
+}
+
+function runQuery() {
+  if (activeTab.value === 'live') return loadTraffic()
+  if (activeTab.value === 'summary') return loadSummary()
+  return loadAccountStats()
+}
+
+// ── Live query ──
 async function loadTraffic() {
-  if (!selectedVnic.value || !timeRange.value || timeRange.value.length !== 2) return
+  if (!scopeReady.value || !selectedVnic.value || !requireWindow()) return
   loading.value = true
   error.value = ''
   try {
     const res = await post('/traffic', {
-      tenant_id: tenantId.value,
-      region: selectedRegion.value,
+      tenant_id: accountId.value,
+      region: region.value,
       vnic_id: selectedVnic.value,
-      start_time: new Date(timeRange.value[0]).toISOString(),
-      end_time: new Date(timeRange.value[1]).toISOString(),
+      ...windowBody(),
     })
     trafficData.value = res?.data || []
     await nextTick()
@@ -293,8 +314,8 @@ function renderChart() {
 
   chart = init(trafficChart.value)
   const times = trafficData.value.map(d => d.timestamp)
-  const bytesIn = trafficData.value.map(d => formatBytesForChart(d.bytesInPerSec || 0))
-  const bytesOut = trafficData.value.map(d => formatBytesForChart(d.bytesOutPerSec || 0))
+  const bytesIn = trafficData.value.map(d => scaleBps(d.bytesInPerSec || 0))
+  const bytesOut = trafficData.value.map(d => scaleBps(d.bytesOutPerSec || 0))
 
   chart.setOption({
     tooltip: { trigger: 'axis' },
@@ -309,90 +330,51 @@ function renderChart() {
   })
 }
 
-function formatBytesForChart(bps) {
+function scaleBps(bps) {
   if (bps >= 1e9) return parseFloat((bps / 1e9).toFixed(2))
   if (bps >= 1e6) return parseFloat((bps / 1e6).toFixed(2))
   if (bps >= 1e3) return parseFloat((bps / 1e3).toFixed(2))
   return parseFloat(bps.toFixed(2))
 }
 
-// Monthly summary
+// ── Monthly summary ──
 async function loadSummary() {
-  if (!summaryRegion.value) return
+  const tenant = currentTenant.value
+  if (!tenant || !requireWindow()) return
   summaryLoading.value = true
+  error.value = ''
   try {
-    const res = await get('/traffic/fetchInstances', { tenant_id: tenantId.value, region: summaryRegion.value })
-    summaryResult.value = res || null
+    const rows = await fetchAccountStats([tenant])
+    summaryRow.value = rows[0] || null
   } catch (e) {
     error.value = e.response?.data?.error || 'Failed to load summary'
   }
   summaryLoading.value = false
 }
 
-// ── Account stats (free-allowance view) ──
-const statsTenant = ref('all')
-const statsRange = ref([])
-const statsLoading = ref(false)
-const statsRows = ref([])
-const statsProgress = ref(0)
-const statsTotal = ref(0)
-const exceededCount = computed(() => statsRows.value.filter(r => r.exceeded).length)
-
-// Local wall-clock string for the picker (value-format has no timezone suffix).
-function toLocalDT(d) {
-  const p = n => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
-}
-
-function initStatsRange() {
-  const now = new Date()
-  // OCI bills the free egress allowance per calendar month.
-  statsRange.value = [toLocalDT(new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0)), toLocalDT(now)]
-}
-
-function fmtBytes(bytes) {
-  const n = Number(bytes) || 0
-  if (n >= 1024 ** 5) return (n / 1024 ** 5).toFixed(2) + ' PiB'
-  if (n >= 1024 ** 4) return (n / 1024 ** 4).toFixed(2) + ' TiB'
-  if (n >= 1024 ** 3) return (n / 1024 ** 3).toFixed(2) + ' GiB'
-  if (n >= 1024 ** 2) return (n / 1024 ** 2).toFixed(2) + ' MiB'
-  if (n >= 1024) return (n / 1024).toFixed(2) + ' KiB'
-  return n.toFixed(0) + ' B'
-}
-
+// ── Account stats ──
 async function loadAccountStats() {
-  if (!statsRange.value || statsRange.value.length !== 2) return
-  const list = statsTenant.value === 'all'
-    ? tenants.value
-    : tenants.value.filter(t => t.id === statsTenant.value)
-  if (!list.length) return
-
-  const start = new Date(statsRange.value[0]).toISOString()
-  const end = new Date(statsRange.value[1]).toISOString()
+  const list = singleAccount.value ? tenants.value.filter(t => t.id === accountId.value) : tenants.value
+  if (!list.length || !requireWindow()) return
 
   statsLoading.value = true
   statsRows.value = []
-  statsProgress.value = 0
-  statsTotal.value = list.length
   error.value = ''
-
-  const collected = []
-  // Two accounts in flight: every account already fans out across its regions.
-  for (let i = 0; i < list.length; i += 2) {
-    const batch = list.slice(i, i + 2)
-    const batchResults = await Promise.all(batch.map(t =>
-      getAccountStats({ tenant_id: t.id, start_time: start, end_time: end })
-        .catch(e => ({ tenant_id: t.id, tenant_name: t.name, regions: [], errors: [e.response?.data?.error || 'query failed'] }))
-    ))
-    collected.push(...batchResults.map((r, idx) => ({ ...r, tenantId: r.tenantId ?? r.tenant_id ?? batch[idx].id, tenantName: r.tenantName || r.tenant_name || batch[idx].name })))
-    statsProgress.value = Math.min(i + batch.length, list.length)
-    statsRows.value = [...collected].sort((a, b) => (b.outboundBytes || 0) - (a.outboundBytes || 0))
+  const byOutbound = rows => [...rows].sort((a, b) => (b.outboundBytes || 0) - (a.outboundBytes || 0))
+  try {
+    await fetchAccountStats(list, rows => { statsRows.value = byOutbound(rows) })
+  } catch (e) {
+    error.value = e.response?.data?.error || 'Failed to load account stats'
   }
   statsLoading.value = false
 }
 </script>
 
 <style scoped>
+.query-bar { margin-bottom: 8px }
+.query-bar :deep(.el-form-item) { margin-bottom: 8px }
+.query-hint { font-size: 12px; color: var(--text-muted) }
+.tab-hint { font-size: 13px; color: var(--text-muted); padding: 8px 0 }
 .chart-box { width:100%; height:380px; margin-top:12px }
 .summary-cards { display:flex; gap:16px; margin-top:16px; flex-wrap:wrap }
 .cost-card {
@@ -402,6 +384,9 @@ async function loadAccountStats() {
 .cost-card.total { border-left:3px solid #2563eb }
 .cost-card.inbound { border-left:3px solid #67C23A }
 .cost-card.outbound { border-left:3px solid #F56C6C }
+.cost-card.quota { border-left:3px solid #e6a23c }
+.cost-card.quota.warning { border-left-color:#e6a23c }
+.cost-card.quota.danger { border-left-color:#F56C6C }
 .cost-value { font-size:22px; font-weight:700; color:var(--text-primary) }
 .cost-label { font-size:12px; color:var(--text-muted); margin-top:4px }
 .stats-hint { font-size:12px; color:var(--text-muted); margin-bottom:8px }

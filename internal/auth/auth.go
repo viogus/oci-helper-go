@@ -19,7 +19,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"sync/atomic"
+	"sync"
 	"time"
 
 	"golang.org/x/crypto/bcrypt"
@@ -30,20 +30,27 @@ type Session struct {
 	Role      string    `json:"role"`
 	CSRFToken string    `json:"csrf"`
 	CreatedAt time.Time `json:"createdAt"`
-	Version   int64     `json:"v"`
+	// SessionID uniquely identifies this session so it can be revoked
+	// server-side (logout) without invalidating every other session.
+	SessionID string `json:"sid"`
 }
 
 const sessionCookie = "oci_helper_session"
 const sessionTTL = 24 * time.Hour
 
 type Service struct {
-	username       string
-	passwordHash   []byte
-	sessionKey     []byte
-	sessionVersion int64
-	mfaSecret      string
-	mfaEnabled     bool
-	secureCookies  bool
+	username      string
+	passwordHash  []byte
+	sessionKey    []byte
+	mfaSecret     string
+	mfaEnabled    bool
+	secureCookies bool
+
+	// revoked holds the SessionIDs that have been logged out, mapped to the
+	// time they were revoked. Entries are pruned after sessionTTL.
+	revokedMu sync.Mutex
+	revoked   map[string]time.Time
+	stopCh    chan struct{}
 }
 
 func New(username, password, mfaSecret string, mfaEnabled bool, secureCookies bool) *Service {
@@ -66,7 +73,39 @@ func New(username, password, mfaSecret string, mfaEnabled bool, secureCookies bo
 		panic("auth: crypto/rand.Read failed for session key: " + err.Error())
 	}
 	s.sessionKey = sk
+	s.revoked = make(map[string]time.Time)
+	s.stopCh = make(chan struct{})
+	go s.cleanupRevoked()
 	return s
+}
+
+// cleanupRevoked periodically drops revoked-session entries older than the
+// session TTL — after that the session would be expired anyway.
+func (s *Service) cleanupRevoked() {
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			cutoff := time.Now().Add(-sessionTTL)
+			s.revokedMu.Lock()
+			for id, at := range s.revoked {
+				if at.Before(cutoff) {
+					delete(s.revoked, id)
+				}
+			}
+			s.revokedMu.Unlock()
+		case <-s.stopCh:
+			return
+		}
+	}
+}
+
+// Close stops the background revocation-cleanup goroutine.
+func (s *Service) Close() {
+	if s.stopCh != nil {
+		close(s.stopCh)
+	}
 }
 
 func (s *Service) ValidatePassword(pw string) bool {
@@ -103,7 +142,7 @@ func (s *Service) ValidateCredentials(r *http.Request) (string, string, bool) {
 // SetLoginCookie creates a signed session and writes it as a cookie.
 // Use after credentials (and optionally MFA) have been validated.
 func (s *Service) SetLoginCookie(w http.ResponseWriter, r *http.Request, user, role string) {
-	sess := Session{User: user, Role: role, CSRFToken: randomToken(), CreatedAt: time.Now(), Version: atomic.LoadInt64(&s.sessionVersion)}
+	sess := Session{User: user, Role: role, CSRFToken: randomToken(), CreatedAt: time.Now(), SessionID: randomToken()}
 	data, err := json.Marshal(sess)
 	if err != nil {
 		http.Error(w, "Internal error", http.StatusInternalServerError)
@@ -132,7 +171,7 @@ func (s *Service) CreateSession(user, role string) string {
 	if role == "" {
 		role = "user"
 	}
-	sess := Session{User: user, Role: role, CSRFToken: randomToken(), CreatedAt: time.Now(), Version: atomic.LoadInt64(&s.sessionVersion)}
+	sess := Session{User: user, Role: role, CSRFToken: randomToken(), CreatedAt: time.Now(), SessionID: randomToken()}
 	data, err := json.Marshal(sess)
 	if err != nil {
 		return ""
@@ -145,8 +184,15 @@ func (s *Service) CreateSession(user, role string) string {
 	return base64.RawURLEncoding.EncodeToString(encrypted)
 }
 
-func (s *Service) Logout(w http.ResponseWriter) {
-	atomic.AddInt64(&s.sessionVersion, 1)
+func (s *Service) Logout(w http.ResponseWriter, r *http.Request) {
+	// Revoke only the caller's session. A global version bump would log out
+	// every other user (including the admin), which any session holder could
+	// abuse as a denial-of-service.
+	if sess := s.GetSession(r); sess != nil && sess.SessionID != "" {
+		s.revokedMu.Lock()
+		s.revoked[sess.SessionID] = time.Now()
+		s.revokedMu.Unlock()
+	}
 	http.SetCookie(w, &http.Cookie{
 		Name:   sessionCookie,
 		Value:  "",
@@ -178,10 +224,19 @@ func (s *Service) GetSession(r *http.Request) *Session {
 	if err := json.Unmarshal(data, &sess); err != nil {
 		return nil
 	}
-	if sess.Version != atomic.LoadInt64(&s.sessionVersion) {
+	// Sessions without an ID predate per-session revocation and are rejected
+	// so they cannot bypass it. The signing key is regenerated on restart, so
+	// this only forces a re-login once after upgrading.
+	if sess.SessionID == "" {
 		return nil
 	}
 	if time.Since(sess.CreatedAt) >= sessionTTL {
+		return nil
+	}
+	s.revokedMu.Lock()
+	_, isRevoked := s.revoked[sess.SessionID]
+	s.revokedMu.Unlock()
+	if isRevoked {
 		return nil
 	}
 	return &sess

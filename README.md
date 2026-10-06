@@ -237,14 +237,15 @@ volumes:
 | `GOOGLE_CLIENT_SECRET` | — | Google OAuth 2.0 client secret |
 | `GOOGLE_REDIRECT_URL` | — | Google OAuth redirect URI |
 | `OCI_SSH_KEY_ENCRYPTION_KEY` | — | Base64-encoded 32-byte AES-256 key for encrypting stored SSH private keys (generate: `openssl rand -base64 32`). Without it, SSH keys encrypted this session are lost on restart |
+| `OCI_TRUSTED_PROXIES` | loopback + private | Comma-separated CIDRs/IPs (e.g. `10.0.0.0/8,172.16.0.0/12`) trusted to supply `X-Forwarded-For` / `X-Real-IP` for client-IP extraction (rate limiting, audit, allowlists). When unset, only loopback/private source addresses are trusted |
 | `OCI_DEBUG_PORT` | — | Optional pprof debug server, bound to `127.0.0.1` only (e.g. `6060`) |
 
 The following are configured through the web panel (stored in SQLite `config` table):
 - Cloudflare API token (`cloudflare_token`); DNS auto-sync (`dns_auto_sync_enabled`, `dns_auto_sync_zone_id`, `dns_auto_sync_domain`, `dns_auto_sync_cfg_id`)
 - SiliconFlow API key (`siliconflow_key`) and model (`siliconflow_model`); AI search toggle (`ai_search_enabled`)
-- Telegram Bot token (`telegram_token`), webhook secret (`telegram_webhook_secret`), chat allowlist (`telegram_chat_id`); DingTalk webhook (`dingtalk_webhook`)
+- Telegram Bot token (`telegram_token`), webhook secret (`telegram_webhook_secret`), chat allowlist (`telegram_chat_id`, **required** to use bot commands — without it only `/start` is answered so the operator can read their chat ID); DingTalk webhook (`dingtalk_webhook`)
 - MFA TOTP secret (set up via `/api/mfa/setup`); SSH key encryption key (`ssh_key_encryption_key`)
-- Panel URL (`panel_url`), Google email allowlist (`google_allowed_emails`), update repo (`update_repo`)
+- Panel URL (`panel_url`), Google email allowlist (`google_allowed_emails`, **required** for Google OAuth — an empty list denies every login), update repo (`update_repo`)
 - Daily broadcast (`daily_broadcast_enabled`, `daily_broadcast_cron`), version update notifications (`version_update_notifications_enabled`)
 
 ## API reference

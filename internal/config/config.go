@@ -25,6 +25,11 @@ type Config struct {
 	SecureCookies      bool
 	DebugPort          string
 	SSHEncryptionKey   string // base64-encoded 32-byte AES-256 key from OCI_SSH_KEY_ENCRYPTION_KEY
+	// TrustedProxies is a list of CIDRs/IPs (OCI_TRUSTED_PROXIES, comma
+	// separated) whose X-Forwarded-For / X-Real-IP headers are trusted for
+	// client-IP extraction. Empty means the built-in default (loopback and
+	// private ranges only).
+	TrustedProxies []string
 }
 
 type GoogleOAuthConfig struct {
@@ -71,6 +76,14 @@ func Load() *Config {
 
 	if v := os.Getenv("OCI_SSH_KEY_ENCRYPTION_KEY"); v != "" {
 		c.SSHEncryptionKey = v
+	}
+
+	if v := os.Getenv("OCI_TRUSTED_PROXIES"); v != "" {
+		for _, part := range strings.Split(v, ",") {
+			if p := strings.TrimSpace(part); p != "" {
+				c.TrustedProxies = append(c.TrustedProxies, p)
+			}
+		}
 	}
 
 	if v := os.Getenv("GOOGLE_CLIENT_ID"); v != "" {

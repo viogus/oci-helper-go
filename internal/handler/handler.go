@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
@@ -105,20 +106,28 @@ func New(cfg *config.Config, store *db.Store) *Server {
 		conversationCacheMu: sync.Mutex{},
 	}
 	s.auditCh = make(chan *db.AuditLog, 1000)
+	trustedProxyNets = buildTrustedProxies(cfg.TrustedProxies)
+	// Install the at-rest secret key so sensitive columns (e.g. create-task
+	// root passwords) are encrypted before any handler or worker touches them.
+	if key, err := s.getSSHEncryptionKey(); err == nil {
+		s.store.SetSecretKey(key)
+	} else {
+		log.Printf("[crypto] at-rest encryption disabled (no key): %v", err)
+	}
 	s.refreshMFACache()
 	s.routes()
 	go s.worker.Run()
-	go s.startDNSAutoSync()
-	go s.startStockMonitor()
-	go s.conversationCacheCleanup()
-	go s.startCreateTaskScheduler()
-	go s.startDailyBroadcast()
-	go s.startVersionUpdateNotify()
-	go s.startupNotify()
-	go s.cleanLogTask()
-	go s.cleanTGSSHConns()
-	go captchaCleanup(s.stopping)
-	go s.flushAuditLogs()
+	safeGo(s.startDNSAutoSync)
+	safeGo(s.startStockMonitor)
+	safeGo(s.conversationCacheCleanup)
+	safeGo(s.startCreateTaskScheduler)
+	safeGo(s.startDailyBroadcast)
+	safeGo(s.startVersionUpdateNotify)
+	safeGo(s.startupNotify)
+	safeGo(s.cleanLogTask)
+	safeGo(s.cleanTGSSHConns)
+	safeGo(func() { captchaCleanup(s.stopping) })
+	safeGo(s.flushAuditLogs)
 	return s
 }
 
@@ -136,6 +145,7 @@ func (s *Server) Shutdown() {
 	close(s.stopping)
 	s.worker.Shutdown()
 	s.ratelimit.stop()
+	s.auth.Close()
 	close(s.auditCh)
 }
 
@@ -195,10 +205,38 @@ func (s *Server) clientForInstance(tenantID int64, instanceID string, w http.Res
 	if !ok {
 		return nil, nil, false
 	}
-	if inst, err := s.store.GetInstanceByID(instanceID); err == nil && inst != nil && inst.Region != "" {
-		client.SetRegion(inst.Region)
+	if inst, err := s.store.GetInstanceByID(instanceID); err == nil && inst != nil {
+		// The instance DB key is "tenantID:ocid"; reject a mismatch instead of
+		// silently operating with the wrong tenant's client/region.
+		if inst.TenantID != 0 && inst.TenantID != tenantID {
+			jsonErr(w, "instance does not belong to the selected tenant")
+			return nil, nil, false
+		}
+		if inst.Region != "" {
+			client.SetRegion(inst.Region)
+		}
 	}
 	return client, tenant, true
+}
+
+// safeGo runs fn in a goroutine and recovers from panics, logging the stack.
+// Use it instead of a bare `go func()` for any background work spawned from a
+// request or scheduler: a panic there would otherwise crash the whole process
+// (net/http only recovers panics on the serving goroutine).
+func safeGo(fn func()) {
+	go func() {
+		defer recoverBackground("safeGo")
+		fn()
+	}()
+}
+
+// recoverBackground logs a recovered panic from a background goroutine with a
+// stack trace. Intended for use as `defer recoverBackground("name")` inside
+// goroutines that must not crash the process.
+func recoverBackground(where string) {
+	if r := recover(); r != nil {
+		slog.Error("panic in background goroutine", "where", where, "panic", r, "stack", string(debug.Stack()))
+	}
 }
 
 func (s *Server) routes() {
@@ -210,17 +248,17 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/oauth/google/login", s.handleGoogleLogin)
 	s.mux.HandleFunc("/api/oauth/google/callback", s.handleGoogleCallback)
 	s.mux.HandleFunc("/api/csrf-token", s.withAuth(s.handleCSRFToken))
-	s.mux.HandleFunc("/api/mfa/setup", s.withAuth(s.handleMFASetup))
-	s.mux.HandleFunc("/api/mfa/verify", s.withAuth(s.handleMFAVerify))
-	s.mux.HandleFunc("/api/mfa/disable", s.withAuth(s.handleMFADisable))
+	s.mux.HandleFunc("/api/mfa/setup", s.withAdmin(s.handleMFASetup))
+	s.mux.HandleFunc("/api/mfa/verify", s.withAdmin(s.handleMFAVerify))
+	s.mux.HandleFunc("/api/mfa/disable", s.withAdmin(s.handleMFADisable))
 	s.mux.HandleFunc("/api/tenants", s.withAuth(s.handleTenants))
 	s.mux.HandleFunc("/api/instances", s.withAuth(s.handleInstances))
 	s.mux.HandleFunc("/api/tasks", s.withAuth(s.handleTasks))
 	s.mux.HandleFunc("/api/audit", s.withAuth(s.handleAudit))
 	s.mux.HandleFunc("/api/ai/chat", s.withAuth(s.handleAIChat))
 	s.mux.HandleFunc("/api/telegram/webhook", s.handleTelegramWebhook)
-	s.mux.HandleFunc("/api/backup", s.withAuth(s.handleBackup))
-	s.mux.HandleFunc("/api/restore", s.withAuth(s.handleRestore))
+	s.mux.HandleFunc("/api/backup", s.withAdmin(s.handleBackup))
+	s.mux.HandleFunc("/api/restore", s.withAdmin(s.handleRestore))
 	s.mux.HandleFunc("/api/public-ips", s.withAuth(s.handlePublicIPs))
 	s.mux.HandleFunc("/api/images", s.withAuth(s.handleListImages))
 	s.mux.HandleFunc("/api/shapes", s.withAuth(s.handleListShapes))
@@ -230,52 +268,52 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/instances/batch-start", s.withAuth(s.handleBatchStart))
 	s.mux.HandleFunc("/api/metrics", s.withAuth(s.handleMetrics))
 	s.mux.HandleFunc("/api/boot-volumes", s.withAuth(s.handleBootVolumes))
-	s.mux.HandleFunc("/api/keys", s.withAuth(s.handleKeys))
+	s.mux.HandleFunc("/api/keys", s.withAdmin(s.handleKeys))
 	s.mux.HandleFunc("/api/dingtalk/notify", s.withAuth(s.handleDingTalkNotify))
 	s.mux.HandleFunc("/api/dingtalk/test", s.withAuth(s.handleDingTalkTest))
 	s.mux.HandleFunc("/api/update/check", s.withAuth(s.handleUpdateCheck))
-	s.mux.HandleFunc("/api/update/now", s.withAuth(s.handleUpdateNow))
-	s.mux.HandleFunc("/api/admin/blacklist", s.withAuth(s.handleAdminBlacklistList))
-	s.mux.HandleFunc("/api/admin/blacklist/clear", s.withAuth(s.handleAdminBlacklistClear))
+	s.mux.HandleFunc("/api/update/now", s.withAdmin(s.handleUpdateNow))
+	s.mux.HandleFunc("/api/admin/blacklist", s.withAdmin(s.handleAdminBlacklistList))
+	s.mux.HandleFunc("/api/admin/blacklist/clear", s.withAdmin(s.handleAdminBlacklistClear))
 	s.mux.HandleFunc("/api/notify/test", s.withAuth(s.handleNotifyTest))
 	// Stock alerts
 	s.mux.HandleFunc("/api/stock-alerts", s.withAuth(s.handleStockAlerts))
 	// SSH keys
-	s.mux.HandleFunc("/api/ssh/keys", s.withAuth(s.handleSSHKeys))
+	s.mux.HandleFunc("/api/ssh/keys", s.withAdmin(s.handleSSHKeys))
 	// Users
 	s.mux.HandleFunc("/api/users", s.withAuth(s.handleUsers))
 	// Instance VNC & config
-	s.mux.HandleFunc("/api/instances/vnc", s.withAuth(s.handleStartVNC))
+	s.mux.HandleFunc("/api/instances/vnc", s.withAuth(s.withLong(s.handleStartVNC)))
 	s.mux.HandleFunc("/api/instances/vnc/stop", s.withAuth(s.handleStopVNC))
-	s.mux.HandleFunc("/api/instances/vnc/wait", s.withAuth(s.handleConsoleWait))
+	s.mux.HandleFunc("/api/instances/vnc/wait", s.withAuth(s.withLong(s.handleConsoleWait)))
 	s.mux.HandleFunc("/api/instances/vnc/proxy", s.withAuth(s.handleVNCProxy))
 	s.mux.HandleFunc("/api/instances/config-info", s.withAuth(s.handleInstanceConfigInfo))
 	s.mux.HandleFunc("/api/shell/ws", s.withAuth(s.handleShellWS))
-	s.mux.HandleFunc("/api/cost/analysis", s.withAuth(s.handleCostAnalysis))
-	s.mux.HandleFunc("/api/cost", s.withAuth(s.handleCost))
+	s.mux.HandleFunc("/api/cost/analysis", s.withAuth(s.withLong(s.handleCostAnalysis)))
+	s.mux.HandleFunc("/api/cost", s.withAuth(s.withLong(s.handleCost)))
 
 	// NEW exact-path routes
 	// instance mutations
 	s.mux.HandleFunc("/api/instances/change-shape", s.withAuth(s.handleChangeShape))
-	s.mux.HandleFunc("/api/instances/change-boot-volume", s.withAuth(s.handleChangeBootVolume))
+	s.mux.HandleFunc("/api/instances/change-boot-volume", s.withAuth(s.withLong(s.handleChangeBootVolume)))
 	s.mux.HandleFunc("/api/instances/attach-ipv6", s.withAuth(s.handleAttachIPv6))
 	s.mux.HandleFunc("/api/instances/disable-ipv6", s.withAuth(s.handleDisableIPv6))
 	s.mux.HandleFunc("/api/instances/network-status", s.withAuth(s.handleNetworkStatus))
 	s.mux.HandleFunc("/api/instances/update-name", s.withAuth(s.handleUpdateInstanceName))
 	s.mux.HandleFunc("/api/instances/change-ip", s.withAuth(s.handleChangeIP))
 	s.mux.HandleFunc("/api/instances/check-alive", s.withAuth(s.handleCheckAlive))
-	s.mux.HandleFunc("/api/instances/one-click-500m", s.withAuth(s.handleOneClick500M))
-	s.mux.HandleFunc("/api/instances/one-click-close-500m", s.withAuth(s.handleOneClickClose500M))
-	s.mux.HandleFunc("/api/instances/shrink-disk", s.withAuth(s.handleShrinkDisk))
-	s.mux.HandleFunc("/api/instances/auto-rescue", s.withAuth(s.handleAutoRescue))
+	s.mux.HandleFunc("/api/instances/one-click-500m", s.withAuth(s.withLong(s.handleOneClick500M)))
+	s.mux.HandleFunc("/api/instances/one-click-close-500m", s.withAuth(s.withLong(s.handleOneClickClose500M)))
+	s.mux.HandleFunc("/api/instances/shrink-disk", s.withAuth(s.withLong(s.handleShrinkDisk)))
+	s.mux.HandleFunc("/api/instances/auto-rescue", s.withAuth(s.withLong(s.handleAutoRescue)))
 	s.mux.HandleFunc("/api/instances/update-shape", s.withAuth(s.handleUpdateShape))
 	// G6: config-update
-	s.mux.HandleFunc("/api/instances/config-update", s.withAuth(s.handleInstanceConfigUpdate))
+	s.mux.HandleFunc("/api/instances/config-update", s.withAuth(s.withLong(s.handleInstanceConfigUpdate)))
 	// G10: batch check alive
-	s.mux.HandleFunc("/api/instances/check-alive-batch", s.withAuth(s.handleCheckAliveBatch))
+	s.mux.HandleFunc("/api/instances/check-alive-batch", s.withAuth(s.withLong(s.handleCheckAliveBatch)))
 	// G16: netboot rescue
-	s.mux.HandleFunc("/api/instances/netboot-rescue/stop", s.withAuth(s.handleNetbootRescueStop))
-	s.mux.HandleFunc("/api/instances/netboot-rescue", s.withAuth(s.handleNetbootRescue))
+	s.mux.HandleFunc("/api/instances/netboot-rescue/stop", s.withAuth(s.withLong(s.handleNetbootRescueStop)))
+	s.mux.HandleFunc("/api/instances/netboot-rescue", s.withAuth(s.withLong(s.handleNetbootRescue)))
 
 	// dashboard glance
 	s.mux.HandleFunc("/api/glance", s.withAuth(s.handleGlance))
@@ -285,10 +323,10 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/security-rules/release", s.withAuth(s.handleSecurityRuleRelease))
 
 	// traffic & monitoring
-	s.mux.HandleFunc("/api/traffic/getCondition", s.withAuth(s.handleTrafficCondition))
-	s.mux.HandleFunc("/api/traffic/fetchVnics", s.withAuth(s.handleTrafficVnics))
-	s.mux.HandleFunc("/api/traffic/accountStats", s.withAuth(s.handleTrafficAccountStats))
-	s.mux.HandleFunc("/api/traffic", s.withAuth(s.handleTraffic))
+	s.mux.HandleFunc("/api/traffic/getCondition", s.withAuth(s.withLong(s.handleTrafficCondition)))
+	s.mux.HandleFunc("/api/traffic/fetchVnics", s.withAuth(s.withLong(s.handleTrafficVnics)))
+	s.mux.HandleFunc("/api/traffic/accountStats", s.withAuth(s.withLong(s.handleTrafficAccountStats)))
+	s.mux.HandleFunc("/api/traffic", s.withAuth(s.withLong(s.handleTraffic)))
 	s.mux.HandleFunc("/api/limits/services", s.withAuth(s.handleLimitsServices))
 	s.mux.HandleFunc("/api/limits", s.withAuth(s.handleLimits))
 	s.mux.HandleFunc("/api/logs", s.withAuth(s.handleLogs))
@@ -302,8 +340,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/defense/enable", s.withAuth(s.handleDefenseEnable))
 	s.mux.HandleFunc("/api/defense/disable", s.withAuth(s.handleDefenseDisable))
 	s.mux.HandleFunc("/api/ip-blacklist", s.withAuth(s.handleIPBlacklist))
-	s.mux.HandleFunc("/api/create-tasks", s.withAuth(s.handleCreateTasks))
-	s.mux.HandleFunc("/api/create-tasks/", s.withAuth(s.handleCreateTasks))
+	s.mux.HandleFunc("/api/create-tasks", s.withAuth(s.withLong(s.handleCreateTasks)))
+	s.mux.HandleFunc("/api/create-tasks/", s.withAuth(s.withLong(s.handleCreateTasks)))
 
 	// Recurring instance-creation schedules (Java oci_create_task parity).
 	s.mux.HandleFunc("/api/create-tasks/recurring", s.withAuth(s.handleRecurringTasks))
@@ -318,10 +356,10 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/ip-info", s.handleIPInfo)
 
 	// G9: tenant upload (BEFORE wildcard /api/tenants/)
-	s.mux.HandleFunc("/api/tenants/upload", s.withAuth(s.handleTenantUpload))
+	s.mux.HandleFunc("/api/tenants/upload", s.withAuth(s.withLong(s.handleTenantUpload)))
 
 	// G15: batch refresh plan type (BEFORE wildcard /api/tenants/)
-	s.mux.HandleFunc("/api/tenants/refresh-plan-type/batch", s.withAuth(s.handleRefreshPlanTypeBatch))
+	s.mux.HandleFunc("/api/tenants/refresh-plan-type/batch", s.withAuth(s.withLong(s.handleRefreshPlanTypeBatch)))
 
 	// G11: captcha send
 	s.mux.HandleFunc("/api/captcha/send", s.withAuth(s.handleCaptchaSend))
@@ -349,13 +387,13 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/cloudflare/oci-sync", s.withAuth(s.handleCloudflareOCISync))
 	s.mux.HandleFunc("/api/public-ips/", s.withAuth(s.handlePublicIPByID))
 	s.mux.HandleFunc("/api/boot-volumes/", s.withAuth(s.handleBootVolumeByID))
-	s.mux.HandleFunc("/api/keys/", s.withAuth(s.handleKeyByID))
+	s.mux.HandleFunc("/api/keys/", s.withAdmin(s.handleKeyByID))
 	s.mux.HandleFunc("/api/vcns/", s.withAuth(s.handleVCNByID))
-	s.mux.HandleFunc("/api/ssh/keys/", s.withAuth(s.handleSSHKeyByID))
+	s.mux.HandleFunc("/api/ssh/keys/", s.withAdmin(s.handleSSHKeyByID))
 	s.mux.HandleFunc("/api/instance-plans/", s.withAuth(s.handleInstancePlanByID))
 	s.mux.HandleFunc("/api/ip-data/", s.withAuth(s.handleIpDataByID))
 	s.mux.HandleFunc("/api/users/", s.withAuth(s.handleUserByID))
-	s.mux.HandleFunc("/api/sync/", s.withAuth(s.handleSync))
+	s.mux.HandleFunc("/api/sync/", s.withAuth(s.withLong(s.handleSync)))
 	s.mux.HandleFunc("/api/stock-alerts/", s.withAuth(s.handleStockAlertByID))
 
 	// Static files (frontend) with SPA fallback.
@@ -406,7 +444,21 @@ func (s *Server) routes() {
 	})
 }
 
-func (s *Server) Handler() http.Handler { return s.mux }
+// Handler returns the root HTTP handler. It wraps the mux with a panic
+// recovery layer so a handler panic yields a clean 500 and a logged stack
+// instead of an abruptly closed connection (which is net/http's default).
+func (s *Server) Handler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if rec := recover(); rec != nil {
+				slog.Error("panic in handler", "method", r.Method, "path", r.URL.Path,
+					"panic", rec, "stack", string(debug.Stack()))
+				http.Error(w, "internal server error", http.StatusInternalServerError)
+			}
+		}()
+		s.mux.ServeHTTP(w, r)
+	})
+}
 
 // --- auth ---
 
@@ -513,10 +565,10 @@ func (s *Server) withAuth(next http.HandlerFunc) http.HandlerFunc {
 		}
 
 		// CSRF check for state-changing methods. GET/HEAD/OPTIONS are exempt.
-		// Sessions created before CSRF was introduced have an empty CSRFToken
-		// (JSON zero value) — the check is skipped for backward compatibility.
+		// Every session now carries a CSRF token; a missing/mismatched token is
+		// always rejected (no backward-compat bypass).
 		if r.Method != http.MethodGet && r.Method != http.MethodHead && r.Method != http.MethodOptions {
-			if r.URL.Path != "/api/csrf-token" && sess.CSRFToken != "" {
+			if r.URL.Path != "/api/csrf-token" {
 				csrfHeader := r.Header.Get("X-CSRF-Token")
 				if csrfHeader == "" || subtle.ConstantTimeCompare([]byte(csrfHeader), []byte(sess.CSRFToken)) != 1 {
 					http.Error(w, "Invalid CSRF token", http.StatusForbidden)
@@ -527,6 +579,36 @@ func (s *Server) withAuth(next http.HandlerFunc) http.HandlerFunc {
 
 		next(sw, r)
 	}
+}
+
+// withAdmin is withAuth plus an admin-role requirement. Use it for sensitive
+// endpoints (backup/restore, key management, global MFA, blacklist) so a
+// non-admin session cannot read secrets or take over the instance.
+// clearWriteDeadline removes the server's WriteTimeout for the current
+// response. Long-running handlers use it so a slow OCI operation cannot be cut
+// off mid-flight; client disconnects still drive cancellation via the request
+// context.
+func clearWriteDeadline(w http.ResponseWriter) {
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
+}
+
+// withLong clears the write deadline before invoking next. Compose as
+// s.withAuth(s.withLong(handler)) for handlers that may exceed the global
+// server WriteTimeout (multi-region OCI sync, disk/rescue operations, ...).
+func (s *Server) withLong(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		clearWriteDeadline(w)
+		next(w, r)
+	}
+}
+
+func (s *Server) withAdmin(next http.HandlerFunc) http.HandlerFunc {
+	return s.withAuth(func(w http.ResponseWriter, r *http.Request) {
+		if !s.requireAdmin(w, r) {
+			return
+		}
+		next(w, r)
+	})
 }
 
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
@@ -607,7 +689,7 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	s.auth.Logout(w)
+	s.auth.Logout(w, r)
 	jsonOK(w, map[string]string{"status": "ok"})
 }
 
@@ -711,21 +793,14 @@ func (s *Server) handleGoogleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Google email allowlist (Java parity): when google_allowed_emails is
-	// configured (comma-separated), only those emails may sign in via OAuth.
-	if allowlist, _ := s.store.GetConfig("google_allowed_emails"); strings.TrimSpace(allowlist) != "" {
-		allowed := false
-		for _, e := range strings.Split(allowlist, ",") {
-			if strings.EqualFold(strings.TrimSpace(e), userInfo.Email) {
-				allowed = true
-				break
-			}
-		}
-		if !allowed {
-			s.audit(0, "oauth:denied", "email not in allowlist: "+userInfo.Email, r)
-			http.Error(w, "Forbidden: email not allowed", http.StatusForbidden)
-			return
-		}
+	// Google email allowlist: OAuth is only usable for explicitly allowlisted
+	// emails. An empty allowlist denies everyone — otherwise any Google
+	// account on the internet could obtain a valid panel session.
+	allowlist, _ := s.store.GetConfig("google_allowed_emails")
+	if !oauthEmailAllowed(allowlist, userInfo.Email) {
+		s.audit(0, "oauth:denied", "email not in allowlist: "+userInfo.Email, r)
+		http.Error(w, "Forbidden: email not allowed", http.StatusForbidden)
+		return
 	}
 
 	// set session using signed cookie
@@ -737,10 +812,16 @@ func (s *Server) handleGoogleCallback(w http.ResponseWriter, r *http.Request) {
 		oauthUser = u
 	}
 	// Enforce MFA for OAuth login.
+	// Prefer the X-TOTP header so the code is not placed in the URL (and thus
+	// in proxy access logs / Referer headers); the query param is kept as a
+	// fallback for the browser redirect flow.
+	totp := r.Header.Get("X-TOTP")
+	if totp == "" {
+		totp = r.URL.Query().Get("totp")
+	}
 	// Per-user MFA takes precedence over global MFA.
 	if oauthUser != nil && oauthUser.MFAEnabled {
 		// Per-user MFA is enabled — require TOTP
-		totp := r.URL.Query().Get("totp")
 		if totp == "" || !auth.ValidateTOTP(oauthUser.MFASecret, totp) {
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
@@ -752,7 +833,6 @@ func (s *Server) handleGoogleCallback(w http.ResponseWriter, r *http.Request) {
 		mfaSecret := s.mfaCache.secret
 		s.mfaCacheMu.RUnlock()
 		if mfaEnabled {
-			totp := r.URL.Query().Get("totp")
 			if mfaSecret == "" || !auth.ValidateTOTP(mfaSecret, totp) {
 				http.Error(w, "Unauthorized", http.StatusUnauthorized)
 				return
@@ -775,6 +855,41 @@ func (s *Server) handleGoogleCallback(w http.ResponseWriter, r *http.Request) {
 
 // --- config ---
 
+// maskSecret obscures a secret for API responses. It never returns the full
+// value, including for short secrets (<=8 chars) and empty strings stay empty.
+func maskSecret(v string) string {
+	if v == "" {
+		return ""
+	}
+	if len(v) <= 8 {
+		return "***"
+	}
+	return v[:2] + "***" + v[len(v)-2:]
+}
+
+// configSecretKeys are the /api/config keys whose values are masked on read and
+// must never be overwritten by a masked round-trip write.
+var configSecretKeys = map[string]bool{
+	"telegram_token": true, "cloudflare_token": true,
+	"siliconflow_key": true, "google_client_secret": true,
+	"telegram_webhook_secret": true,
+}
+
+// oauthEmailAllowed reports whether email may sign in via Google OAuth.
+// An empty allowlist denies every email (fail-closed).
+func oauthEmailAllowed(allowlist, email string) bool {
+	if strings.TrimSpace(email) == "" {
+		return false
+	}
+	for _, e := range strings.Split(allowlist, ",") {
+		e = strings.TrimSpace(e)
+		if e != "" && strings.EqualFold(e, email) {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
@@ -789,16 +904,12 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			"version_update_notifications_enabled", "update_repo", "panel_url",
 			"traffic_quota_gb",
 		}
-		secretKeys := map[string]bool{
-			"telegram_token": true, "cloudflare_token": true,
-			"siliconflow_key": true, "google_client_secret": true,
-			"telegram_webhook_secret": true,
-		}
+		secretKeys := configSecretKeys
 		out := map[string]string{"username": s.cfg.Username}
 		for _, k := range keys {
 			v, _ := s.store.GetConfig(k)
-			if secretKeys[k] && len(v) > 8 {
-				out[k] = v[:2] + "***" + v[len(v)-2:]
+			if secretKeys[k] {
+				out[k] = maskSecret(v)
 			} else {
 				out[k] = v
 			}
@@ -813,15 +924,22 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			Value string `json:"value"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			jsonErr(w, "invalid body: "+err.Error())
+			s.apiErr(w, r, "invalid body: ", err)
 			return
 		}
 		if req.Key == "" {
 			jsonErr(w, "key required")
 			return
 		}
+		// A value containing the mask marker is a redacted round-trip from the
+		// Settings UI, not a real update — treat it as unchanged so clicking
+		// "Save" cannot overwrite the stored secret with "ab***yz".
+		if configSecretKeys[req.Key] && strings.Contains(req.Value, "***") {
+			jsonOK(w, map[string]string{"status": "ok", "unchanged": "true"})
+			return
+		}
 		if err := s.store.SetConfig(req.Key, req.Value); err != nil {
-			jsonErr(w, "set config: "+err.Error())
+			s.apiErr(w, r, "set config: ", err)
 			return
 		}
 		s.audit(0, "config:set", req.Key, r)
@@ -870,7 +988,7 @@ func (s *Server) handleMFAVerify(w http.ResponseWriter, r *http.Request) {
 		Code string `json:"code"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		jsonErr(w, "invalid body: "+err.Error())
+		s.apiErr(w, r, "invalid body: ", err)
 		return
 	}
 	s.mfaCacheMu.RLock()
@@ -898,7 +1016,7 @@ func (s *Server) handleMFADisable(w http.ResponseWriter, r *http.Request) {
 		Code string `json:"code"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		jsonErr(w, "invalid body: "+err.Error())
+		s.apiErr(w, r, "invalid body: ", err)
 		return
 	}
 	s.mfaCacheMu.RLock()
@@ -939,12 +1057,12 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 	inst, err := client.GetInstance(r.Context(), instanceID)
 	if err != nil {
-		jsonErr(w, "get instance: "+err.Error())
+		s.apiErr(w, r, "get instance: ", err)
 		return
 	}
 	metrics, err := client.GetMetrics(r.Context(), *inst.CompartmentId, instanceID)
 	if err != nil {
-		jsonErr(w, "metrics: "+err.Error())
+		s.apiErr(w, r, "metrics: ", err)
 		return
 	}
 	jsonOK(w, metrics)
@@ -961,7 +1079,7 @@ func (s *Server) ociClientFromQuery(w http.ResponseWriter, r *http.Request) (*oc
 	}
 	client, err := s.clientFor(t)
 	if err != nil {
-		jsonErr(w, "oci client: "+err.Error())
+		s.apiErr(w, r, "oci client: ", err)
 		return nil, nil, false
 	}
 	return client, t, true
@@ -978,7 +1096,7 @@ func (s *Server) handleListImages(w http.ResponseWriter, r *http.Request) {
 	}
 	images, err := client.ListImages(r.Context(), t.TenancyOCID, osFilter)
 	if err != nil {
-		jsonErr(w, "list images: "+err.Error())
+		s.apiErr(w, r, "list images: ", err)
 		return
 	}
 	jsonOK(w, images)
@@ -996,7 +1114,7 @@ func (s *Server) handleListShapes(w http.ResponseWriter, r *http.Request) {
 	}
 	shapes, err := client.ListShapes(r.Context(), t.TenancyOCID, imageID)
 	if err != nil {
-		jsonErr(w, "list shapes: "+err.Error())
+		s.apiErr(w, r, "list shapes: ", err)
 		return
 	}
 	jsonOK(w, shapes)
@@ -1012,7 +1130,7 @@ func (s *Server) handleListVCNs(w http.ResponseWriter, r *http.Request) {
 	}
 	vcns, err := client.ListVCNs(r.Context(), t.TenancyOCID)
 	if err != nil {
-		jsonErr(w, "list vcns: "+err.Error())
+		s.apiErr(w, r, "list vcns: ", err)
 		return
 	}
 
@@ -1054,7 +1172,7 @@ func (s *Server) handleListSubnets(w http.ResponseWriter, r *http.Request) {
 	}
 	subnets, err := client.ListSubnets(r.Context(), t.TenancyOCID, vcnID)
 	if err != nil {
-		jsonErr(w, "list subnets: "+err.Error())
+		s.apiErr(w, r, "list subnets: ", err)
 		return
 	}
 	jsonOK(w, subnets)
@@ -1067,7 +1185,7 @@ func (s *Server) handleListADs(w http.ResponseWriter, r *http.Request) {
 	}
 	ads, err := client.ListAvailabilityDomains(r.Context(), t.TenancyOCID)
 	if err != nil {
-		jsonErr(w, "list ads: "+err.Error())
+		s.apiErr(w, r, "list ads: ", err)
 		return
 	}
 	jsonOK(w, ads)
@@ -1097,7 +1215,7 @@ func (s *Server) handleAIChat(w http.ResponseWriter, r *http.Request) {
 		Messages       []ai.ChatMessage `json:"messages"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		jsonErr(w, "invalid body: "+err.Error())
+		s.apiErr(w, r, "invalid body: ", err)
 		return
 	}
 
@@ -1179,7 +1297,7 @@ func (s *Server) handleAIChat(w http.ResponseWriter, r *http.Request) {
 
 	resp, err := client.Chat(req.Messages)
 	if err != nil {
-		jsonErr(w, "ai: "+err.Error())
+		s.apiErr(w, r, "ai: ", err)
 		return
 	}
 	if req.SessionID != "" {
@@ -1214,14 +1332,14 @@ func (s *Server) handleShell(w http.ResponseWriter, r *http.Request) {
 
 	client, err := s.clientFor(t)
 	if err != nil {
-		jsonErr(w, "oci client: "+err.Error())
+		s.apiErr(w, r, "oci client: ", err)
 		return
 	}
 
 	// get instance to verify it exists
 	inst, err := client.GetInstance(r.Context(), instanceID)
 	if err != nil {
-		jsonErr(w, "get instance: "+err.Error())
+		s.apiErr(w, r, "get instance: ", err)
 		return
 	}
 
@@ -1270,7 +1388,43 @@ func isTrustedProxy(addr string) bool {
 	if ip == nil {
 		return false
 	}
+	// Explicit allowlist (OCI_TRUSTED_PROXIES) takes precedence. When set,
+	// only those networks may supply X-Forwarded-For / X-Real-IP.
+	if len(trustedProxyNets) > 0 {
+		for _, n := range trustedProxyNets {
+			if n.Contains(ip) {
+				return true
+			}
+		}
+		return false
+	}
 	return ip.IsLoopback() || ip.IsPrivate()
+}
+
+// trustedProxyNets holds the parsed OCI_TRUSTED_PROXIES entries. It is set
+// once during Server construction and treated as read-only afterwards.
+var trustedProxyNets []*net.IPNet
+
+// buildTrustedProxies parses CIDR or bare IP entries into networks.
+func buildTrustedProxies(specs []string) []*net.IPNet {
+	var out []*net.IPNet
+	for _, s := range specs {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			continue
+		}
+		if !strings.Contains(s, "/") {
+			if strings.Contains(s, ":") {
+				s += "/128"
+			} else {
+				s += "/32"
+			}
+		}
+		if _, n, err := net.ParseCIDR(s); err == nil {
+			out = append(out, n)
+		}
+	}
+	return out
 }
 
 func maskIP(s string) string {
@@ -1352,11 +1506,28 @@ func jsonErrStatus(w http.ResponseWriter, msg string, status int) {
 
 // clientSafeErr logs the full error server-side (with request ID) and
 // returns a sanitized message to the client. Use this instead of
-// jsonErr(w, "prefix: "+err.Error()) when err comes from the OCI SDK,
+// s.apiErr(w, r, "prefix: ", err) when err comes from the OCI SDK,
 // OS filesystem, or any external system that may leak paths or tenancy
 // details in its error strings.
 func (s *Server) clientSafeErr(w http.ResponseWriter, publicMsg string, err error) {
 	s.logf(&http.Request{}, "%s: %v", publicMsg, err)
+	jsonErr(w, publicMsg)
+}
+
+// apiErr logs the underlying error (with the request ID) and returns only the
+// public message to the client, so internal details — filesystem paths, SQL
+// errors, OCI request IDs — are never disclosed. Prefer this over
+// s.apiErr(w, r, "context: ", err).
+func (s *Server) apiErr(w http.ResponseWriter, r *http.Request, publicMsg string, err error) {
+	publicMsg = strings.TrimRight(publicMsg, ": ")
+	if publicMsg == "" {
+		publicMsg = "internal error"
+	}
+	if r != nil {
+		s.logf(r, "%s: %v", publicMsg, err)
+	} else {
+		log.Printf("[api] %s: %v", publicMsg, err)
+	}
 	jsonErr(w, publicMsg)
 }
 
@@ -1447,7 +1618,7 @@ func (s *Server) handleAdminBlacklistList(w http.ResponseWriter, r *http.Request
 	}
 	entries, err := s.store.ListLoginBlacklist()
 	if err != nil {
-		jsonErr(w, "list login blacklist: "+err.Error())
+		s.apiErr(w, r, "list login blacklist: ", err)
 		return
 	}
 	if entries == nil {
@@ -1465,7 +1636,7 @@ func (s *Server) handleAdminBlacklistClear(w http.ResponseWriter, r *http.Reques
 		IP string `json:"ip"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		jsonErr(w, "invalid body: "+err.Error())
+		s.apiErr(w, r, "invalid body: ", err)
 		return
 	}
 	var removed bool

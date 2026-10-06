@@ -100,6 +100,8 @@ func TestTGSSHValidateCommand(t *testing.T) {
 		"top", "vi /etc/hosts", "tail -f /var/log/syslog", "htop",
 		"echo x; top", "cmd && reboot", "a || b", "ls `id`", "echo $(rm -rf /)",
 		"ls\nreboot", "echo hi\rrm -rf /", "echo x | bash", "sudo reboot",
+		"/bin/sh", "/usr/bin/sudo id", "cat x | /bin/sh", "id > /tmp/x",
+		"echo ${IFS}id", "env sh", "xargs sh", "timeout 5 sh", "ls | ",
 	}
 	for _, c := range blocked {
 		if msg := tgSSHValidateCommand(c); msg == "" {

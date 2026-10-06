@@ -1,7 +1,7 @@
 package handler
 
 import (
-"encoding/json"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -54,7 +54,6 @@ func setupTestServer(t *testing.T) (*Server, *db.Store, *httptest.Server, func()
 
 	return srv, store, ts, cleanup
 }
-
 
 // testAuthCache caches the session cookie and CSRF token so every authedReq
 // call doesn't re-authenticate (avoiding bcrypt overhead per request).

@@ -42,7 +42,7 @@ func (s *Server) handleCloudflare(w http.ResponseWriter, r *http.Request) {
 	case path == "zones" && r.Method == http.MethodGet:
 		zones, err := cf.ListZones()
 		if err != nil {
-			jsonErr(w, "list zones: "+err.Error())
+			s.apiErr(w, r, "list zones: ", err)
 			return
 		}
 		jsonOK(w, zones)
@@ -51,7 +51,7 @@ func (s *Server) handleCloudflare(w http.ResponseWriter, r *http.Request) {
 		zoneID := parts[0]
 		records, err := cf.ListDNSRecords(zoneID)
 		if err != nil {
-			jsonErr(w, "list records: "+err.Error())
+			s.apiErr(w, r, "list records: ", err)
 			return
 		}
 		jsonOK(w, records)
@@ -60,12 +60,12 @@ func (s *Server) handleCloudflare(w http.ResponseWriter, r *http.Request) {
 		zoneID := parts[0]
 		var record cloudflare.DNSRecord
 		if err := json.NewDecoder(r.Body).Decode(&record); err != nil {
-			jsonErr(w, "invalid body: "+err.Error())
+			s.apiErr(w, r, "invalid body: ", err)
 			return
 		}
 		created, err := cf.CreateDNSRecord(zoneID, record)
 		if err != nil {
-			jsonErr(w, "create record: "+err.Error())
+			s.apiErr(w, r, "create record: ", err)
 			return
 		}
 		s.audit(0, "cloudflare:record:create", record.Name, r)
@@ -75,12 +75,12 @@ func (s *Server) handleCloudflare(w http.ResponseWriter, r *http.Request) {
 		zoneID, recordID := parts[0], parts[2]
 		var record cloudflare.DNSRecord
 		if err := json.NewDecoder(r.Body).Decode(&record); err != nil {
-			jsonErr(w, "invalid body: "+err.Error())
+			s.apiErr(w, r, "invalid body: ", err)
 			return
 		}
 		updated, err := cf.UpdateDNSRecord(zoneID, recordID, record)
 		if err != nil {
-			jsonErr(w, "update record: "+err.Error())
+			s.apiErr(w, r, "update record: ", err)
 			return
 		}
 		s.audit(0, "cloudflare:record:update", record.Name, r)
@@ -89,7 +89,7 @@ func (s *Server) handleCloudflare(w http.ResponseWriter, r *http.Request) {
 	case len(parts) == 3 && parts[1] == "records" && r.Method == http.MethodDelete:
 		zoneID, recordID := parts[0], parts[2]
 		if err := cf.DeleteDNSRecord(zoneID, recordID); err != nil {
-			jsonErr(w, "delete record: "+err.Error())
+			s.apiErr(w, r, "delete record: ", err)
 			return
 		}
 		s.audit(0, "cloudflare:record:delete", recordID, r)
@@ -102,11 +102,11 @@ func (s *Server) handleCloudflare(w http.ResponseWriter, r *http.Request) {
 			NewIP  string `json:"newIp"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			jsonErr(w, "invalid body: "+err.Error())
+			s.apiErr(w, r, "invalid body: ", err)
 			return
 		}
 		if err := cf.UpdateDNSRecordIP(req.ZoneID, req.Name, req.NewIP); err != nil {
-			jsonErr(w, "update ip: "+err.Error())
+			s.apiErr(w, r, "update ip: ", err)
 			return
 		}
 		s.audit(0, "cloudflare:ip:update", req.Name+" → "+maskIP(req.NewIP), r)
@@ -140,18 +140,21 @@ func (s *Server) handleCloudflareCfgs(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		list, err := s.store.ListCfCfgs()
 		if err != nil {
-			jsonErr(w, "list cf configs: "+err.Error())
+			s.apiErr(w, r, "list cf configs: ", err)
 			return
 		}
 		if list == nil {
 			list = []db.CfCfg{}
+		}
+		for i := range list {
+			list[i] = maskCfCfg(list[i])
 		}
 		jsonOK(w, map[string]interface{}{"data": list})
 
 	case http.MethodPost:
 		var cfg db.CfCfg
 		if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
-			jsonErr(w, "invalid body: "+err.Error())
+			s.apiErr(w, r, "invalid body: ", err)
 			return
 		}
 		if cfg.Name == "" {
@@ -159,15 +162,23 @@ func (s *Server) handleCloudflareCfgs(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := s.store.CreateCfCfg(&cfg); err != nil {
-			jsonErr(w, "create cf config: "+err.Error())
+			s.apiErr(w, r, "create cf config: ", err)
 			return
 		}
 		s.audit(0, "cloudflare:cfg:create", cfg.Name, r)
-		jsonOK(w, cfg)
+		jsonOK(w, maskCfCfg(cfg))
 
 	default:
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+// maskCfCfg returns a copy of cfg with credential fields redacted for API
+// responses, so list endpoints never leak Cloudflare tokens/API keys.
+func maskCfCfg(cfg db.CfCfg) db.CfCfg {
+	cfg.Token = maskSecret(cfg.Token)
+	cfg.APIKey = maskSecret(cfg.APIKey)
+	return cfg
 }
 
 func (s *Server) handleCloudflareCfgByID(w http.ResponseWriter, r *http.Request) {
@@ -192,7 +203,7 @@ func (s *Server) handleCloudflareCfgByID(w http.ResponseWriter, r *http.Request)
 			Enabled *bool   `json:"enabled"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			jsonErr(w, "invalid body: "+err.Error())
+			s.apiErr(w, r, "invalid body: ", err)
 			return
 		}
 		cur, gerr := s.store.GetCfCfg(id)
@@ -205,13 +216,19 @@ func (s *Server) handleCloudflareCfgByID(w http.ResponseWriter, r *http.Request)
 			merged.Name = *req.Name
 		}
 		if req.Token != nil {
-			merged.Token = *req.Token
+			// Ignore a redacted round-trip value so a UI that shows the masked
+			// token cannot overwrite the real one.
+			if !strings.Contains(*req.Token, "***") {
+				merged.Token = *req.Token
+			}
 		}
 		if req.Email != nil {
 			merged.Email = *req.Email
 		}
 		if req.APIKey != nil {
-			merged.APIKey = *req.APIKey
+			if !strings.Contains(*req.APIKey, "***") {
+				merged.APIKey = *req.APIKey
+			}
 		}
 		if req.ZoneID != nil {
 			merged.ZoneID = *req.ZoneID
@@ -224,7 +241,7 @@ func (s *Server) handleCloudflareCfgByID(w http.ResponseWriter, r *http.Request)
 			return
 		}
 		if err := s.store.UpdateCfCfg(&merged); err != nil {
-			jsonErr(w, "update cf config: "+err.Error())
+			s.apiErr(w, r, "update cf config: ", err)
 			return
 		}
 		s.audit(0, "cloudflare:cfg:update", merged.Name, r)
@@ -232,11 +249,11 @@ func (s *Server) handleCloudflareCfgByID(w http.ResponseWriter, r *http.Request)
 		if fresh == nil {
 			fresh = &merged
 		}
-		jsonOK(w, fresh)
+		jsonOK(w, maskCfCfg(*fresh))
 
 	case http.MethodDelete:
 		if err := s.store.DeleteCfCfg(id); err != nil {
-			jsonErr(w, "delete cf config: "+err.Error())
+			s.apiErr(w, r, "delete cf config: ", err)
 			return
 		}
 		s.audit(0, "cloudflare:cfg:delete", fmt.Sprintf("%d", id), r)
@@ -258,7 +275,7 @@ func (s *Server) handleDNSBindings(w http.ResponseWriter, r *http.Request) {
 		instanceID := r.URL.Query().Get("instance_id")
 		list, err := s.store.ListInstanceDNSBindings(instanceID)
 		if err != nil {
-			jsonErr(w, "list dns bindings: "+err.Error())
+			s.apiErr(w, r, "list dns bindings: ", err)
 			return
 		}
 		if list == nil {
@@ -269,7 +286,7 @@ func (s *Server) handleDNSBindings(w http.ResponseWriter, r *http.Request) {
 	case http.MethodPost:
 		var b db.InstanceDNSBinding
 		if err := json.NewDecoder(r.Body).Decode(&b); err != nil {
-			jsonErr(w, "invalid body: "+err.Error())
+			s.apiErr(w, r, "invalid body: ", err)
 			return
 		}
 		if b.InstanceID == "" {
@@ -305,7 +322,7 @@ func (s *Server) handleDNSBindings(w http.ResponseWriter, r *http.Request) {
 			b.TTL = 120
 		}
 		if err := s.store.CreateInstanceDNSBinding(&b); err != nil {
-			jsonErr(w, "create dns binding: "+err.Error())
+			s.apiErr(w, r, "create dns binding: ", err)
 			return
 		}
 		s.audit(b.TenantID, "cloudflare:binding:create", b.InstanceID+" -> "+b.Name, r)
@@ -344,7 +361,7 @@ func (s *Server) handleDNSBindingByID(w http.ResponseWriter, r *http.Request) {
 			Enabled    *bool   `json:"enabled"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			jsonErr(w, "invalid body: "+err.Error())
+			s.apiErr(w, r, "invalid body: ", err)
 			return
 		}
 		cur, gerr := s.store.GetInstanceDNSBinding(id)
@@ -403,7 +420,7 @@ func (s *Server) handleDNSBindingByID(w http.ResponseWriter, r *http.Request) {
 			merged.TTL = 120
 		}
 		if err := s.store.UpdateInstanceDNSBinding(&merged); err != nil {
-			jsonErr(w, "update dns binding: "+err.Error())
+			s.apiErr(w, r, "update dns binding: ", err)
 			return
 		}
 		s.audit(merged.TenantID, "cloudflare:binding:update", merged.InstanceID+" -> "+merged.Name, r)
@@ -417,7 +434,7 @@ func (s *Server) handleDNSBindingByID(w http.ResponseWriter, r *http.Request) {
 	case http.MethodDelete:
 		cur, _ := s.store.GetInstanceDNSBinding(id)
 		if err := s.store.DeleteInstanceDNSBinding(id); err != nil {
-			jsonErr(w, "delete dns binding: "+err.Error())
+			s.apiErr(w, r, "delete dns binding: ", err)
 			return
 		}
 		tenantID := int64(0)
@@ -448,7 +465,7 @@ func (s *Server) handleCloudflareOCISync(w http.ResponseWriter, r *http.Request)
 		InstanceIDs []string `json:"instance_ids"` // optional: specific instances
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		jsonErr(w, "invalid body: "+err.Error())
+		s.apiErr(w, r, "invalid body: ", err)
 		return
 	}
 	if req.TenantID == 0 || req.ZoneID == "" {
@@ -501,7 +518,7 @@ func (s *Server) handleCloudflareOCISync(w http.ResponseWriter, r *http.Request)
 	} else {
 		list, err := s.store.ListInstances(req.TenantID)
 		if err != nil {
-			jsonErr(w, "list instances: "+err.Error())
+			s.apiErr(w, r, "list instances: ", err)
 			return
 		}
 		instances = list

@@ -23,11 +23,15 @@ func (s *Server) handleRecurringTasks(w http.ResponseWriter, r *http.Request) {
 		tenantID, _ := strconv.ParseInt(r.URL.Query().Get("tenant_id"), 10, 64)
 		list, err := s.store.ListCreateTasks(tenantID)
 		if err != nil {
-			jsonErr(w, "list recurring tasks: "+err.Error())
+			s.apiErr(w, r, "list recurring tasks: ", err)
 			return
 		}
 		if list == nil {
 			list = []db.CreateTask{}
+		}
+		// Never return the plaintext root password over the API.
+		for i := range list {
+			list[i].RootPassword = maskSecret(list[i].RootPassword)
 		}
 		jsonOK(w, map[string]interface{}{"data": list, "total": len(list)})
 	case http.MethodPost:
@@ -44,7 +48,7 @@ func (s *Server) handleRecurringTasks(w http.ResponseWriter, r *http.Request) {
 			RootPassword    string  `json:"root_password"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			jsonErr(w, "invalid body: "+err.Error())
+			s.apiErr(w, r, "invalid body: ", err)
 			return
 		}
 		if req.TenantID == 0 {
@@ -89,11 +93,13 @@ func (s *Server) handleRecurringTasks(w http.ResponseWriter, r *http.Request) {
 			RootPassword:    req.RootPassword,
 		}
 		if err := s.store.CreateCreateTask(task); err != nil {
-			jsonErr(w, "create recurring task: "+err.Error())
+			s.apiErr(w, r, "create recurring task: ", err)
 			return
 		}
 		s.audit(req.TenantID, "create-task:create", fmt.Sprintf("schedule %d instances every %ds", req.CreateNumbers, req.IntervalSeconds), r)
-		jsonOK(w, task)
+		resp := *task
+		resp.RootPassword = maskSecret(resp.RootPassword)
+		jsonOK(w, resp)
 	default:
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 	}
@@ -113,33 +119,42 @@ func (s *Server) handleRecurringTaskByID(w http.ResponseWriter, r *http.Request)
 	if r.Method == http.MethodPut && len(parts) == 1 {
 		var req db.CreateTask
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			jsonErr(w, "invalid body: "+err.Error())
+			s.apiErr(w, r, "invalid body: ", err)
 			return
 		}
 		req.ID = id
+		// An empty (or still-masked) password means "keep the current one" so a
+		// UI that shows a redacted value cannot wipe the stored password.
+		if req.RootPassword == "" || strings.Contains(req.RootPassword, "***") {
+			if cur, err := s.store.GetCreateTask(id); err == nil && cur != nil {
+				req.RootPassword = cur.RootPassword
+			}
+		}
 		if err := s.store.UpdateCreateTask(&req); err != nil {
-			jsonErr(w, "update recurring task: "+err.Error())
+			s.apiErr(w, r, "update recurring task: ", err)
 			return
 		}
 		s.audit(req.TenantID, "create-task:update", strconv.FormatInt(id, 10), r)
-		jsonOK(w, req)
+		resp := req
+		resp.RootPassword = maskSecret(resp.RootPassword)
+		jsonOK(w, resp)
 		return
 	}
 	if r.Method == http.MethodPost && len(parts) == 2 {
 		switch parts[1] {
 		case "pause":
 			if err := s.store.SetCreateTaskPaused(id, true); err != nil {
-				jsonErr(w, "pause: "+err.Error())
+				s.apiErr(w, r, "pause: ", err)
 				return
 			}
 		case "resume":
 			if err := s.store.SetCreateTaskPaused(id, false); err != nil {
-				jsonErr(w, "resume: "+err.Error())
+				s.apiErr(w, r, "resume: ", err)
 				return
 			}
 		case "stop":
 			if err := s.store.DeleteCreateTask(id); err != nil {
-				jsonErr(w, "stop: "+err.Error())
+				s.apiErr(w, r, "stop: ", err)
 				return
 			}
 		default:
@@ -152,7 +167,7 @@ func (s *Server) handleRecurringTaskByID(w http.ResponseWriter, r *http.Request)
 	}
 	if r.Method == http.MethodDelete && len(parts) == 1 {
 		if err := s.store.DeleteCreateTask(id); err != nil {
-			jsonErr(w, "delete: "+err.Error())
+			s.apiErr(w, r, "delete: ", err)
 			return
 		}
 		s.audit(0, "create-task:delete", strconv.FormatInt(id, 10), r)
@@ -195,10 +210,10 @@ func (s *Server) pumpCreateTasks() {
 		}
 		s.createTaskRunning.Store(t.ID, true)
 		_ = s.store.SetCreateTaskLastRun(t.ID)
-		go func(task db.CreateTask) {
-			defer s.createTaskRunning.Delete(task.ID)
-			s.runCreateTask(task)
-		}(t)
+		safeGo(func() {
+			defer s.createTaskRunning.Delete(t.ID)
+			s.runCreateTask(t)
+		})
 	}
 }
 
@@ -294,15 +309,15 @@ func (s *Server) runCreateTask(task db.CreateTask) {
 				}
 			}
 			_ = s.store.UpsertInstance(&db.Instance{
-				ID:       fmt.Sprintf("%d:%s", task.TenantID, strOr(inst.Id, "")),
-				TenantID: task.TenantID,
-				Name:     strOr(inst.DisplayName, ""),
-				OCID:     strOr(inst.Id, ""),
-				Shape:    strOr(inst.Shape, ""),
-				State:    string(inst.LifecycleState),
-				Region:   task.Region,
-				OCPU:     ocpu,
-				MemoryGB: mem,
+				ID:           fmt.Sprintf("%d:%s", task.TenantID, strOr(inst.Id, "")),
+				TenantID:     task.TenantID,
+				Name:         strOr(inst.DisplayName, ""),
+				OCID:         strOr(inst.Id, ""),
+				Shape:        strOr(inst.Shape, ""),
+				State:        string(inst.LifecycleState),
+				Region:       task.Region,
+				OCPU:         ocpu,
+				MemoryGB:     mem,
 				BootVolumeGB: task.Disk,
 			})
 		}

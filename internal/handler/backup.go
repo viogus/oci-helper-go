@@ -29,6 +29,7 @@ type backupData struct {
 	InstancePlans []db.InstancePlan       `json:"instance_plans"`
 	StockAlerts   []db.StockAlert         `json:"stock_alerts"`
 	Tasks         []db.Task               `json:"tasks"`
+	CreateTasks   []db.CreateTask         `json:"create_tasks"`
 	DNGBindings   []db.InstanceDNSBinding `json:"dns_bindings"`
 	KeyFiles      []dbKeyFile             `json:"key_files"`
 }
@@ -73,7 +74,7 @@ func (s *Server) handleBackup(w http.ResponseWriter, r *http.Request) {
 		Password string `json:"password"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		jsonErr(w, "invalid body: "+err.Error())
+		s.apiErr(w, r, "invalid body: ", err)
 		return
 	}
 	if req.Password == "" {
@@ -85,7 +86,7 @@ func (s *Server) handleBackup(w http.ResponseWriter, r *http.Request) {
 
 	tenants, err := s.store.ListTenants()
 	if err != nil {
-		jsonErr(w, "list tenants: "+err.Error())
+		s.apiErr(w, r, "list tenants: ", err)
 		return
 	}
 	for _, t := range tenants {
@@ -97,7 +98,7 @@ func (s *Server) handleBackup(w http.ResponseWriter, r *http.Request) {
 
 	instances, err := s.store.ListInstances(0)
 	if err != nil {
-		jsonErr(w, "list instances: "+err.Error())
+		s.apiErr(w, r, "list instances: ", err)
 		return
 	}
 	for _, i := range instances {
@@ -112,7 +113,7 @@ func (s *Server) handleBackup(w http.ResponseWriter, r *http.Request) {
 	// export all config keys
 	configList, err := s.store.ListAllConfig()
 	if err != nil {
-		jsonErr(w, "list config: "+err.Error())
+		s.apiErr(w, r, "list config: ", err)
 		return
 	}
 	for _, c := range configList {
@@ -121,7 +122,7 @@ func (s *Server) handleBackup(w http.ResponseWriter, r *http.Request) {
 
 	users, err := s.store.ListUsers()
 	if err != nil {
-		jsonErr(w, "list users: "+err.Error())
+		s.apiErr(w, r, "list users: ", err)
 		return
 	}
 	for _, u := range users {
@@ -142,31 +143,35 @@ func (s *Server) handleBackup(w http.ResponseWriter, r *http.Request) {
 	// A failed table read must abort the backup — silently exporting an
 	// empty table produces a backup that restores as partial data loss.
 	if data.CfCfgs, err = s.store.ListCfCfgs(); err != nil {
-		jsonErr(w, "list cf configs: "+err.Error())
+		s.apiErr(w, r, "list cf configs: ", err)
 		return
 	}
 	if data.IpData, err = s.store.ListIpData(0, ""); err != nil {
-		jsonErr(w, "list ip data: "+err.Error())
+		s.apiErr(w, r, "list ip data: ", err)
 		return
 	}
 	if data.SSHKeys, err = s.store.ListSSHKeys(0); err != nil {
-		jsonErr(w, "list ssh keys: "+err.Error())
+		s.apiErr(w, r, "list ssh keys: ", err)
 		return
 	}
 	if data.InstancePlans, err = s.store.ListInstancePlans(0); err != nil {
-		jsonErr(w, "list instance plans: "+err.Error())
+		s.apiErr(w, r, "list instance plans: ", err)
 		return
 	}
 	if data.StockAlerts, err = s.store.ListStockAlerts(0); err != nil {
-		jsonErr(w, "list stock alerts: "+err.Error())
+		s.apiErr(w, r, "list stock alerts: ", err)
 		return
 	}
 	if data.Tasks, err = s.store.ListTasks(); err != nil {
-		jsonErr(w, "list tasks: "+err.Error())
+		s.apiErr(w, r, "list tasks: ", err)
+		return
+	}
+	if data.CreateTasks, err = s.store.ListCreateTasks(0); err != nil {
+		s.apiErr(w, r, "list recurring tasks: ", err)
 		return
 	}
 	if data.DNGBindings, err = s.store.ListInstanceDNSBindings(""); err != nil {
-		jsonErr(w, "list dns bindings: "+err.Error())
+		s.apiErr(w, r, "list dns bindings: ", err)
 		return
 	}
 	if entries, err := os.ReadDir(s.cfg.KeysDir); err == nil {
@@ -183,12 +188,12 @@ func (s *Server) handleBackup(w http.ResponseWriter, r *http.Request) {
 
 	plain, err := json.Marshal(data)
 	if err != nil {
-		jsonErr(w, "marshal backup: "+err.Error())
+		s.apiErr(w, r, "marshal backup: ", err)
 		return
 	}
 	encrypted, err := encrypt(plain, req.Password)
 	if err != nil {
-		jsonErr(w, "encrypt: "+err.Error())
+		s.apiErr(w, r, "encrypt: ", err)
 		return
 	}
 
@@ -206,7 +211,7 @@ func (s *Server) handleRestore(w http.ResponseWriter, r *http.Request) {
 		Data     string `json:"data"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		jsonErr(w, "invalid body: "+err.Error())
+		s.apiErr(w, r, "invalid body: ", err)
 		return
 	}
 	if req.Password == "" || req.Data == "" {
@@ -216,6 +221,9 @@ func (s *Server) handleRestore(w http.ResponseWriter, r *http.Request) {
 
 	nTenants, nInstances, err := s.restoreData(req.Password, req.Data)
 	if err != nil {
+		// Restore errors are validation-oriented and safe to surface (they help
+		// the operator fix a bad backup); they never include filesystem paths
+		// beyond the offending key name.
 		jsonErr(w, err.Error())
 		return
 	}
@@ -301,6 +309,11 @@ func (s *Server) restoreData(password, data string) (int, int, error) {
 	for i := range payload.Tasks {
 		if err := s.store.CreateTaskImportTx(tx, &payload.Tasks[i]); err != nil {
 			return 0, 0, fmt.Errorf("restore task: %w", err)
+		}
+	}
+	for i := range payload.CreateTasks {
+		if err := s.store.CreateCreateTaskTx(tx, &payload.CreateTasks[i]); err != nil {
+			return 0, 0, fmt.Errorf("restore recurring task: %w", err)
 		}
 	}
 	for i := range payload.DNGBindings {

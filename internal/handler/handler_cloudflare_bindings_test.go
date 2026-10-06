@@ -272,9 +272,22 @@ func TestCfCfgPartialUpdate(t *testing.T) {
 	}
 	var updated db.CfCfg
 	decodeJSON(t, resp, &updated)
-	if updated.ZoneID != "zone-new" || updated.Token != "tok-abc" || updated.Email != "e@x.com" ||
-		updated.APIKey != "key-1" || updated.Name != "Legacy" {
+	if updated.ZoneID != "zone-new" || updated.Name != "Legacy" {
 		t.Fatalf("cfg partial update clobbered fields: %+v", updated)
+	}
+	// Credentials must never be echoed back by the API.
+	if updated.Token == "tok-abc" || updated.APIKey == "key-1" {
+		t.Fatalf("response leaked credentials: %+v", updated)
+	}
+	// The stored row must still hold the original credentials (the actual
+	// regression this test guards against).
+	stored, err := store.GetCfCfg(cfgID)
+	if err != nil || stored == nil {
+		t.Fatalf("get cfg: %v", err)
+	}
+	if stored.ZoneID != "zone-new" || stored.Token != "tok-abc" || stored.Email != "e@x.com" ||
+		stored.APIKey != "key-1" || stored.Name != "Legacy" {
+		t.Fatalf("stored cfg partial update clobbered fields: %+v", stored)
 	}
 
 	// Name must stay non-empty.

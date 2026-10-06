@@ -633,13 +633,22 @@ func (s *Store) ResetRunningTasks() (int64, error) {
 
 // ── Recurring Create Tasks ────────────────────────────────────────────
 
-func (s *Store) CreateCreateTask(t *CreateTask) error {
-	res, err := s.db.Exec(
+// execer is satisfied by *sql.DB and *sql.Tx.
+type execer interface {
+	Exec(query string, args ...any) (sql.Result, error)
+}
+
+func (s *Store) createCreateTask(e execer, t *CreateTask) error {
+	encPw, err := s.encryptSecret(t.RootPassword)
+	if err != nil {
+		return err
+	}
+	res, err := e.Exec(
 		`INSERT INTO create_tasks (tenant_id, region, ocpus, memory_gb, disk, architecture,
 		 interval_seconds, create_numbers, operation_system, root_password, paused)
 		 VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
 		t.TenantID, t.Region, t.OCPUs, t.MemoryGB, t.Disk, t.Architecture,
-		t.IntervalSeconds, t.CreateNumbers, t.OperationSystem, t.RootPassword, t.Paused)
+		t.IntervalSeconds, t.CreateNumbers, t.OperationSystem, encPw, t.Paused)
 	if err != nil {
 		return err
 	}
@@ -651,22 +660,34 @@ func (s *Store) CreateCreateTask(t *CreateTask) error {
 	return nil
 }
 
+func (s *Store) CreateCreateTask(t *CreateTask) error {
+	return s.createCreateTask(s.db, t)
+}
+
+// CreateCreateTaskTx inserts a recurring task within an existing transaction
+// (used by backup restore). The password is encrypted the same way as the
+// non-transactional path.
+func (s *Store) CreateCreateTaskTx(tx *sql.Tx, t *CreateTask) error {
+	return s.createCreateTask(tx, t)
+}
+
 const createTaskSelect = `SELECT id, tenant_id, region, ocpus, memory_gb, disk, architecture,
 	interval_seconds, create_numbers, operation_system, root_password, paused,
 	last_run_at, created_at, updated_at FROM create_tasks`
 
-func scanCreateTask(row interface{ Scan(...any) error }) (*CreateTask, error) {
+func (s *Store) scanCreateTask(row interface{ Scan(...any) error }) (*CreateTask, error) {
 	var t CreateTask
 	if err := row.Scan(&t.ID, &t.TenantID, &t.Region, &t.OCPUs, &t.MemoryGB, &t.Disk,
 		&t.Architecture, &t.IntervalSeconds, &t.CreateNumbers, &t.OperationSystem,
 		&t.RootPassword, &t.Paused, &t.LastRunAt, &t.CreatedAt, &t.UpdatedAt); err != nil {
 		return nil, err
 	}
+	t.RootPassword = s.decryptSecret(t.RootPassword)
 	return &t, nil
 }
 
 func (s *Store) GetCreateTask(id int64) (*CreateTask, error) {
-	t, err := scanCreateTask(s.db.QueryRow(createTaskSelect+` WHERE id=?`, id))
+	t, err := s.scanCreateTask(s.db.QueryRow(createTaskSelect+` WHERE id=?`, id))
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -687,7 +708,7 @@ func (s *Store) ListCreateTasks(tenantID int64) ([]CreateTask, error) {
 	defer rows.Close()
 	var list []CreateTask
 	for rows.Next() {
-		t, err := scanCreateTask(rows)
+		t, err := s.scanCreateTask(rows)
 		if err != nil {
 			return nil, err
 		}
@@ -704,7 +725,7 @@ func (s *Store) ListActiveCreateTasks() ([]CreateTask, error) {
 	defer rows.Close()
 	var list []CreateTask
 	for rows.Next() {
-		t, err := scanCreateTask(rows)
+		t, err := s.scanCreateTask(rows)
 		if err != nil {
 			return nil, err
 		}
@@ -714,12 +735,16 @@ func (s *Store) ListActiveCreateTasks() ([]CreateTask, error) {
 }
 
 func (s *Store) UpdateCreateTask(t *CreateTask) error {
-	_, err := s.db.Exec(
+	encPw, err := s.encryptSecret(t.RootPassword)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.Exec(
 		`UPDATE create_tasks SET tenant_id=?, region=?, ocpus=?, memory_gb=?, disk=?,
 		 architecture=?, interval_seconds=?, create_numbers=?, operation_system=?,
 		 root_password=?, paused=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`,
 		t.TenantID, t.Region, t.OCPUs, t.MemoryGB, t.Disk, t.Architecture,
-		t.IntervalSeconds, t.CreateNumbers, t.OperationSystem, t.RootPassword, t.Paused, t.ID)
+		t.IntervalSeconds, t.CreateNumbers, t.OperationSystem, encPw, t.Paused, t.ID)
 	return err
 }
 

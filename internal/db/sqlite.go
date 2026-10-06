@@ -1,5 +1,4 @@
 // Package db provides a pure-Go SQLite data layer for oci-helper.
-//
 package db
 
 import (
@@ -11,6 +10,9 @@ import (
 
 type Store struct {
 	db *sql.DB
+	// secretKey, when 32 bytes, encrypts sensitive columns at rest
+	// (create_tasks.root_password). Nil/empty disables at-rest encryption.
+	secretKey []byte
 }
 
 func New(path string) (*Store, error) {

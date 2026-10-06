@@ -154,6 +154,7 @@ func (s *Server) handleTenantUploadBatch(w http.ResponseWriter, r *http.Request,
 				continue
 			}
 			go func(t *db.Tenant) {
+				defer recoverBackground("uploadcfg-validate")
 				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 				defer cancel()
 				client, err := s.clientFor(t)

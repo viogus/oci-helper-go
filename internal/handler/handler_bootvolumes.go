@@ -15,7 +15,7 @@ func (s *Server) handleBootVolumes(w http.ResponseWriter, r *http.Request) {
 	}
 	vols, err := client.ListBootVolumes(r.Context(), t.TenancyOCID)
 	if err != nil {
-		jsonErr(w, "list boot volumes: "+err.Error())
+		s.apiErr(w, r, "list boot volumes: ", err)
 		return
 	}
 
@@ -81,7 +81,7 @@ func (s *Server) handleBootVolumeByID(w http.ResponseWriter, r *http.Request) {
 		}
 		vol, err := client.GetBootVolume(r.Context(), bootVolumeID)
 		if err != nil {
-			jsonErr(w, "get boot volume: "+err.Error())
+			s.apiErr(w, r, "get boot volume: ", err)
 			return
 		}
 		jsonOK(w, vol)
@@ -95,7 +95,7 @@ func (s *Server) handleBootVolumeByID(w http.ResponseWriter, r *http.Request) {
 		VpusPerGB  int64  `json:"vpusPerGB"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		jsonErr(w, "invalid body: "+err.Error())
+		s.apiErr(w, r, "invalid body: ", err)
 		return
 	}
 
@@ -112,7 +112,7 @@ func (s *Server) handleBootVolumeByID(w http.ResponseWriter, r *http.Request) {
 		}
 		vol, err := client.UpdateBootVolume(r.Context(), bootVolumeID, req.SizeInGBs, "")
 		if err != nil {
-			jsonErr(w, "resize: "+err.Error())
+			s.apiErr(w, r, "resize: ", err)
 			return
 		}
 		s.audit(req.TenantID, "bootvolume:resize", fmt.Sprintf("%s → %dGB", bootVolumeID, req.SizeInGBs), r)
@@ -128,7 +128,7 @@ func (s *Server) handleBootVolumeByID(w http.ResponseWriter, r *http.Request) {
 		}
 		att, err := client.AttachBootVolume(r.Context(), bootVolumeID, instanceID)
 		if err != nil {
-			jsonErr(w, "attach: "+err.Error())
+			s.apiErr(w, r, "attach: ", err)
 			return
 		}
 		s.audit(req.TenantID, "bootvolume:attach", fmt.Sprintf("%s → %s", bootVolumeID, req.InstanceID), r)
@@ -137,7 +137,7 @@ func (s *Server) handleBootVolumeByID(w http.ResponseWriter, r *http.Request) {
 		// find attachment ID
 		attachments, err := client.ListBootVolumeAttachments(r.Context(), t.TenancyOCID, "")
 		if err != nil {
-			jsonErr(w, "list attachments: "+err.Error())
+			s.apiErr(w, r, "list attachments: ", err)
 			return
 		}
 		var attachmentID string
@@ -152,14 +152,14 @@ func (s *Server) handleBootVolumeByID(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := client.DetachBootVolume(r.Context(), attachmentID); err != nil {
-			jsonErr(w, "detach: "+err.Error())
+			s.apiErr(w, r, "detach: ", err)
 			return
 		}
 		s.audit(req.TenantID, "bootvolume:detach", bootVolumeID, r)
 		jsonOK(w, map[string]string{"status": "ok"})
 	case "terminate":
 		if err := client.DeleteBootVolume(r.Context(), bootVolumeID); err != nil {
-			jsonErr(w, "terminate: "+err.Error())
+			s.apiErr(w, r, "terminate: ", err)
 			return
 		}
 		s.audit(req.TenantID, "bootvolume:terminate", bootVolumeID, r)
@@ -171,7 +171,7 @@ func (s *Server) handleBootVolumeByID(w http.ResponseWriter, r *http.Request) {
 		}
 		vol, err := client.UpdateBootVolumeWithVPU(r.Context(), bootVolumeID, req.SizeInGBs, "", req.VpusPerGB)
 		if err != nil {
-			jsonErr(w, "config: "+err.Error())
+			s.apiErr(w, r, "config: ", err)
 			return
 		}
 		s.audit(req.TenantID, "bootvolume:config", fmt.Sprintf("%s vpu=%d size=%d", bootVolumeID, req.VpusPerGB, req.SizeInGBs), r)

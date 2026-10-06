@@ -28,7 +28,7 @@ func (s *Server) handleBatchCreate(w http.ResponseWriter, r *http.Request) {
 		MultiTenant        bool    `json:"multi_tenant"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		jsonErr(w, "invalid body: "+err.Error())
+		s.apiErr(w, r, "invalid body: ", err)
 		return
 	}
 	if len(req.TenantIDs) == 0 {
@@ -64,14 +64,14 @@ func (s *Server) handleBatchCreate(w http.ResponseWriter, r *http.Request) {
 			"total_tenants":        len(req.TenantIDs),
 		})
 		parentTask := &db.Task{
-			Type:         "batch_create_multi",
-			Status:       "running",
-			Progress:     0,
-			Message:      fmt.Sprintf("0/%d tenants done", len(req.TenantIDs)),
-			Payload:      string(parentPayload),
+			Type:     "batch_create_multi",
+			Status:   "running",
+			Progress: 0,
+			Message:  fmt.Sprintf("0/%d tenants done", len(req.TenantIDs)),
+			Payload:  string(parentPayload),
 		}
 		if err := s.store.CreateTask(parentTask); err != nil {
-			jsonErr(w, "create parent task: "+err.Error())
+			s.apiErr(w, r, "create parent task: ", err)
 			return
 		}
 		parentTaskID = parentTask.ID
@@ -101,7 +101,7 @@ func (s *Server) handleBatchCreate(w http.ResponseWriter, r *http.Request) {
 			Payload:      string(childPayload),
 		}
 		if err := s.store.CreateTask(task); err != nil {
-			jsonErr(w, "create task: "+err.Error())
+			s.apiErr(w, r, "create task: ", err)
 			return
 		}
 		taskIDs = append(taskIDs, task.ID)
@@ -127,21 +127,21 @@ func (s *Server) handleCreateTasks(w http.ResponseWriter, r *http.Request) {
 			switch action {
 			case "stop":
 				if err := s.store.UpdateTaskStatus(taskID, "cancelled", 0, "stopped by user"); err != nil {
-					jsonErr(w, "update task: "+err.Error())
+					s.apiErr(w, r, "update task: ", err)
 					return
 				}
 				s.audit(0, "create-tasks:stop", strconv.FormatInt(taskID, 10), r)
 				jsonOK(w, map[string]string{"status": "ok"})
 			case "pause":
 				if err := s.store.UpdateTaskStatus(taskID, "paused", 0, "paused by user"); err != nil {
-					jsonErr(w, "update task: "+err.Error())
+					s.apiErr(w, r, "update task: ", err)
 					return
 				}
 				s.audit(0, "create-tasks:pause", strconv.FormatInt(taskID, 10), r)
 				jsonOK(w, map[string]string{"status": "ok"})
 			case "resume":
 				if err := s.store.UpdateTaskStatus(taskID, "pending", 0, "resumed by user"); err != nil {
-					jsonErr(w, "update task: "+err.Error())
+					s.apiErr(w, r, "update task: ", err)
 					return
 				}
 				s.worker.Notify()
@@ -158,7 +158,7 @@ func (s *Server) handleCreateTasks(w http.ResponseWriter, r *http.Request) {
 				Payload string `json:"payload"`
 			}
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-				jsonErr(w, "invalid body: "+err.Error())
+				s.apiErr(w, r, "invalid body: ", err)
 				return
 			}
 			if body.Payload == "" {
@@ -166,7 +166,7 @@ func (s *Server) handleCreateTasks(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			if err := s.store.UpdateTaskPayload(taskID, body.Payload); err != nil {
-				jsonErr(w, "update task: "+err.Error())
+				s.apiErr(w, r, "update task: ", err)
 				return
 			}
 			s.audit(0, "create-tasks:update", strconv.FormatInt(taskID, 10), r)
@@ -192,7 +192,7 @@ func (s *Server) handleCreateTasks(w http.ResponseWriter, r *http.Request) {
 		// so pagination total reflects actual batch_create count.
 		all, err := s.store.ListTasks()
 		if err != nil {
-			jsonErr(w, "list tasks: "+err.Error())
+			s.apiErr(w, r, "list tasks: ", err)
 			return
 		}
 		var filtered []db.Task
@@ -229,7 +229,7 @@ func (s *Server) handleCreateTasks(w http.ResponseWriter, r *http.Request) {
 			Payload string  `json:"payload"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			jsonErr(w, "invalid body: "+err.Error())
+			s.apiErr(w, r, "invalid body: ", err)
 			return
 		}
 		switch req.Action {
@@ -240,27 +240,27 @@ func (s *Server) handleCreateTasks(w http.ResponseWriter, r *http.Request) {
 			}
 			for _, id := range req.TaskIDs {
 				if err := s.store.UpdateTaskStatus(id, "cancelled", 0, "stopped by user"); err != nil {
-						jsonErr(w, "update task "+strconv.FormatInt(id, 10)+": "+err.Error())
-						return
-					}
+					s.apiErr(w, r, "update task "+strconv.FormatInt(id, 10), err)
+					return
+				}
 			}
 			s.audit(0, "create-tasks:stop", strconv.FormatInt(req.TaskIDs[0], 10), r)
 			jsonOK(w, map[string]string{"status": "ok"})
 		case "pause":
 			for _, id := range req.TaskIDs {
 				if err := s.store.UpdateTaskStatus(id, "paused", 0, "paused by user"); err != nil {
-						jsonErr(w, "update task "+strconv.FormatInt(id, 10)+": "+err.Error())
-						return
-					}
+					s.apiErr(w, r, "update task "+strconv.FormatInt(id, 10), err)
+					return
+				}
 			}
 			s.audit(0, "create-tasks:pause", strconv.Itoa(len(req.TaskIDs)), r)
 			jsonOK(w, map[string]string{"status": "ok"})
 		case "resume":
 			for _, id := range req.TaskIDs {
 				if err := s.store.UpdateTaskStatus(id, "pending", 0, "resumed by user"); err != nil {
-						jsonErr(w, "update task "+strconv.FormatInt(id, 10)+": "+err.Error())
-						return
-					}
+					s.apiErr(w, r, "update task "+strconv.FormatInt(id, 10), err)
+					return
+				}
 			}
 			s.worker.Notify()
 			s.audit(0, "create-tasks:resume", strconv.Itoa(len(req.TaskIDs)), r)
@@ -268,16 +268,16 @@ func (s *Server) handleCreateTasks(w http.ResponseWriter, r *http.Request) {
 		case "delete":
 			for _, id := range req.TaskIDs {
 				if err := s.store.UpdateTaskStatus(id, "cancelled", 0, "deleted by user"); err != nil {
-						jsonErr(w, "update task "+strconv.FormatInt(id, 10)+": "+err.Error())
-						return
-					}
+					s.apiErr(w, r, "update task "+strconv.FormatInt(id, 10), err)
+					return
+				}
 			}
 			s.audit(0, "create-tasks:delete", strconv.Itoa(len(req.TaskIDs)), r)
 			jsonOK(w, map[string]string{"status": "ok"})
 		case "update":
 			if req.TaskID > 0 && req.Payload != "" {
 				if err := s.store.UpdateTaskPayload(req.TaskID, req.Payload); err != nil {
-					jsonErr(w, "update task: "+err.Error())
+					s.apiErr(w, r, "update task: ", err)
 					return
 				}
 				s.audit(0, "create-tasks:update", strconv.FormatInt(req.TaskID, 10), r)

@@ -24,7 +24,7 @@ func (s *Server) handleTenantAliveCheck(w http.ResponseWriter, r *http.Request) 
 	}
 	// A malformed body must not silently fall through to checking ALL tenants.
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		jsonErr(w, "invalid body: "+err.Error())
+		s.apiErr(w, r, "invalid body: ", err)
 		return
 	}
 
@@ -45,7 +45,7 @@ func (s *Server) handleTenantAliveCheck(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 	if err != nil {
-		jsonErr(w, "list tenants: "+err.Error())
+		s.apiErr(w, r, "list tenants: ", err)
 		return
 	}
 
@@ -105,7 +105,7 @@ func (s *Server) handleUpdateRootPassword(w http.ResponseWriter, r *http.Request
 		Password   string `json:"password"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		jsonErr(w, "invalid body: "+err.Error())
+		s.apiErr(w, r, "invalid body: ", err)
 		return
 	}
 	if req.TenantID == 0 || req.InstanceID == "" {
@@ -117,7 +117,7 @@ func (s *Server) handleUpdateRootPassword(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if err := client.UpdateRootPasswordTag(r.Context(), bareOCID(req.InstanceID), req.Password); err != nil {
-		jsonErr(w, "update root password tag: "+err.Error())
+		s.apiErr(w, r, "update root password tag: ", err)
 		return
 	}
 	action := "set"

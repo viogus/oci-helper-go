@@ -89,7 +89,7 @@ func (s *Server) handleVNCProxy(w http.ResponseWriter, r *http.Request) {
 	// Step 1: Create OCI instance console connection
 	conn, err := client.CreateConsoleConnection(r.Context(), instID, pubKey)
 	if err != nil {
-		jsonErr(w, "create console connection: "+err.Error())
+		s.apiErr(w, r, "create console connection: ", err)
 		return
 	}
 	consoleID := ""
@@ -114,7 +114,7 @@ func (s *Server) handleVNCProxy(w http.ResponseWriter, r *http.Request) {
 	log.Printf("[vnc-proxy] waiting for console connection %s to become active...", consoleID)
 	activeConn, err := client.WaitForConsoleConnectionActive(r.Context(), consoleID)
 	if err != nil {
-		jsonErr(w, "console connection not ready: "+err.Error())
+		s.apiErr(w, r, "console connection not ready: ", err)
 		return
 	}
 
@@ -136,7 +136,7 @@ func (s *Server) handleVNCProxy(w http.ResponseWriter, r *http.Request) {
 	vncAddr := net.JoinHostPort(host, port)
 	vncTCP, err := net.DialTimeout("tcp", vncAddr, 10*time.Second)
 	if err != nil {
-		jsonErr(w, "connect to VNC "+vncAddr+": "+err.Error())
+		s.apiErr(w, r, "connect to VNC "+vncAddr, err)
 		return
 	}
 

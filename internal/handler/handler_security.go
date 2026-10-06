@@ -17,29 +17,29 @@ func (s *Server) handleSecurityRules(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Action   string   `json:"action"`
-		TenantID int64    `json:"tenant_id"`
-		VcnID    string   `json:"vcn_id"`
-		Keyword  string   `json:"keyword"`
-		Page     int      `json:"page"`
-		Size     int      `json:"size"`
-	// for add/remove
-	Protocol string   `json:"protocol"`
-	Port     string   `json:"port"`
-	Source   string   `json:"source"`
-	Dest     string   `json:"dest"`
-	RuleIDs  []string `json:"rule_ids"`
-	SourcePort string `json:"source_port"`
-	ICMPType  int      `json:"icmp_type"`
-	ICMPCode  int      `json:"icmp_code"`
-	Stateless bool     `json:"stateless"`
-	Description string `json:"description"`
-	// for batch update
-	IngressRules []json.RawMessage `json:"ingress_rules"`
-	EgressRules  []json.RawMessage `json:"egress_rules"`
+		Action   string `json:"action"`
+		TenantID int64  `json:"tenant_id"`
+		VcnID    string `json:"vcn_id"`
+		Keyword  string `json:"keyword"`
+		Page     int    `json:"page"`
+		Size     int    `json:"size"`
+		// for add/remove
+		Protocol    string   `json:"protocol"`
+		Port        string   `json:"port"`
+		Source      string   `json:"source"`
+		Dest        string   `json:"dest"`
+		RuleIDs     []string `json:"rule_ids"`
+		SourcePort  string   `json:"source_port"`
+		ICMPType    int      `json:"icmp_type"`
+		ICMPCode    int      `json:"icmp_code"`
+		Stateless   bool     `json:"stateless"`
+		Description string   `json:"description"`
+		// for batch update
+		IngressRules []json.RawMessage `json:"ingress_rules"`
+		EgressRules  []json.RawMessage `json:"egress_rules"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		jsonErr(w, "invalid body: "+err.Error())
+		s.apiErr(w, r, "invalid body: ", err)
 		return
 	}
 	if req.Page < 1 {
@@ -58,7 +58,7 @@ func (s *Server) handleSecurityRules(w http.ResponseWriter, r *http.Request) {
 	case "page":
 		rules, total, err := client.ListSecurityRules(r.Context(), req.VcnID, req.Keyword, req.Page, req.Size)
 		if err != nil {
-			jsonErr(w, "list security rules: "+err.Error())
+			s.apiErr(w, r, "list security rules: ", err)
 			return
 		}
 		jsonOK(w, map[string]interface{}{"data": rules, "total": total, "page": req.Page, "size": req.Size})
@@ -74,7 +74,7 @@ func (s *Server) handleSecurityRules(w http.ResponseWriter, r *http.Request) {
 			err = client.AddIngressRule(r.Context(), req.VcnID, req.Protocol, req.Port, req.Source)
 		}
 		if err != nil {
-			jsonErr(w, "add ingress: "+err.Error())
+			s.apiErr(w, r, "add ingress: ", err)
 			return
 		}
 		s.audit(req.TenantID, "security-rule:add-ingress", req.VcnID, r)
@@ -91,35 +91,35 @@ func (s *Server) handleSecurityRules(w http.ResponseWriter, r *http.Request) {
 			err = client.AddEgressRule(r.Context(), req.VcnID, req.Protocol, req.Port, req.Dest)
 		}
 		if err != nil {
-			jsonErr(w, "add egress: "+err.Error())
+			s.apiErr(w, r, "add egress: ", err)
 			return
 		}
 		s.audit(req.TenantID, "security-rule:add-egress", req.VcnID, r)
 		jsonOK(w, map[string]string{"status": "ok"})
 	case "remove":
 		if err := client.RemoveSecurityRules(r.Context(), req.VcnID, req.RuleIDs); err != nil {
-			jsonErr(w, "remove rules: "+err.Error())
+			s.apiErr(w, r, "remove rules: ", err)
 			return
 		}
 		s.audit(req.TenantID, "security-rule:remove", strconv.Itoa(len(req.RuleIDs)), r)
 		jsonOK(w, map[string]string{"status": "ok"})
 	case "release": // alias for release_by_vcn, both call ReleaseAllPorts
 		if err := client.ReleaseAllPorts(r.Context(), req.VcnID); err != nil {
-			jsonErr(w, "release ports: "+err.Error())
+			s.apiErr(w, r, "release ports: ", err)
 			return
 		}
 		s.audit(req.TenantID, "security-rule:release", req.VcnID, r)
 		jsonOK(w, map[string]string{"status": "ok"})
 	case "release_by_vcn":
 		if err := client.ReleaseAllPorts(r.Context(), req.VcnID); err != nil {
-			jsonErr(w, "release by vcn: "+err.Error())
+			s.apiErr(w, r, "release by vcn: ", err)
 			return
 		}
 		s.audit(req.TenantID, "security-rule:release-by-vcn", req.VcnID, r)
 		jsonOK(w, map[string]string{"status": "ok"})
 	case "update_batch":
 		if err := client.UpdateSecurityListBatch(r.Context(), req.VcnID, req.IngressRules, req.EgressRules); err != nil {
-			jsonErr(w, "update batch: "+err.Error())
+			s.apiErr(w, r, "update batch: ", err)
 			return
 		}
 		s.audit(req.TenantID, "security-rule:update-batch", req.VcnID, r)
@@ -142,7 +142,7 @@ func (s *Server) handleSecurityRuleRelease(w http.ResponseWriter, r *http.Reques
 		Ports    []string `json:"ports"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		jsonErr(w, "invalid body: "+err.Error())
+		s.apiErr(w, r, "invalid body: ", err)
 		return
 	}
 	if req.VcnID == "" || len(req.Ports) == 0 {
@@ -163,7 +163,7 @@ func (s *Server) handleSecurityRuleRelease(w http.ResponseWriter, r *http.Reques
 					log.Printf("[security] rollback failed after partial batch-release: %v (original: %v)", rbErr, err)
 				}
 			}
-			jsonErr(w, fmt.Sprintf("add ingress rule port %s: %v", port, err))
+			s.apiErr(w, r, fmt.Sprintf("add ingress rule port %s", port), err)
 			return
 		}
 		addedPorts = append(addedPorts, port)

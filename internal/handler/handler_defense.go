@@ -27,7 +27,7 @@ func (s *Server) handleDefenseEnable(w http.ResponseWriter, r *http.Request) {
 		Blacklist []string `json:"blacklist"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		jsonErr(w, "invalid body: "+err.Error())
+		s.apiErr(w, r, "invalid body: ", err)
 		return
 	}
 	if req.TenantID == 0 || req.VcnID == "" || len(req.Blacklist) == 0 {
@@ -37,7 +37,7 @@ func (s *Server) handleDefenseEnable(w http.ResponseWriter, r *http.Request) {
 
 	n, err := s.enableDefense(r.Context(), req.TenantID, req.VcnID, req.Blacklist)
 	if err != nil {
-		jsonErr(w, err.Error())
+		s.apiErr(w, r, "internal error", err)
 		return
 	}
 	s.audit(req.TenantID, "defense:enable", strconv.Itoa(n)+" IPs blocked", r)
@@ -133,7 +133,7 @@ func (s *Server) handleDefenseDisable(w http.ResponseWriter, r *http.Request) {
 		VcnID    string `json:"vcn_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		jsonErr(w, "invalid body: "+err.Error())
+		s.apiErr(w, r, "invalid body: ", err)
 		return
 	}
 	if req.TenantID == 0 || req.VcnID == "" {
@@ -142,7 +142,7 @@ func (s *Server) handleDefenseDisable(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.disableDefense(r.Context(), req.TenantID, req.VcnID); err != nil {
-		jsonErr(w, err.Error())
+		s.apiErr(w, r, "internal error", err)
 		return
 	}
 	s.audit(req.TenantID, "defense:disable", req.VcnID, r)
@@ -241,7 +241,7 @@ func (s *Server) handleIPBlacklist(w http.ResponseWriter, r *http.Request) {
 		tenantID, _ := strconv.ParseInt(r.URL.Query().Get("tenant_id"), 10, 64)
 		list, err := s.store.ListIpData(tenantID, "deny")
 		if err != nil {
-			jsonErr(w, "list blacklist: "+err.Error())
+			s.apiErr(w, r, "list blacklist: ", err)
 			return
 		}
 		if list == nil {

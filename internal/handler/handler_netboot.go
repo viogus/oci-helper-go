@@ -33,7 +33,7 @@ func (s *Server) handleNetbootRescue(w http.ResponseWriter, r *http.Request) {
 		RescueImageID string `json:"rescue_image_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		jsonErr(w, "invalid body: "+err.Error())
+		s.apiErr(w, r, "invalid body: ", err)
 		return
 	}
 	if req.TenantID == 0 || req.InstanceID == "" {
@@ -59,7 +59,7 @@ func (s *Server) handleNetbootRescue(w http.ResponseWriter, r *http.Request) {
 	// Step 1: Get current instance details.
 	inst, err := client.GetInstance(ctx, ocid)
 	if err != nil {
-		jsonErr(w, "get instance: "+err.Error())
+		s.apiErr(w, r, "get instance: ", err)
 		return
 	}
 
@@ -75,7 +75,7 @@ func (s *Server) handleNetbootRescue(w http.ResponseWriter, r *http.Request) {
 	state := string(inst.LifecycleState)
 	if state == "RUNNING" || state == "STARTING" {
 		if _, err := client.InstanceAction(ctx, ocid, core.InstanceActionActionStop); err != nil {
-			jsonErr(w, "stop instance: "+err.Error())
+			s.apiErr(w, r, "stop instance: ", err)
 			return
 		}
 		if !client.WaitForState(ctx, ocid, "STOPPED", 120*time.Second) {
@@ -91,7 +91,7 @@ func (s *Server) handleNetbootRescue(w http.ResponseWriter, r *http.Request) {
 	compartmentID := tenant.TenancyOCID
 	attachment, err := client.GetBootVolumeAttachment(ctx, compartmentID, ocid)
 	if err != nil {
-		jsonErr(w, "get boot volume attachment: "+err.Error())
+		s.apiErr(w, r, "get boot volume attachment: ", err)
 		return
 	}
 	if attachment.BootVolumeId == nil {
@@ -110,7 +110,7 @@ func (s *Server) handleNetbootRescue(w http.ResponseWriter, r *http.Request) {
 
 	// Step 6: Detach current boot volume.
 	if err := client.DetachBootVolume(ctx, *attachment.Id); err != nil {
-		jsonErr(w, "detach boot volume: "+err.Error())
+		s.apiErr(w, r, "detach boot volume: ", err)
 		return
 	}
 
@@ -144,7 +144,7 @@ func (s *Server) handleNetbootRescue(w http.ResponseWriter, r *http.Request) {
 		if _, attachErr := client.AttachBootVolume(ctx, originalBV, ocid); attachErr != nil {
 			log.Printf("[netboot-rescue] rollback attach original BV failed: %v", attachErr)
 		}
-		jsonErr(w, "create rescue boot volume: "+err.Error())
+		s.apiErr(w, r, "create rescue boot volume: ", err)
 		return
 	}
 
@@ -158,7 +158,7 @@ func (s *Server) handleNetbootRescue(w http.ResponseWriter, r *http.Request) {
 		if _, attachErr := client.AttachBootVolume(ctx, originalBV, ocid); attachErr != nil {
 			log.Printf("[netboot-rescue] rollback attach original BV failed: %v", attachErr)
 		}
-		jsonErr(w, "attach rescue boot volume: "+err.Error())
+		s.apiErr(w, r, "attach rescue boot volume: ", err)
 		return
 	}
 
@@ -171,7 +171,7 @@ func (s *Server) handleNetbootRescue(w http.ResponseWriter, r *http.Request) {
 
 	// Step 12: Start instance with rescue boot volume.
 	if _, err := client.InstanceAction(ctx, ocid, core.InstanceActionActionStart); err != nil {
-		jsonErr(w, "start instance with rescue boot volume: "+err.Error())
+		s.apiErr(w, r, "start instance with rescue boot volume: ", err)
 		return
 	}
 
@@ -201,7 +201,7 @@ func (s *Server) handleNetbootRescueStop(w http.ResponseWriter, r *http.Request)
 		InstanceID string `json:"instance_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		jsonErr(w, "invalid body: "+err.Error())
+		s.apiErr(w, r, "invalid body: ", err)
 		return
 	}
 	if req.TenantID == 0 || req.InstanceID == "" {
@@ -221,7 +221,7 @@ func (s *Server) handleNetbootRescueStop(w http.ResponseWriter, r *http.Request)
 	// Step 1: Get current instance details.
 	inst, err := client.GetInstance(ctx, ocid)
 	if err != nil {
-		jsonErr(w, "get instance: "+err.Error())
+		s.apiErr(w, r, "get instance: ", err)
 		return
 	}
 
@@ -239,7 +239,7 @@ func (s *Server) handleNetbootRescueStop(w http.ResponseWriter, r *http.Request)
 	state := string(inst.LifecycleState)
 	if state == "RUNNING" || state == "STARTING" {
 		if _, err := client.InstanceAction(ctx, ocid, core.InstanceActionActionStop); err != nil {
-			jsonErr(w, "stop instance: "+err.Error())
+			s.apiErr(w, r, "stop instance: ", err)
 			return
 		}
 		if !client.WaitForState(ctx, ocid, "STOPPED", 120*time.Second) {
@@ -255,7 +255,7 @@ func (s *Server) handleNetbootRescueStop(w http.ResponseWriter, r *http.Request)
 	compartmentID := tenant.TenancyOCID
 	attachment, err := client.GetBootVolumeAttachment(ctx, compartmentID, ocid)
 	if err != nil {
-		jsonErr(w, "get boot volume attachment: "+err.Error())
+		s.apiErr(w, r, "get boot volume attachment: ", err)
 		return
 	}
 
@@ -265,13 +265,13 @@ func (s *Server) handleNetbootRescueStop(w http.ResponseWriter, r *http.Request)
 		rescueBV = *attachment.BootVolumeId
 	}
 	if err := client.DetachBootVolume(ctx, *attachment.Id); err != nil {
-		jsonErr(w, "detach rescue boot volume: "+err.Error())
+		s.apiErr(w, r, "detach rescue boot volume: ", err)
 		return
 	}
 
 	// Step 6: Re-attach original boot volume.
 	if _, err := client.AttachBootVolume(ctx, originalBV, ocid); err != nil {
-		jsonErr(w, "attach original boot volume: "+err.Error())
+		s.apiErr(w, r, "attach original boot volume: ", err)
 		return
 	}
 
@@ -295,7 +295,7 @@ func (s *Server) handleNetbootRescueStop(w http.ResponseWriter, r *http.Request)
 
 	// Step 9: Start instance with original boot volume.
 	if _, err := client.InstanceAction(ctx, ocid, core.InstanceActionActionStart); err != nil {
-		jsonErr(w, "start instance with original boot volume: "+err.Error())
+		s.apiErr(w, r, "start instance with original boot volume: ", err)
 		return
 	}
 

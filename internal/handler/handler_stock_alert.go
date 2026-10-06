@@ -23,7 +23,7 @@ func (s *Server) handleStockAlerts(w http.ResponseWriter, r *http.Request) {
 		tenantID, _ := strconv.ParseInt(r.URL.Query().Get("tenant_id"), 10, 64)
 		alerts, err := s.store.ListStockAlerts(tenantID)
 		if err != nil {
-			jsonErr(w, "list stock alerts: "+err.Error())
+			s.apiErr(w, r, "list stock alerts: ", err)
 			return
 		}
 		jsonOK(w, alerts)
@@ -31,7 +31,7 @@ func (s *Server) handleStockAlerts(w http.ResponseWriter, r *http.Request) {
 	case http.MethodPost:
 		var a db.StockAlert
 		if err := json.NewDecoder(r.Body).Decode(&a); err != nil {
-			jsonErr(w, "invalid body: "+err.Error())
+			s.apiErr(w, r, "invalid body: ", err)
 			return
 		}
 		if a.TenantID == 0 || a.Region == "" || a.Shape == "" {
@@ -39,7 +39,7 @@ func (s *Server) handleStockAlerts(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := s.store.CreateStockAlert(&a); err != nil {
-			jsonErr(w, "create stock alert: "+err.Error())
+			s.apiErr(w, r, "create stock alert: ", err)
 			return
 		}
 		s.audit(a.TenantID, "stock-alert:create",
@@ -79,7 +79,7 @@ func (s *Server) handleStockAlertByID(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		a, err := s.store.GetStockAlertByID(id)
 		if err != nil {
-			jsonErr(w, "get stock alert: "+err.Error())
+			s.apiErr(w, r, "get stock alert: ", err)
 			return
 		}
 		if a == nil {
@@ -91,12 +91,12 @@ func (s *Server) handleStockAlertByID(w http.ResponseWriter, r *http.Request) {
 	case http.MethodPut:
 		var a db.StockAlert
 		if err := json.NewDecoder(r.Body).Decode(&a); err != nil {
-			jsonErr(w, "invalid body: "+err.Error())
+			s.apiErr(w, r, "invalid body: ", err)
 			return
 		}
 		a.ID = id
 		if err := s.store.UpdateStockAlert(&a); err != nil {
-			jsonErr(w, "update stock alert: "+err.Error())
+			s.apiErr(w, r, "update stock alert: ", err)
 			return
 		}
 		s.audit(a.TenantID, "stock-alert:update",
@@ -105,7 +105,7 @@ func (s *Server) handleStockAlertByID(w http.ResponseWriter, r *http.Request) {
 
 	case http.MethodDelete:
 		if err := s.store.DeleteStockAlert(id); err != nil {
-			jsonErr(w, "delete stock alert: "+err.Error())
+			s.apiErr(w, r, "delete stock alert: ", err)
 			return
 		}
 		s.audit(0, "stock-alert:delete", fmt.Sprintf("id=%d", id), r)
@@ -132,7 +132,7 @@ func (s *Server) handleStockAlertCheck(w http.ResponseWriter, r *http.Request, i
 
 	status, err := s.checkOneStockAlert(a)
 	if err != nil {
-		jsonErr(w, "check stock: "+err.Error())
+		s.apiErr(w, r, "check stock: ", err)
 		return
 	}
 	jsonOK(w, map[string]string{"status": status, "shape": a.Shape, "region": a.Region})
@@ -192,6 +192,7 @@ loop:
 		}
 		wg.Add(1)
 		go func(alert db.StockAlert) {
+			defer recoverBackground("stock-monitor")
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
@@ -242,7 +243,7 @@ func (s *Server) checkOneStockAlert(a *db.StockAlert) (string, error) {
 
 // buildStockAlertMessage formats a Telegram notification for a stock status change.
 func buildStockAlertMessage(region, shape, ad, status string) string {
-	emoji := "⚠️"  // warning
+	emoji := "⚠️" // warning
 	switch status {
 	case "available":
 		emoji = "✅" // white check mark

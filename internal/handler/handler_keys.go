@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-
 )
 
 func (s *Server) handleKeys(w http.ResponseWriter, r *http.Request) {
@@ -15,7 +14,7 @@ func (s *Server) handleKeys(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		entries, err := os.ReadDir(s.cfg.KeysDir)
 		if err != nil {
-			jsonErr(w, "read keys dir: "+err.Error())
+			s.apiErr(w, r, "read keys dir: ", err)
 			return
 		}
 		var keys []map[string]interface{}
@@ -37,7 +36,7 @@ func (s *Server) handleKeys(w http.ResponseWriter, r *http.Request) {
 
 	case http.MethodPost:
 		if err := r.ParseMultipartForm(32 << 20); err != nil {
-			jsonErr(w, "parse multipart: "+err.Error())
+			s.apiErr(w, r, "parse multipart: ", err)
 			return
 		}
 		files := r.MultipartForm.File["files"]
@@ -56,7 +55,7 @@ func (s *Server) handleKeys(w http.ResponseWriter, r *http.Request) {
 			dst := filepath.Join(s.cfg.KeysDir, name)
 			src, err := fh.Open()
 			if err != nil {
-				jsonErr(w, "open upload: "+err.Error())
+				s.apiErr(w, r, "open upload: ", err)
 				return
 			}
 			out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
@@ -65,14 +64,14 @@ func (s *Server) handleKeys(w http.ResponseWriter, r *http.Request) {
 				if os.IsPermission(err) {
 					jsonErr(w, fmt.Sprintf("permission denied writing key file — check that %s is writable", s.cfg.KeysDir))
 				} else {
-					jsonErr(w, "create file: "+err.Error())
+					s.apiErr(w, r, "create file: ", err)
 				}
 				return
 			}
 			if _, err := io.Copy(out, src); err != nil {
 				out.Close()
 				src.Close()
-				jsonErr(w, "write file: "+err.Error())
+				s.apiErr(w, r, "write file: ", err)
 				return
 			}
 			out.Close()
@@ -99,7 +98,7 @@ func (s *Server) handleKeyByID(w http.ResponseWriter, r *http.Request) {
 	case http.MethodDelete:
 		path := filepath.Join(s.cfg.KeysDir, name)
 		if err := os.Remove(path); err != nil {
-			jsonErr(w, "delete key: "+err.Error())
+			s.apiErr(w, r, "delete key: ", err)
 			return
 		}
 		s.audit(0, "keys:delete", name, r)

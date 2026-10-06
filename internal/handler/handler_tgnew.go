@@ -12,6 +12,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"path"
 	"strconv"
 	"strings"
 	"sync"
@@ -324,28 +325,34 @@ var tgInteractiveCommands = []string{
 }
 
 // tgSSHValidateCommand returns an error message if the command must be
-// rejected, or "" if it is allowed. Blocks interactive/shell commands and
-// chaining/injection operators so the blocklist cannot be bypassed
-// (e.g. "echo x; top", "cmd && reboot", "echo x | bash", "$(rm -rf /)").
+// rejected, or "" if it is allowed. Shell metacharacters are rejected outright;
+// pipes are allowed but every segment is checked by basename so absolute paths
+// such as /bin/sh or wrappers such as `xargs` cannot bypass the blocklist.
 func tgSSHValidateCommand(command string) string {
-	for _, op := range []string{";", "&&", "||", "`", "$(", "\n", "\r"} {
+	for _, op := range []string{";", "&&", "||", "`", "$", "\n", "\r", ">", "<", "&", "(", ")", "{", "}"} {
 		if strings.Contains(command, op) {
-			return "❌ 不支持命令链或注入操作符（; && || 反引号 $() 换行），请使用单条命令。"
+			return "❌ 命令不能包含 shell 元字符（; & < > $ ` ( ) { } ||）。"
 		}
 	}
-	// Check the first one/two words of every pipe segment so "echo x | bash"
-	// cannot smuggle an interactive/shell command past the blocklist, while
-	// "tail -f ..." (two-word entry) is still caught.
+	wrappers := map[string]bool{
+		"env": true, "xargs": true, "nohup": true, "time": true,
+		"nice": true, "timeout": true, "stdbuf": true,
+		"command": true, "eval": true, "exec": true, "busybox": true,
+	}
 	for _, seg := range strings.Split(command, "|") {
 		fields := strings.Fields(seg)
 		if len(fields) == 0 {
-			continue
+			return "❌ 命令包含空的管道段。"
+		}
+		base := path.Base(fields[0])
+		if wrappers[base] {
+			return "❌ 不支持包装命令（env/xargs/timeout/exec 等）。"
 		}
 		for _, ic := range tgInteractiveCommands {
-			if fields[0] == ic {
+			if base == ic {
 				return "❌ 不支持交互式命令（如 vi, top, tail -f 等），请使用非交互式命令。"
 			}
-			if len(fields) >= 2 && fields[0]+" "+fields[1] == ic {
+			if len(fields) >= 2 && base+" "+fields[1] == ic {
 				return "❌ 不支持交互式命令（如 vi, top, tail -f 等），请使用非交互式命令。"
 			}
 		}

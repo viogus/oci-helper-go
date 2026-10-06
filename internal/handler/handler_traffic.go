@@ -287,6 +287,7 @@ func (s *Server) collectTrafficStats(ctx context.Context, tenant *db.Tenant, reg
 		wg.Add(1)
 		sem <- struct{}{}
 		go func(i int, region string) {
+			defer recoverBackground("traffic-aggregate")
 			defer wg.Done()
 			defer func() { <-sem }()
 			// Each region builds its own client: SetRegion mutates every SDK
@@ -348,7 +349,7 @@ func (s *Server) handleTraffic(w http.ResponseWriter, r *http.Request) {
 		EndTime    string `json:"end_time"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		jsonErr(w, "invalid body: "+err.Error())
+		s.apiErr(w, r, "invalid body: ", err)
 		return
 	}
 
@@ -387,7 +388,7 @@ func (s *Server) handleTraffic(w http.ResponseWriter, r *http.Request) {
 
 	data, err := client.GetVNICTtraffic(r.Context(), vnicCompartment, vnicID, startTime, endTime)
 	if err != nil {
-		jsonErr(w, "get traffic: "+err.Error())
+		s.apiErr(w, r, "get traffic: ", err)
 		return
 	}
 	jsonOK(w, map[string]interface{}{"data": data, "vnic_id": vnicID})
@@ -415,7 +416,7 @@ func (s *Server) handleTrafficCondition(w http.ResponseWriter, r *http.Request) 
 	// List region subscriptions.
 	regions, err := client.ListRegionSubscriptions(r.Context())
 	if err != nil {
-		jsonErr(w, "list regions: "+err.Error())
+		s.apiErr(w, r, "list regions: ", err)
 		return
 	}
 
@@ -444,6 +445,7 @@ func (s *Server) handleTrafficCondition(w http.ResponseWriter, r *http.Request) 
 		wg.Add(1)
 		sem <- struct{}{}
 		go func(region string) {
+			defer recoverBackground("traffic-instances")
 			defer wg.Done()
 			defer func() { <-sem }()
 			opts := s.listRegionInstances(ctx, tenant, region)
@@ -487,7 +489,7 @@ func (s *Server) handleTrafficVnics(w http.ResponseWriter, r *http.Request) {
 
 	vnics, err := client.GetInstanceVNICs(r.Context(), tenant.TenancyOCID, bareOCID(instanceID))
 	if err != nil {
-		jsonErr(w, "get vnics: "+err.Error())
+		s.apiErr(w, r, "get vnics: ", err)
 		return
 	}
 
@@ -523,7 +525,7 @@ func (s *Server) handleTrafficAccountStats(w http.ResponseWriter, r *http.Reques
 		EndTime   string `json:"end_time"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		jsonErr(w, "invalid body: "+err.Error())
+		s.apiErr(w, r, "invalid body: ", err)
 		return
 	}
 	if req.TenantID == 0 {
@@ -554,7 +556,7 @@ func (s *Server) handleTrafficAccountStats(w http.ResponseWriter, r *http.Reques
 		regions, err = s.trafficRegions(r.Context(), tenant)
 		if err != nil {
 			if errors.Is(err, errNoSubscribedRegions) {
-				jsonErr(w, err.Error())
+				s.apiErr(w, r, "internal error", err)
 			} else {
 				s.clientSafeErr(w, "oci client init failed", err)
 			}

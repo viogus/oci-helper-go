@@ -27,7 +27,7 @@ func (s *Server) handleStopVNC(w http.ResponseWriter, r *http.Request) {
 		ConsoleID  string `json:"console_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		jsonErr(w, "invalid body: "+err.Error())
+		s.apiErr(w, r, "invalid body: ", err)
 		return
 	}
 
@@ -39,7 +39,7 @@ func (s *Server) handleStopVNC(w http.ResponseWriter, r *http.Request) {
 	// If a specific console_id is given, delete it
 	if req.ConsoleID != "" {
 		if err := client.DeleteConsoleConnection(r.Context(), req.ConsoleID); err != nil {
-			jsonErr(w, "delete console connection: "+err.Error())
+			s.apiErr(w, r, "delete console connection: ", err)
 			return
 		}
 		jsonOK(w, map[string]string{"status": "deleted"})
@@ -53,7 +53,7 @@ func (s *Server) handleStopVNC(w http.ResponseWriter, r *http.Request) {
 	}
 	conns, err := client.ListConsoleConnections(r.Context(), instanceID)
 	if err != nil {
-		jsonErr(w, "list console connections: "+err.Error())
+		s.apiErr(w, r, "list console connections: ", err)
 		return
 	}
 	deleted := 0
@@ -109,7 +109,7 @@ func (s *Server) handleConsoleWait(w http.ResponseWriter, r *http.Request) {
 	for time.Now().Before(deadline) {
 		conn, err := client.GetConsoleConnection(r.Context(), consoleID)
 		if err != nil {
-			jsonErr(w, "get console: "+err.Error())
+			s.apiErr(w, r, "get console: ", err)
 			return
 		}
 		state := ""

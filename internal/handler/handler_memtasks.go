@@ -113,7 +113,7 @@ func (s *Server) handleMemTasks(w http.ResponseWriter, r *http.Request, taskType
 			Remark              string   `json:"remark"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			jsonErr(w, "invalid body: "+err.Error())
+			s.apiErr(w, r, "invalid body: ", err)
 			return
 		}
 
@@ -150,9 +150,9 @@ func (s *Server) handleMemTasks(w http.ResponseWriter, r *http.Request, taskType
 
 			// Start background retry loop
 			if taskType == "change_ip" {
-				go s.runChangeIPLoop(task)
+				safeGo(func() { s.runChangeIPLoop(task) })
 			} else {
-				go s.runUpdateCfgLoop(task)
+				safeGo(func() { s.runUpdateCfgLoop(task) })
 			}
 			s.audit(req.TenantID, "mem-task:add:"+taskType, req.InstanceID, r)
 			jsonOK(w, map[string]string{"task_id": id, "status": "started"})

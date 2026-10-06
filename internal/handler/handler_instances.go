@@ -35,7 +35,7 @@ func (s *Server) handleInstances(w http.ResponseWriter, r *http.Request) {
 		}
 		list, total, err := s.store.ListInstancesPaginated(tenantID, keyword, state, page, size)
 		if err != nil {
-			jsonErr(w, "list instances: "+err.Error())
+			s.apiErr(w, r, "list instances: ", err)
 			return
 		}
 		if list == nil {
@@ -69,7 +69,7 @@ func (s *Server) createInstance(w http.ResponseWriter, r *http.Request) {
 		OperationSystem    string   `json:"operationSystem"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		jsonErr(w, "invalid body: "+err.Error())
+		s.apiErr(w, r, "invalid body: ", err)
 		return
 	}
 
@@ -102,7 +102,7 @@ func (s *Server) createInstance(w http.ResponseWriter, r *http.Request) {
 			RootPassword:    req.RootPassword,
 		}
 		if err := s.store.CreateCreateTask(task); err != nil {
-			jsonErr(w, "create recurring task: "+err.Error())
+			s.apiErr(w, r, "create recurring task: ", err)
 			return
 		}
 		s.audit(req.TenantID, "instance:create-task", fmt.Sprintf("schedule %d instances every %ds", task.CreateNumbers, task.IntervalSeconds), r)
@@ -182,7 +182,7 @@ func (s *Server) createInstance(w http.ResponseWriter, r *http.Request) {
 
 	inst, err := client.LaunchInstanceWithRequest(r.Context(), launchReq)
 	if err != nil {
-		jsonErr(w, "launch: "+err.Error())
+		s.apiErr(w, r, "launch: ", err)
 		return
 	}
 
@@ -242,7 +242,7 @@ func (s *Server) handleInstanceAction(w http.ResponseWriter, r *http.Request) {
 		CaptchaTarget       string `json:"captchaTarget"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		jsonErr(w, "invalid body: "+err.Error())
+		s.apiErr(w, r, "invalid body: ", err)
 		return
 	}
 
@@ -279,7 +279,7 @@ func (s *Server) handleInstanceAction(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if err := client.TerminateInstance(ctx, bareOCID(instanceID), req.PreserveBootVolume, req.PreserveDataVolumes); err != nil {
-			jsonErr(w, "terminate: "+err.Error())
+			s.apiErr(w, r, "terminate: ", err)
 			return
 		}
 		if err := s.store.UpdateInstanceState(instanceID, "TERMINATING"); err != nil {
@@ -288,7 +288,7 @@ func (s *Server) handleInstanceAction(w http.ResponseWriter, r *http.Request) {
 	case "start":
 		_, err := client.InstanceAction(ctx, bareOCID(instanceID), core.InstanceActionActionStart)
 		if err != nil {
-			jsonErr(w, "start: "+err.Error())
+			s.apiErr(w, r, "start: ", err)
 			return
 		}
 		if err := s.store.UpdateInstanceState(instanceID, "STARTING"); err != nil {
@@ -297,7 +297,7 @@ func (s *Server) handleInstanceAction(w http.ResponseWriter, r *http.Request) {
 	case "stop":
 		_, err := client.InstanceAction(ctx, bareOCID(instanceID), core.InstanceActionActionStop)
 		if err != nil {
-			jsonErr(w, "stop: "+err.Error())
+			s.apiErr(w, r, "stop: ", err)
 			return
 		}
 		if err := s.store.UpdateInstanceState(instanceID, "STOPPING"); err != nil {
@@ -306,7 +306,7 @@ func (s *Server) handleInstanceAction(w http.ResponseWriter, r *http.Request) {
 	case "reboot":
 		_, err := client.InstanceAction(ctx, bareOCID(instanceID), core.InstanceActionActionReset)
 		if err != nil {
-			jsonErr(w, "reboot: "+err.Error())
+			s.apiErr(w, r, "reboot: ", err)
 			return
 		}
 		if err := s.store.UpdateInstanceState(instanceID, "STARTING"); err != nil {
@@ -315,7 +315,7 @@ func (s *Server) handleInstanceAction(w http.ResponseWriter, r *http.Request) {
 	case "softstop":
 		_, err := client.InstanceAction(ctx, bareOCID(instanceID), core.InstanceActionActionSoftstop)
 		if err != nil {
-			jsonErr(w, "softstop: "+err.Error())
+			s.apiErr(w, r, "softstop: ", err)
 			return
 		}
 		if err := s.store.UpdateInstanceState(instanceID, "STOPPING"); err != nil {
@@ -324,7 +324,7 @@ func (s *Server) handleInstanceAction(w http.ResponseWriter, r *http.Request) {
 	case "softreset":
 		_, err := client.InstanceAction(ctx, bareOCID(instanceID), core.InstanceActionActionSoftreset)
 		if err != nil {
-			jsonErr(w, "softreset: "+err.Error())
+			s.apiErr(w, r, "softreset: ", err)
 			return
 		}
 		if err := s.store.UpdateInstanceState(instanceID, "STARTING"); err != nil {
@@ -365,7 +365,7 @@ func (s *Server) handleBatchStart(w http.ResponseWriter, r *http.Request) {
 		InstanceIDs []string `json:"instanceIds"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		jsonErr(w, "invalid body: "+err.Error())
+		s.apiErr(w, r, "invalid body: ", err)
 		return
 	}
 	if req.TenantID == 0 || len(req.InstanceIDs) == 0 {
@@ -375,7 +375,7 @@ func (s *Server) handleBatchStart(w http.ResponseWriter, r *http.Request) {
 	payload, err := json.Marshal(req)
 	if err != nil {
 		log.Printf("[batch:start] marshal: %v", err)
-		jsonErr(w, "marshal payload: "+err.Error())
+		s.apiErr(w, r, "marshal payload: ", err)
 		return
 	}
 	task := &db.Task{
@@ -385,7 +385,7 @@ func (s *Server) handleBatchStart(w http.ResponseWriter, r *http.Request) {
 		Payload:  string(payload),
 	}
 	if err := s.store.CreateTask(task); err != nil {
-		jsonErr(w, "create task: "+err.Error())
+		s.apiErr(w, r, "create task: ", err)
 		return
 	}
 	s.audit(req.TenantID, "batch:start", fmt.Sprintf("%d instances", len(req.InstanceIDs)), r)
@@ -518,6 +518,7 @@ func (s *Server) syncVNICs(ctx context.Context, tenantID int64, regions []string
 		wg.Add(1)
 		sem <- struct{}{}
 		go func(region string, insts []db.Instance) {
+			defer recoverBackground("syncVnics")
 			defer wg.Done()
 			defer func() { <-sem }()
 			client, err := s.clientFor(tenant)
@@ -578,7 +579,7 @@ func (s *Server) handleChangeShape(w http.ResponseWriter, r *http.Request) {
 		MemoryGB   float32 `json:"memory_gb"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		jsonErr(w, "invalid body: "+err.Error())
+		s.apiErr(w, r, "invalid body: ", err)
 		return
 	}
 	client, _, ok := s.clientForInstance(req.TenantID, req.InstanceID, w)
@@ -588,7 +589,7 @@ func (s *Server) handleChangeShape(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
 	defer cancel()
 	if err := client.UpdateInstance(ctx, bareOCID(req.InstanceID), req.Shape, req.Ocpus, req.MemoryGB); err != nil {
-		jsonErr(w, "update instance: "+err.Error())
+		s.apiErr(w, r, "update instance: ", err)
 		return
 	}
 	s.audit(req.TenantID, "instance:change-shape", req.InstanceID, r)
@@ -605,7 +606,7 @@ func (s *Server) handleChangeBootVolume(w http.ResponseWriter, r *http.Request) 
 		SizeGB     int64  `json:"size_gb"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		jsonErr(w, "invalid body: "+err.Error())
+		s.apiErr(w, r, "invalid body: ", err)
 		return
 	}
 	client, tenant, ok := s.clientForInstance(req.TenantID, req.InstanceID, w)
@@ -616,7 +617,7 @@ func (s *Server) handleChangeBootVolume(w http.ResponseWriter, r *http.Request) 
 	defer cancel()
 	attachment, err := client.GetBootVolumeAttachment(ctx, tenant.TenancyOCID, bareOCID(req.InstanceID))
 	if err != nil {
-		jsonErr(w, "get boot volume: "+err.Error())
+		s.apiErr(w, r, "get boot volume: ", err)
 		return
 	}
 	if attachment.BootVolumeId == nil {
@@ -624,7 +625,7 @@ func (s *Server) handleChangeBootVolume(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if _, err := client.UpdateBootVolume(ctx, *attachment.BootVolumeId, req.SizeGB, ""); err != nil {
-		jsonErr(w, "update boot volume: "+err.Error())
+		s.apiErr(w, r, "update boot volume: ", err)
 		return
 	}
 	s.audit(req.TenantID, "instance:change-boot-volume", req.InstanceID, r)
@@ -651,7 +652,7 @@ func (s *Server) handleAttachIPv6(w http.ResponseWriter, r *http.Request) {
 		InstanceID string `json:"instance_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		jsonErr(w, "invalid body: "+err.Error())
+		s.apiErr(w, r, "invalid body: ", err)
 		return
 	}
 	client, _, ok := s.clientForInstance(req.TenantID, req.InstanceID, w)
@@ -662,7 +663,7 @@ func (s *Server) handleAttachIPv6(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	addr, err := client.EnableIPv6(ctx, bareOCID(req.InstanceID))
 	if err != nil {
-		jsonErr(w, "enable ipv6: "+err.Error())
+		s.apiErr(w, r, "enable ipv6: ", err)
 		return
 	}
 	s.audit(req.TenantID, "instance:attach-ipv6", req.InstanceID, r)
@@ -679,7 +680,7 @@ func (s *Server) handleDisableIPv6(w http.ResponseWriter, r *http.Request) {
 		InstanceID string `json:"instance_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		jsonErr(w, "invalid body: "+err.Error())
+		s.apiErr(w, r, "invalid body: ", err)
 		return
 	}
 	client, _, ok := s.clientForInstance(req.TenantID, req.InstanceID, w)
@@ -689,7 +690,7 @@ func (s *Server) handleDisableIPv6(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
 	defer cancel()
 	if err := client.DisableIPv6(ctx, bareOCID(req.InstanceID)); err != nil {
-		jsonErr(w, "disable ipv6: "+err.Error())
+		s.apiErr(w, r, "disable ipv6: ", err)
 		return
 	}
 	s.audit(req.TenantID, "instance:ipv6-disable", req.InstanceID, r)
@@ -706,7 +707,7 @@ func (s *Server) handleUpdateInstanceName(w http.ResponseWriter, r *http.Request
 		Name       string `json:"name"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		jsonErr(w, "invalid body: "+err.Error())
+		s.apiErr(w, r, "invalid body: ", err)
 		return
 	}
 	client, _, ok := s.clientForInstance(req.TenantID, req.InstanceID, w)
@@ -716,7 +717,7 @@ func (s *Server) handleUpdateInstanceName(w http.ResponseWriter, r *http.Request
 	ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
 	defer cancel()
 	if err := client.UpdateInstanceDisplayName(ctx, bareOCID(req.InstanceID), req.Name); err != nil {
-		jsonErr(w, "update name: "+err.Error())
+		s.apiErr(w, r, "update name: ", err)
 		return
 	}
 	s.audit(req.TenantID, "instance:update-name", req.InstanceID+" -> "+req.Name, r)
@@ -740,7 +741,7 @@ func (s *Server) handleChangeIP(w http.ResponseWriter, r *http.Request) {
 		Remark              string   `json:"remark"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		jsonErr(w, "invalid body: "+err.Error())
+		s.apiErr(w, r, "invalid body: ", err)
 		return
 	}
 	client, _, ok := s.clientForInstance(req.TenantID, req.InstanceID, w)
@@ -750,7 +751,7 @@ func (s *Server) handleChangeIP(w http.ResponseWriter, r *http.Request) {
 	// Try to change IP once (synchronous)
 	newIP, err := client.ChangeInstanceIP(r.Context(), bareOCID(req.InstanceID), req.CidrList)
 	if err != nil {
-		jsonErr(w, "change ip: "+err.Error())
+		s.apiErr(w, r, "change ip: ", err)
 		return
 	}
 	dnsErr := ""
@@ -780,7 +781,7 @@ func (s *Server) handleCheckAlive(w http.ResponseWriter, r *http.Request) {
 		InstanceIDs []string `json:"instance_ids"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		jsonErr(w, "invalid body: "+err.Error())
+		s.apiErr(w, r, "invalid body: ", err)
 		return
 	}
 	tenant, err := s.store.GetTenant(req.TenantID)
@@ -840,7 +841,7 @@ func (s *Server) handleCheckAliveBatch(w http.ResponseWriter, r *http.Request) {
 		TenantID int64 `json:"tenant_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		jsonErr(w, "invalid body: "+err.Error())
+		s.apiErr(w, r, "invalid body: ", err)
 		return
 	}
 	tenant, err := s.store.GetTenant(req.TenantID)
@@ -851,7 +852,7 @@ func (s *Server) handleCheckAliveBatch(w http.ResponseWriter, r *http.Request) {
 
 	instances, err := s.store.ListInstances(req.TenantID)
 	if err != nil {
-		jsonErr(w, "list instances: "+err.Error())
+		s.apiErr(w, r, "list instances: ", err)
 		return
 	}
 
@@ -878,6 +879,7 @@ func (s *Server) handleCheckAliveBatch(w http.ResponseWriter, r *http.Request) {
 		wg.Add(1)
 		sem <- struct{}{}
 		go func(inst db.Instance) {
+			defer recoverBackground("check-alive")
 			defer wg.Done()
 			defer func() { <-sem }()
 			if inst.PublicIP == "" {
@@ -912,7 +914,7 @@ func (s *Server) handleShrinkDisk(w http.ResponseWriter, r *http.Request) {
 		RetainNatGW bool   `json:"retain_nat_gw"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		jsonErr(w, "invalid body: "+err.Error())
+		s.apiErr(w, r, "invalid body: ", err)
 		return
 	}
 	if req.TenantID == 0 || req.InstanceID == "" {
@@ -930,7 +932,7 @@ func (s *Server) handleShrinkDisk(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	inst, err := client.GetInstance(ctx, ocid)
 	if err != nil {
-		jsonErr(w, "get instance: "+err.Error())
+		s.apiErr(w, r, "get instance: ", err)
 		return
 	}
 	compartmentID := strOr(inst.CompartmentId, tenant.TenancyOCID)
@@ -943,7 +945,7 @@ func (s *Server) handleShrinkDisk(w http.ResponseWriter, r *http.Request) {
 	// Step 2: Get the boot volume attachment for this instance.
 	attachments, err := client.ListBootVolumeAttachments(ctx, compartmentID, ocid)
 	if err != nil {
-		jsonErr(w, "list boot volume attachments: "+err.Error())
+		s.apiErr(w, r, "list boot volume attachments: ", err)
 		return
 	}
 	if len(attachments) == 0 {
@@ -961,7 +963,7 @@ func (s *Server) handleShrinkDisk(w http.ResponseWriter, r *http.Request) {
 	// Step 3: Get old boot volume size.
 	oldBV, err := client.GetBootVolume(ctx, oldVolumeID)
 	if err != nil {
-		jsonErr(w, "get boot volume: "+err.Error())
+		s.apiErr(w, r, "get boot volume: ", err)
 		return
 	}
 	oldSizeGB := int64(0)
@@ -978,7 +980,7 @@ func (s *Server) handleShrinkDisk(w http.ResponseWriter, r *http.Request) {
 	initialState := string(inst.LifecycleState)
 	if initialState == "RUNNING" || initialState == "STARTING" {
 		if _, err := client.InstanceAction(ctx, ocid, core.InstanceActionActionStop); err != nil {
-			jsonErr(w, "stop instance: "+err.Error())
+			s.apiErr(w, r, "stop instance: ", err)
 			return
 		}
 		log.Printf("[shrink-disk] stopping instance %s", ocid)
@@ -998,7 +1000,7 @@ func (s *Server) handleShrinkDisk(w http.ResponseWriter, r *http.Request) {
 		if initialState == "RUNNING" {
 			client.InstanceAction(context.Background(), ocid, core.InstanceActionActionStart)
 		}
-		jsonErr(w, "detach boot volume: "+err.Error())
+		s.apiErr(w, r, "detach boot volume: ", err)
 		return
 	}
 
@@ -1017,7 +1019,7 @@ func (s *Server) handleShrinkDisk(w http.ResponseWriter, r *http.Request) {
 		if initialState == "RUNNING" {
 			client.InstanceAction(context.Background(), ocid, core.InstanceActionActionStart)
 		}
-		jsonErr(w, "create boot volume: "+err.Error())
+		s.apiErr(w, r, "create boot volume: ", err)
 		return
 	}
 	newVolumeID := strOr(newBV.Id, "")
@@ -1045,7 +1047,7 @@ func (s *Server) handleShrinkDisk(w http.ResponseWriter, r *http.Request) {
 				if initialState == "RUNNING" {
 					client.InstanceAction(context.Background(), ocid, core.InstanceActionActionStart)
 				}
-				jsonErr(w, "poll new boot volume: "+pollErr.Error())
+				s.apiErr(w, r, "poll new boot volume: ", pollErr)
 				return
 			}
 			state := string(bv.LifecycleState)
@@ -1083,7 +1085,7 @@ func (s *Server) handleShrinkDisk(w http.ResponseWriter, r *http.Request) {
 		if initialState == "RUNNING" {
 			client.InstanceAction(context.Background(), ocid, core.InstanceActionActionStart)
 		}
-		jsonErr(w, "attach new boot volume: "+err.Error())
+		s.apiErr(w, r, "attach new boot volume: ", err)
 		return
 	}
 
@@ -1097,7 +1099,7 @@ func (s *Server) handleShrinkDisk(w http.ResponseWriter, r *http.Request) {
 	if initialState == "RUNNING" {
 		log.Printf("[shrink-disk] starting instance %s", ocid)
 		if _, err := client.InstanceAction(ctx, ocid, core.InstanceActionActionStart); err != nil {
-			jsonErr(w, fmt.Sprintf("boot volume shrunk to %dGB but failed to start instance: %v", targetSizeGB, err))
+			s.apiErr(w, r, fmt.Sprintf("boot volume shrunk to %dGB but failed to start instance", targetSizeGB), err)
 			return
 		}
 	}
@@ -1132,7 +1134,7 @@ func (s *Server) handleOneClick500M(w http.ResponseWriter, r *http.Request) {
 		SSHPort    int    `json:"ssh_port"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		jsonErr(w, "invalid body: "+err.Error())
+		s.apiErr(w, r, "invalid body: ", err)
 		return
 	}
 	client, _, ok := s.clientForInstance(req.TenantID, req.InstanceID, w)
@@ -1144,7 +1146,7 @@ func (s *Server) handleOneClick500M(w http.ResponseWriter, r *http.Request) {
 	}
 	inst, err := client.GetInstance(r.Context(), bareOCID(req.InstanceID))
 	if err != nil {
-		jsonErr(w, "get instance: "+err.Error())
+		s.apiErr(w, r, "get instance: ", err)
 		return
 	}
 	if inst.Shape == nil || !strings.Contains(strings.ToLower(*inst.Shape), "vm.standard.e") {
@@ -1153,7 +1155,7 @@ func (s *Server) handleOneClick500M(w http.ResponseWriter, r *http.Request) {
 	}
 	nlbIP, err := client.Enable500Mbps(r.Context(), bareOCID(req.InstanceID), req.SSHPort)
 	if err != nil {
-		jsonErr(w, "enable 500M: "+err.Error())
+		s.apiErr(w, r, "enable 500M: ", err)
 		return
 	}
 	s.audit(req.TenantID, "instance:500m-enable", req.InstanceID, r)
@@ -1173,7 +1175,7 @@ func (s *Server) handleOneClickClose500M(w http.ResponseWriter, r *http.Request)
 		RetainNatGW bool   `json:"retain_nat_gw"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		jsonErr(w, "invalid body: "+err.Error())
+		s.apiErr(w, r, "invalid body: ", err)
 		return
 	}
 	client, _, ok := s.clientForInstance(req.TenantID, req.InstanceID, w)
@@ -1181,7 +1183,7 @@ func (s *Server) handleOneClickClose500M(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if err := client.Disable500Mbps(r.Context(), bareOCID(req.InstanceID), req.RetainBL, req.RetainNatGW); err != nil {
-		jsonErr(w, "disable 500M: "+err.Error())
+		s.apiErr(w, r, "disable 500M: ", err)
 		return
 	}
 	s.audit(req.TenantID, "instance:500m-disable", req.InstanceID, r)
@@ -1198,7 +1200,7 @@ func (s *Server) handleNetworkStatus(w http.ResponseWriter, r *http.Request) {
 		InstanceIDs []string `json:"instance_ids"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		jsonErr(w, "invalid body: "+err.Error())
+		s.apiErr(w, r, "invalid body: ", err)
 		return
 	}
 	client, _, ok := s.getTenantClient(req.TenantID, w)
@@ -1244,7 +1246,7 @@ func (s *Server) handleAutoRescue(w http.ResponseWriter, r *http.Request) {
 		KeepBackupVolume bool   `json:"keep_backup_volume"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		jsonErr(w, "invalid body: "+err.Error())
+		s.apiErr(w, r, "invalid body: ", err)
 		return
 	}
 	client, _, ok := s.clientForInstance(req.TenantID, req.InstanceID, w)
@@ -1442,7 +1444,7 @@ func (s *Server) handleInstanceConfigUpdate(w http.ResponseWriter, r *http.Reque
 		MemoryGB    float32 `json:"memory_gb"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		jsonErr(w, "invalid body: "+err.Error())
+		s.apiErr(w, r, "invalid body: ", err)
 		return
 	}
 	client, _, ok := s.clientForInstance(req.TenantID, req.InstanceID, w)
@@ -1452,12 +1454,12 @@ func (s *Server) handleInstanceConfigUpdate(w http.ResponseWriter, r *http.Reque
 	ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
 	defer cancel()
 	if err := client.UpdateInstance(ctx, bareOCID(req.InstanceID), req.Shape, req.Ocpus, req.MemoryGB); err != nil {
-		jsonErr(w, "update instance: "+err.Error())
+		s.apiErr(w, r, "update instance: ", err)
 		return
 	}
 	if req.DisplayName != "" {
 		if err := client.UpdateInstanceDisplayName(ctx, bareOCID(req.InstanceID), req.DisplayName); err != nil {
-			jsonErr(w, "update display name: "+err.Error())
+			s.apiErr(w, r, "update display name: ", err)
 			return
 		}
 	}
@@ -1476,7 +1478,7 @@ func (s *Server) handleUpdateShape(w http.ResponseWriter, r *http.Request) {
 		Shape      string `json:"shape"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		jsonErr(w, "invalid body: "+err.Error())
+		s.apiErr(w, r, "invalid body: ", err)
 		return
 	}
 	client, _, ok := s.clientForInstance(req.TenantID, req.InstanceID, w)
@@ -1486,7 +1488,7 @@ func (s *Server) handleUpdateShape(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
 	defer cancel()
 	if err := client.UpdateInstance(ctx, bareOCID(req.InstanceID), req.Shape, 0, 0); err != nil {
-		jsonErr(w, "update shape: "+err.Error())
+		s.apiErr(w, r, "update shape: ", err)
 		return
 	}
 	s.audit(req.TenantID, "instance:update-shape", req.InstanceID, r)
@@ -1506,7 +1508,7 @@ func (s *Server) handleStartVNC(w http.ResponseWriter, r *http.Request) {
 		SSHKeyID   int64  `json:"ssh_key_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		jsonErr(w, "invalid body: "+err.Error())
+		s.apiErr(w, r, "invalid body: ", err)
 		return
 	}
 	client, _, ok := s.clientForInstance(req.TenantID, req.InstanceID, w)
@@ -1536,7 +1538,7 @@ func (s *Server) handleStartVNC(w http.ResponseWriter, r *http.Request) {
 	}
 	conn, err := client.CreateConsoleConnection(r.Context(), bareOCID(req.InstanceID), pubKey)
 	if err != nil {
-		jsonErr(w, "create console connection: "+err.Error())
+		s.apiErr(w, r, "create console connection: ", err)
 		return
 	}
 	// Start polling in background for connection to become active.
@@ -1584,7 +1586,7 @@ func (s *Server) handleInstanceConfigInfo(w http.ResponseWriter, r *http.Request
 		InstanceID string `json:"instance_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		jsonErr(w, "invalid body: "+err.Error())
+		s.apiErr(w, r, "invalid body: ", err)
 		return
 	}
 	client, tenant, ok := s.clientForInstance(req.TenantID, req.InstanceID, w)
@@ -1595,7 +1597,7 @@ func (s *Server) handleInstanceConfigInfo(w http.ResponseWriter, r *http.Request
 	// Get instance details
 	inst, err := client.GetInstance(ctx, bareOCID(req.InstanceID))
 	if err != nil {
-		jsonErr(w, "get instance: "+err.Error())
+		s.apiErr(w, r, "get instance: ", err)
 		return
 	}
 	// Get VNIC info

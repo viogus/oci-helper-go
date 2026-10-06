@@ -151,12 +151,12 @@ func (s *Server) handleShellWS(w http.ResponseWriter, r *http.Request) {
 	// ── Decrypt private key ───────────────────────────────────────────
 	encKey, err := s.getSSHEncryptionKey()
 	if err != nil {
-		jsonErr(w, "get encryption key: "+err.Error())
+		s.apiErr(w, r, "get encryption key: ", err)
 		return
 	}
 	privPEM, err := decryptSSHPrivateKey(encKey, sshKey.PrivateKey)
 	if err != nil {
-		jsonErr(w, "decrypt ssh key: "+err.Error())
+		s.apiErr(w, r, "decrypt ssh key: ", err)
 		return
 	}
 
@@ -448,38 +448,46 @@ func (s *Server) connectViaConsoleProxy(tenant *db.Tenant, inst *db.Instance, co
 		prevCleanup()
 	}
 
-	// Use direct-tcpip through the proxy to reach the instance's SSH port
+	// Use direct-tcpip through the proxy to reach the instance's SSH port.
+	// A fresh proxied connection is opened per auth attempt: an SSH handshake
+	// failure consumes the underlying TCP stream, so reusing it for the next
+	// username would always fail.
 	targetAddr := net.JoinHostPort(proxyInfo.TargetHost, strconv.Itoa(proxyInfo.TargetPort))
-	proxyConn, err := proxyClient.Dial("tcp", targetAddr)
-	if err != nil {
-		// Try common alternatives
+	dialTarget := func() (net.Conn, error) {
+		conn, derr := proxyClient.Dial("tcp", targetAddr)
+		if derr == nil {
+			return conn, nil
+		}
+		// Fall back to the conventional in-instance address if the OCID target
+		// is not resolvable through this proxy.
 		for _, alt := range []string{"localhost:22", "127.0.0.1:22"} {
-			proxyConn, err = proxyClient.Dial("tcp", alt)
-			if err == nil {
-				break
+			if conn, derr = proxyClient.Dial("tcp", alt); derr == nil {
+				return conn, nil
 			}
 		}
-		if err != nil {
-			cleanup()
-			return nil, nil, fmt.Errorf("proxy dial to %s: %w", targetAddr, err)
-		}
+		return nil, derr
 	}
 
-	// SSH handshake with the instance through the proxied connection. The
-	// instance login uses the caller's own key/signer; the user list matches
-	// the direct-SSH strategy.
-	for _, user := range userCandidates(loginUser) {
+	users := userCandidates(loginUser)
+	var lastErr error
+	for _, user := range users {
+		proxyConn, derr := dialTarget()
+		if derr != nil {
+			lastErr = derr
+			continue
+		}
 		cfg := *config
 		cfg.User = user
 		sshConn, chans, reqs, sshErr := gossh.NewClientConn(proxyConn, targetAddr, &cfg)
 		if sshErr == nil {
 			return gossh.NewClient(sshConn, chans, reqs), cleanup, nil
 		}
+		lastErr = sshErr
+		proxyConn.Close()
 	}
 
-	proxyConn.Close()
 	cleanup()
-	return nil, nil, fmt.Errorf("all auth attempts through console proxy failed (tried users %v)", userCandidates(loginUser))
+	return nil, nil, fmt.Errorf("all auth attempts through console proxy failed (tried users %v): %w", users, lastErr)
 }
 
 // consoleProxyInfo holds parsed OCI console connection proxy details.

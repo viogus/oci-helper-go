@@ -25,7 +25,7 @@ func (s *Server) handleVCNByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := client.DeleteVcn(r.Context(), idStr); err != nil {
-		jsonErr(w, "delete vcn: "+err.Error())
+		s.apiErr(w, r, "delete vcn: ", err)
 		return
 	}
 	s.audit(tenantID, "vcn:delete", idStr, r)

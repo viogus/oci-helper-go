@@ -25,7 +25,7 @@ func (s *Server) handleInstancePlans(w http.ResponseWriter, r *http.Request) {
 		}
 		list, total, err := s.store.ListInstancePlansPaginated(tenantID, keyword, page, size)
 		if err != nil {
-			jsonErr(w, "list plans: "+err.Error())
+			s.apiErr(w, r, "list plans: ", err)
 			return
 		}
 		if list == nil {
@@ -35,18 +35,18 @@ func (s *Server) handleInstancePlans(w http.ResponseWriter, r *http.Request) {
 
 	case http.MethodPost:
 		var req struct {
-			Name              string  `json:"name"`
-			TenantID          int64   `json:"tenant_id"`
-			Shape             string  `json:"shape"`
-			ImageID           string  `json:"image_id"`
-			SubnetID          string  `json:"subnet_id"`
-			AvailabilityDomain string `json:"availability_domain"`
-			BootVolumeSizeGB  int64   `json:"boot_volume_size_gb"`
-			OCPUs             float64 `json:"ocpus"`
-			MemoryGB          float64 `json:"memory_gb"`
+			Name               string  `json:"name"`
+			TenantID           int64   `json:"tenant_id"`
+			Shape              string  `json:"shape"`
+			ImageID            string  `json:"image_id"`
+			SubnetID           string  `json:"subnet_id"`
+			AvailabilityDomain string  `json:"availability_domain"`
+			BootVolumeSizeGB   int64   `json:"boot_volume_size_gb"`
+			OCPUs              float64 `json:"ocpus"`
+			MemoryGB           float64 `json:"memory_gb"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			jsonErr(w, "invalid body: "+err.Error())
+			s.apiErr(w, r, "invalid body: ", err)
 			return
 		}
 		if req.Name == "" || req.TenantID == 0 {
@@ -54,18 +54,18 @@ func (s *Server) handleInstancePlans(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		p := &db.InstancePlan{
-			Name:              req.Name,
-			TenantID:          req.TenantID,
-			Shape:             req.Shape,
-			ImageID:           req.ImageID,
-			SubnetID:          req.SubnetID,
+			Name:               req.Name,
+			TenantID:           req.TenantID,
+			Shape:              req.Shape,
+			ImageID:            req.ImageID,
+			SubnetID:           req.SubnetID,
 			AvailabilityDomain: req.AvailabilityDomain,
-			BootVolumeSizeGB:  req.BootVolumeSizeGB,
-			OCPUs:             req.OCPUs,
-			MemoryGB:          req.MemoryGB,
+			BootVolumeSizeGB:   req.BootVolumeSizeGB,
+			OCPUs:              req.OCPUs,
+			MemoryGB:           req.MemoryGB,
 		}
 		if err := s.store.CreateInstancePlan(p); err != nil {
-			jsonErr(w, "create plan: "+err.Error())
+			s.apiErr(w, r, "create plan: ", err)
 			return
 		}
 		s.audit(req.TenantID, "instance-plan:create", req.Name, r)
@@ -88,32 +88,32 @@ func (s *Server) handleInstancePlanByID(w http.ResponseWriter, r *http.Request) 
 	switch r.Method {
 	case http.MethodPut:
 		var req struct {
-			Name              string  `json:"name"`
-			Shape             string  `json:"shape"`
-			ImageID           string  `json:"image_id"`
-			SubnetID          string  `json:"subnet_id"`
-			AvailabilityDomain string `json:"availability_domain"`
-			BootVolumeSizeGB  int64   `json:"boot_volume_size_gb"`
-			OCPUs             float64 `json:"ocpus"`
-			MemoryGB          float64 `json:"memory_gb"`
+			Name               string  `json:"name"`
+			Shape              string  `json:"shape"`
+			ImageID            string  `json:"image_id"`
+			SubnetID           string  `json:"subnet_id"`
+			AvailabilityDomain string  `json:"availability_domain"`
+			BootVolumeSizeGB   int64   `json:"boot_volume_size_gb"`
+			OCPUs              float64 `json:"ocpus"`
+			MemoryGB           float64 `json:"memory_gb"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			jsonErr(w, "invalid body: "+err.Error())
+			s.apiErr(w, r, "invalid body: ", err)
 			return
 		}
 		p := &db.InstancePlan{
-			ID:                id,
-			Name:              req.Name,
-			Shape:             req.Shape,
-			ImageID:           req.ImageID,
-			SubnetID:          req.SubnetID,
+			ID:                 id,
+			Name:               req.Name,
+			Shape:              req.Shape,
+			ImageID:            req.ImageID,
+			SubnetID:           req.SubnetID,
 			AvailabilityDomain: req.AvailabilityDomain,
-			BootVolumeSizeGB:  req.BootVolumeSizeGB,
-			OCPUs:             req.OCPUs,
-			MemoryGB:          req.MemoryGB,
+			BootVolumeSizeGB:   req.BootVolumeSizeGB,
+			OCPUs:              req.OCPUs,
+			MemoryGB:           req.MemoryGB,
 		}
 		if err := s.store.UpdateInstancePlan(p); err != nil {
-			jsonErr(w, "update plan: "+err.Error())
+			s.apiErr(w, r, "update plan: ", err)
 			return
 		}
 		s.audit(0, "instance-plan:update", fmt.Sprintf("plan:%d", id), r)
@@ -121,7 +121,7 @@ func (s *Server) handleInstancePlanByID(w http.ResponseWriter, r *http.Request) 
 
 	case http.MethodDelete:
 		if err := s.store.DeleteInstancePlan(id); err != nil {
-			jsonErr(w, "delete plan: "+err.Error())
+			s.apiErr(w, r, "delete plan: ", err)
 			return
 		}
 		s.audit(0, "instance-plan:delete", fmt.Sprintf("plan:%d", id), r)

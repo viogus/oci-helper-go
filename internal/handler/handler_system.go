@@ -16,7 +16,7 @@ func (s *Server) handleSystemMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 	snap, err := system.Collect()
 	if err != nil {
-		jsonErr(w, "collect system metrics: "+err.Error())
+		s.apiErr(w, r, "collect system metrics: ", err)
 		return
 	}
 	jsonOK(w, snap)

@@ -105,7 +105,7 @@ func (s *Server) startVersionUpdateNotify() {
 				continue
 			}
 			repo, _ := s.store.GetConfig("update_repo")
-			if repo == "" {
+			if repo == "" || !validRepoSpec(repo) {
 				continue
 			}
 			client := &http.Client{Timeout: 15 * time.Second}

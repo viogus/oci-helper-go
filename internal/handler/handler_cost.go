@@ -12,10 +12,10 @@ import (
 type costAnalysisRequest struct {
 	TenantID    int64  `json:"tenant_id"`
 	ReportType  string `json:"report_type"`
-	StartDate   string `json:"start_date"`   // yyyy-MM-dd
-	EndDate     string `json:"end_date"`     // yyyy-MM-dd
-	Granularity string `json:"granularity"`  // DAILY or MONTHLY
-	QueryType   string `json:"query_type"`   // COST or USAGE
+	StartDate   string `json:"start_date"`  // yyyy-MM-dd
+	EndDate     string `json:"end_date"`    // yyyy-MM-dd
+	Granularity string `json:"granularity"` // DAILY or MONTHLY
+	QueryType   string `json:"query_type"`  // COST or USAGE
 }
 
 // handleCostAnalysis handles POST /api/cost/analysis.
@@ -27,7 +27,7 @@ func (s *Server) handleCostAnalysis(w http.ResponseWriter, r *http.Request) {
 
 	var req costAnalysisRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		jsonErr(w, "invalid request body: "+err.Error())
+		s.apiErr(w, r, "invalid request body: ", err)
 		return
 	}
 
@@ -64,7 +64,7 @@ func (s *Server) handleCostAnalysis(w http.ResponseWriter, r *http.Request) {
 		ReportType:  req.ReportType,
 	})
 	if err != nil {
-		jsonErr(w, "cost query: "+err.Error())
+		s.apiErr(w, r, "cost query: ", err)
 		return
 	}
 
@@ -115,7 +115,7 @@ func (s *Server) handleCost(w http.ResponseWriter, r *http.Request) {
 		ReportType:  "MONTHLY_COST",
 	})
 	if err != nil {
-		jsonErr(w, "cost query: "+err.Error())
+		s.apiErr(w, r, "cost query: ", err)
 		return
 	}
 	if result == nil || len(result.Items) == 0 {

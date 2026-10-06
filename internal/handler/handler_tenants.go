@@ -54,7 +54,7 @@ func (s *Server) handleTenants(w http.ResponseWriter, r *http.Request) {
 		}
 		list, total, err := s.store.ListTenantsPaginated(keyword, page, size)
 		if err != nil {
-			jsonErr(w, "list tenants: "+err.Error())
+			s.apiErr(w, r, "list tenants: ", err)
 			return
 		}
 		if list == nil {
@@ -75,7 +75,7 @@ func (s *Server) handleTenants(w http.ResponseWriter, r *http.Request) {
 	case http.MethodPost:
 		var t db.Tenant
 		if err := json.NewDecoder(r.Body).Decode(&t); err != nil {
-			jsonErr(w, "invalid body: "+err.Error())
+			s.apiErr(w, r, "invalid body: ", err)
 			return
 		}
 		if t.Name == "" || t.TenancyOCID == "" || t.Region == "" || t.KeyFile == "" {
@@ -99,7 +99,7 @@ func (s *Server) handleTenants(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := s.store.CreateTenant(&t); err != nil {
-			jsonErr(w, "create tenant: "+err.Error())
+			s.apiErr(w, r, "create tenant: ", err)
 			return
 		}
 		s.audit(t.ID, "tenant:create", t.Name, r)
@@ -179,12 +179,12 @@ func (s *Server) handleTenantByID(w http.ResponseWriter, r *http.Request) {
 			Region         string  `json:"region"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			jsonErr(w, "invalid body: "+err.Error())
+			s.apiErr(w, r, "invalid body: ", err)
 			return
 		}
 		t, err := s.store.GetTenant(id)
 		if err != nil {
-			jsonErr(w, "get tenant: "+err.Error())
+			s.apiErr(w, r, "get tenant: ", err)
 			return
 		}
 		if t == nil {
@@ -207,7 +207,7 @@ func (s *Server) handleTenantByID(w http.ResponseWriter, r *http.Request) {
 		// Update tenant in DB
 		if _, err := s.store.DB().Exec(`UPDATE tenants SET name=?, region=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`,
 			t.Name, t.Region, id); err != nil {
-			jsonErr(w, "update tenant: "+err.Error())
+			s.apiErr(w, r, "update tenant: ", err)
 			return
 		}
 		s.audit(id, "tenant:update", t.Name, r)
@@ -221,7 +221,7 @@ func (s *Server) handleTenantByID(w http.ResponseWriter, r *http.Request) {
 		jsonOK(w, t)
 	case http.MethodDelete:
 		if err := s.store.DeleteTenantCascade(id); err != nil {
-			jsonErr(w, "delete tenant: "+err.Error())
+			s.apiErr(w, r, "delete tenant: ", err)
 			return
 		}
 		s.audit(id, "tenant:delete", fmt.Sprintf("id=%d", id), r)
@@ -256,7 +256,7 @@ func (s *Server) handleTenantInfo(w http.ResponseWriter, r *http.Request) {
 
 	t, err := s.store.GetTenant(id)
 	if err != nil {
-		jsonErr(w, "get tenant: "+err.Error())
+		s.apiErr(w, r, "get tenant: ", err)
 		return
 	}
 	if t == nil {
@@ -452,7 +452,7 @@ func (s *Server) tenantAndClient(w http.ResponseWriter, r *http.Request, idStr s
 	t, err := s.store.GetTenant(id)
 	if err != nil {
 		log.Printf("[tenantAndClient] get tenant %d: %v", id, err)
-		jsonErr(w, "get tenant: "+err.Error())
+		s.apiErr(w, r, "get tenant: ", err)
 		return 0, nil, nil, false
 	}
 	if t == nil {
@@ -461,7 +461,7 @@ func (s *Server) tenantAndClient(w http.ResponseWriter, r *http.Request, idStr s
 	}
 	client, err := s.clientFor(t)
 	if err != nil {
-		jsonErr(w, "create OCI client: "+err.Error())
+		s.apiErr(w, r, "create OCI client: ", err)
 		return 0, nil, nil, false
 	}
 	return id, t, client, true
@@ -490,7 +490,7 @@ func (s *Server) handleTenantUsers(w http.ResponseWriter, r *http.Request) {
 	}
 	users, err := client.ListUsers(r.Context(), t.TenancyOCID)
 	if err != nil {
-		jsonErr(w, "list users: "+err.Error())
+		s.apiErr(w, r, "list users: ", err)
 		return
 	}
 	type userInfo struct {
@@ -534,7 +534,7 @@ func (s *Server) handleTenantUserDelete(w http.ResponseWriter, r *http.Request) 
 		UserID string `json:"user_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		jsonErr(w, "invalid body: "+err.Error())
+		s.apiErr(w, r, "invalid body: ", err)
 		return
 	}
 	if body.UserID == "" {
@@ -542,7 +542,7 @@ func (s *Server) handleTenantUserDelete(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if err := client.DeleteUser(r.Context(), body.UserID); err != nil {
-		jsonErr(w, "delete user: "+err.Error())
+		s.apiErr(w, r, "delete user: ", err)
 		return
 	}
 	s.audit(id, "user:delete", body.UserID, r)
@@ -564,7 +564,7 @@ func (s *Server) handleTenantUserResetPassword(w http.ResponseWriter, r *http.Re
 		UserID string `json:"user_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		jsonErr(w, "invalid body: "+err.Error())
+		s.apiErr(w, r, "invalid body: ", err)
 		return
 	}
 	if body.UserID == "" {
@@ -591,12 +591,12 @@ func (s *Server) handleTenantUserResetPassword(w http.ResponseWriter, r *http.Re
 			log.Printf("[password-reset] classic API returned %d, trying Identity Domains fallback for user %s", code, body.UserID)
 			domainURL, domainErr := client.GetDomainURL(r.Context())
 			if domainErr != nil {
-				jsonErr(w, "reset password: classic API failed and no Identity Domain available: "+domainErr.Error())
+				s.apiErr(w, r, "reset password: classic API failed and no Identity Domain available: ", domainErr)
 				return
 			}
 			newPW, domainErr := client.ResetPasswordViaDomain(r.Context(), body.UserID, domainURL)
 			if domainErr != nil {
-				jsonErr(w, "reset password via Identity Domain: "+domainErr.Error())
+				s.apiErr(w, r, "reset password via Identity Domain: ", domainErr)
 				return
 			}
 			s.audit(id, "user:password:reset:domain", body.UserID, r)
@@ -604,7 +604,7 @@ func (s *Server) handleTenantUserResetPassword(w http.ResponseWriter, r *http.Re
 			return
 		}
 	}
-	jsonErr(w, "reset password: "+err.Error())
+	s.apiErr(w, r, "reset password: ", err)
 }
 
 // POST /api/tenants/{id}/users/update — update user email and/or description.
@@ -624,7 +624,7 @@ func (s *Server) handleTenantUserUpdate(w http.ResponseWriter, r *http.Request) 
 		Description string `json:"description"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		jsonErr(w, "invalid body: "+err.Error())
+		s.apiErr(w, r, "invalid body: ", err)
 		return
 	}
 	if body.UserID == "" {
@@ -644,7 +644,7 @@ func (s *Server) handleTenantUserUpdate(w http.ResponseWriter, r *http.Request) 
 	}
 	user, err := client.UpdateUser(r.Context(), body.UserID, emailPtr, descPtr)
 	if err != nil {
-		jsonErr(w, "update user: "+err.Error())
+		s.apiErr(w, r, "update user: ", err)
 		return
 	}
 	s.audit(id, "user:update", body.UserID, r)
@@ -666,7 +666,7 @@ func (s *Server) handleTenantMFAClear(w http.ResponseWriter, r *http.Request) {
 		UserID string `json:"user_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		jsonErr(w, "invalid body: "+err.Error())
+		s.apiErr(w, r, "invalid body: ", err)
 		return
 	}
 	if body.UserID == "" {
@@ -675,7 +675,7 @@ func (s *Server) handleTenantMFAClear(w http.ResponseWriter, r *http.Request) {
 	}
 	devices, err := client.ListMfaTotpDevices(r.Context(), body.UserID)
 	if err != nil {
-		jsonErr(w, "list mfa devices: "+err.Error())
+		s.apiErr(w, r, "list mfa devices: ", err)
 		return
 	}
 	var deleted int
@@ -684,7 +684,7 @@ func (s *Server) handleTenantMFAClear(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		if err := client.DeleteMfaTotpDevice(r.Context(), body.UserID, *d.Id); err != nil {
-			jsonErr(w, fmt.Sprintf("delete mfa device %s: %v", *d.Id, err))
+			s.apiErr(w, r, fmt.Sprintf("delete mfa device %s", *d.Id), err)
 			return
 		}
 		deleted++
@@ -708,7 +708,7 @@ func (s *Server) handleTenantAPIKeysClear(w http.ResponseWriter, r *http.Request
 		UserID string `json:"user_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		jsonErr(w, "invalid body: "+err.Error())
+		s.apiErr(w, r, "invalid body: ", err)
 		return
 	}
 	if body.UserID == "" {
@@ -717,7 +717,7 @@ func (s *Server) handleTenantAPIKeysClear(w http.ResponseWriter, r *http.Request
 	}
 	keys, err := client.ListApiKeys(r.Context(), body.UserID)
 	if err != nil {
-		jsonErr(w, "list api keys: "+err.Error())
+		s.apiErr(w, r, "list api keys: ", err)
 		return
 	}
 	var deleted int
@@ -726,7 +726,7 @@ func (s *Server) handleTenantAPIKeysClear(w http.ResponseWriter, r *http.Request
 			continue
 		}
 		if err := client.DeleteApiKey(r.Context(), body.UserID, *k.Fingerprint); err != nil {
-			jsonErr(w, fmt.Sprintf("delete api key %s: %v", *k.Fingerprint, err))
+			s.apiErr(w, r, fmt.Sprintf("delete api key %s", *k.Fingerprint), err)
 			return
 		}
 		deleted++
@@ -750,7 +750,7 @@ func (s *Server) handleTenantPasswordPolicy(w http.ResponseWriter, r *http.Reque
 	t, err := s.store.GetTenant(id)
 	if err != nil {
 		log.Printf("[password-policy] get tenant %d: %v", id, err)
-		jsonErr(w, "get tenant: "+err.Error())
+		s.apiErr(w, r, "get tenant: ", err)
 		return
 	}
 	if t == nil {
@@ -761,12 +761,12 @@ func (s *Server) handleTenantPasswordPolicy(w http.ResponseWriter, r *http.Reque
 		PasswordExpiresAfter int `json:"password_expires_after"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		jsonErr(w, "invalid body: "+err.Error())
+		s.apiErr(w, r, "invalid body: ", err)
 		return
 	}
 	configKey := fmt.Sprintf("tenant_pwdexp_%d", id)
 	if err := s.store.SetConfig(configKey, strconv.Itoa(body.PasswordExpiresAfter)); err != nil {
-		jsonErr(w, "save password policy: "+err.Error())
+		s.apiErr(w, r, "save password policy: ", err)
 		return
 	}
 	jsonOK(w, map[string]interface{}{
@@ -792,7 +792,7 @@ func (s *Server) handleTenantProxy(w http.ResponseWriter, r *http.Request) {
 	t, err := s.store.GetTenant(id)
 	if err != nil {
 		log.Printf("[proxy] get tenant %d: %v", id, err)
-		jsonErr(w, "get tenant: "+err.Error())
+		s.apiErr(w, r, "get tenant: ", err)
 		return
 	}
 	if t == nil {
@@ -803,12 +803,12 @@ func (s *Server) handleTenantProxy(w http.ResponseWriter, r *http.Request) {
 		ProxyURL string `json:"proxy_url"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		jsonErr(w, "invalid body: "+err.Error())
+		s.apiErr(w, r, "invalid body: ", err)
 		return
 	}
 	configKey := fmt.Sprintf("tenant_proxy_%d", id)
 	if err := s.store.SetConfig(configKey, req.ProxyURL); err != nil {
-		jsonErr(w, "save proxy config: "+err.Error())
+		s.apiErr(w, r, "save proxy config: ", err)
 		return
 	}
 	s.audit(id, "tenant:proxy", req.ProxyURL, r)
@@ -823,7 +823,7 @@ func (s *Server) handleTenantUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := r.ParseMultipartForm(10 << 20); err != nil {
-		jsonErr(w, "parse multipart form: "+err.Error())
+		s.apiErr(w, r, "parse multipart form: ", err)
 		return
 	}
 	if files := r.MultipartForm.File["files"]; len(files) > 0 {
@@ -832,7 +832,7 @@ func (s *Server) handleTenantUpload(w http.ResponseWriter, r *http.Request) {
 	}
 	keyFile, handler, err := r.FormFile("key_file")
 	if err != nil {
-		jsonErr(w, "key_file required: "+err.Error())
+		s.apiErr(w, r, "key_file required: ", err)
 		return
 	}
 	defer keyFile.Close()
@@ -840,7 +840,7 @@ func (s *Server) handleTenantUpload(w http.ResponseWriter, r *http.Request) {
 	// Read the key file content
 	buf := make([]byte, handler.Size)
 	if _, err := io.ReadFull(keyFile, buf); err != nil {
-		jsonErr(w, "read key file: "+err.Error())
+		s.apiErr(w, r, "read key file: ", err)
 		return
 	}
 
@@ -851,7 +851,7 @@ func (s *Server) handleTenantUpload(w http.ResponseWriter, r *http.Request) {
 	}
 	keyPath := filepath.Join(s.cfg.KeysDir, filename)
 	if err := os.WriteFile(keyPath, buf, 0600); err != nil {
-		jsonErr(w, "save key file: "+err.Error())
+		s.apiErr(w, r, "save key file: ", err)
 		return
 	}
 	// Clean up key file on validation or DB failure
@@ -881,16 +881,16 @@ func (s *Server) handleTenantUpload(w http.ResponseWriter, r *http.Request) {
 	tCopy.KeyFile = keyPath
 	client, err := ociclient.NewClient(&tCopy, "")
 	if err != nil {
-		jsonErr(w, "oci client: "+err.Error())
+		s.apiErr(w, r, "oci client: ", err)
 		return
 	}
 	if err := client.ValidateCredentials(r.Context(), tenant.TenancyOCID); err != nil {
-		jsonErr(w, "OCI connectivity check failed: "+err.Error())
+		s.apiErr(w, r, "OCI connectivity check failed: ", err)
 		return
 	}
 
 	if err := s.store.CreateTenant(tenant); err != nil {
-		jsonErr(w, "create tenant: "+err.Error())
+		s.apiErr(w, r, "create tenant: ", err)
 		return
 	}
 	removeFile = false
@@ -913,7 +913,7 @@ func (s *Server) handleRefreshPlanType(w http.ResponseWriter, r *http.Request) {
 	}
 	t, err := s.store.GetTenant(id)
 	if err != nil {
-		jsonErr(w, "get tenant: "+err.Error())
+		s.apiErr(w, r, "get tenant: ", err)
 		return
 	}
 	if t == nil {
@@ -952,7 +952,7 @@ func (s *Server) handleRefreshPlanType(w http.ResponseWriter, r *http.Request) {
 	}
 	configKey := fmt.Sprintf("tenant_plan_refresh_%d", id)
 	if err := s.store.SetConfig(configKey, time.Now().Format(time.RFC3339)); err != nil {
-		jsonErr(w, "save refresh time: "+err.Error())
+		s.apiErr(w, r, "save refresh time: ", err)
 		return
 	}
 	s.audit(id, "tenant:refresh-plan-type", "", r)
@@ -973,7 +973,7 @@ func (s *Server) handleRefreshPlanTypeBatch(w http.ResponseWriter, r *http.Reque
 		TenantIDs []int64 `json:"tenant_ids"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		jsonErr(w, "invalid body: "+err.Error())
+		s.apiErr(w, r, "invalid body: ", err)
 		return
 	}
 	if len(req.TenantIDs) == 0 {

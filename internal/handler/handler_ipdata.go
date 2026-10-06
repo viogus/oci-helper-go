@@ -22,7 +22,7 @@ func (s *Server) handleIpData(w http.ResponseWriter, r *http.Request) {
 		dataType := r.URL.Query().Get("type")
 		list, err := s.store.ListIpData(tenantID, dataType)
 		if err != nil {
-			jsonErr(w, "list ip data: "+err.Error())
+			s.apiErr(w, r, "list ip data: ", err)
 			return
 		}
 		if list == nil {
@@ -40,14 +40,14 @@ func (s *Server) handleIpData(w http.ResponseWriter, r *http.Request) {
 			Enabled  bool   `json:"enabled"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			jsonErr(w, "invalid body: "+err.Error())
+			s.apiErr(w, r, "invalid body: ", err)
 			return
 		}
 
 		// Special action: load OCI instance IPs
 		if req.Action == "load_oci" {
 			if req.TenantID == 0 {
-				go s.handleIpDataLoadOCIGlobal(r)
+				safeGo(func() { s.handleIpDataLoadOCIGlobal(r) })
 				jsonOK(w, map[string]string{"status": "started"})
 				return
 			}
@@ -94,7 +94,7 @@ func (s *Server) handleIpData(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if err := s.store.CreateIpData(data); err != nil {
-			jsonErr(w, "create ip data: "+err.Error())
+			s.apiErr(w, r, "create ip data: ", err)
 			return
 		}
 		s.audit(data.TenantID, "ip-data:create", data.CIDR, r)
@@ -141,6 +141,9 @@ func (s *Server) handleIpDataLoadOCIGlobal(r *http.Request) {
 				if inst.LifecycleState != core.InstanceLifecycleStateRunning {
 					continue
 				}
+				if inst.Id == nil {
+					continue
+				}
 				vnics, err := client.GetInstanceVNICs(ctx, t.TenancyOCID, *inst.Id)
 				if err != nil || len(vnics) == 0 || vnics[0].PublicIp == nil {
 					continue
@@ -181,7 +184,7 @@ func (s *Server) handleIpDataLoadOCI(w http.ResponseWriter, r *http.Request, ten
 	_ = t
 	instances, err := s.store.ListInstances(tenantID)
 	if err != nil {
-		jsonErr(w, "list instances: "+err.Error())
+		s.apiErr(w, r, "list instances: ", err)
 		return
 	}
 	added := 0
@@ -228,12 +231,12 @@ func (s *Server) handleIpDataByID(w http.ResponseWriter, r *http.Request) {
 	case http.MethodPut:
 		var data db.IpData
 		if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
-			jsonErr(w, "invalid body: "+err.Error())
+			s.apiErr(w, r, "invalid body: ", err)
 			return
 		}
 		data.ID = id
 		if err := s.store.UpdateIpData(&data); err != nil {
-			jsonErr(w, "update ip data: "+err.Error())
+			s.apiErr(w, r, "update ip data: ", err)
 			return
 		}
 		s.audit(0, "ip-data:update", fmt.Sprintf("id:%d", id), r)
@@ -241,7 +244,7 @@ func (s *Server) handleIpDataByID(w http.ResponseWriter, r *http.Request) {
 
 	case http.MethodDelete:
 		if err := s.store.DeleteIpData(id); err != nil {
-			jsonErr(w, "delete ip data: "+err.Error())
+			s.apiErr(w, r, "delete ip data: ", err)
 			return
 		}
 		s.audit(0, "ip-data:delete", fmt.Sprintf("id:%d", id), r)

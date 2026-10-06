@@ -19,7 +19,7 @@ func (s *Server) handlePublicIPs(w http.ResponseWriter, r *http.Request) {
 		}
 		ips, err := client.ListPublicIPs(r.Context(), t.TenancyOCID)
 		if err != nil {
-			jsonErr(w, "list public ips: "+err.Error())
+			s.apiErr(w, r, "list public ips: ", err)
 			return
 		}
 		jsonOK(w, ips)
@@ -30,7 +30,7 @@ func (s *Server) handlePublicIPs(w http.ResponseWriter, r *http.Request) {
 			CompartmentID string `json:"compartmentId"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			jsonErr(w, "invalid body: "+err.Error())
+			s.apiErr(w, r, "invalid body: ", err)
 			return
 		}
 		client, t, ok := s.getTenantClient(req.TenantID, w)
@@ -48,7 +48,7 @@ func (s *Server) handlePublicIPs(w http.ResponseWriter, r *http.Request) {
 			Lifetime:      lifetime,
 		})
 		if err != nil {
-			jsonErr(w, "create public ip: "+err.Error())
+			s.apiErr(w, r, "create public ip: ", err)
 			return
 		}
 		s.audit(req.TenantID, "publicip:create", strOr(ip.DisplayName, ""), r)
@@ -73,7 +73,7 @@ func (s *Server) handlePublicIPByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := client.DeletePublicIP(r.Context(), idStr); err != nil {
-		jsonErr(w, "delete public ip: "+err.Error())
+		s.apiErr(w, r, "delete public ip: ", err)
 		return
 	}
 	s.audit(tenantID, "publicip:delete", idStr, r)

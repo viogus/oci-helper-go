@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -124,7 +125,7 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 	}
 	list, total, err := s.store.ListTasksPaginated(keyword, page, size)
 	if err != nil {
-		jsonErr(w, "list tasks: "+err.Error())
+		s.apiErr(w, r, "list tasks: ", err)
 		return
 	}
 	if list == nil {
@@ -149,7 +150,7 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 	}
 	list, total, err := s.store.ListAuditPaginated(keyword, page, size)
 	if err != nil {
-		jsonErr(w, "list audit: "+err.Error())
+		s.apiErr(w, r, "list audit: ", err)
 		return
 	}
 	if list == nil {
@@ -176,7 +177,7 @@ func (s *Server) handleTelegramWebhook(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Service Unavailable", http.StatusServiceUnavailable)
 		return
 	}
-	if r.Header.Get("X-Telegram-Bot-Api-Secret-Token") != webhookSecret {
+	if subtle.ConstantTimeCompare([]byte(r.Header.Get("X-Telegram-Bot-Api-Secret-Token")), []byte(webhookSecret)) != 1 {
 		log.Printf("[telegram] webhook: invalid secret token from %s", maskIP(extractIP(r)))
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
@@ -187,25 +188,34 @@ func (s *Server) handleTelegramWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Chat-ID allowlist: when telegram_chat_id is configured, only that chat
-	// may drive the bot (protects destructive actions like /ssh, terminate,
-	// and restore). Notifications always go to telegram_chat_id regardless.
-	if chatIDStr, _ := s.store.GetConfig("telegram_chat_id"); chatIDStr != "" {
-		allowed, _ := strconv.ParseInt(chatIDStr, 10, 64)
-		var senderChat int64
-		if update.CallbackQuery != nil && update.CallbackQuery.Message != nil {
-			senderChat = update.CallbackQuery.Message.Chat.ID
-		} else if update.Message != nil {
-			senderChat = update.Message.Chat.ID
-		}
-		if allowed != 0 && senderChat != allowed {
-			log.Printf("[telegram] webhook: rejecting update from unauthorized chat %d (allowlist=%d)", senderChat, allowed)
-			jsonOK(w, map[string]string{"status": "ignored"})
-			return
-		}
+	// Chat-ID allowlist (fail-closed): the bot only acts for the single
+	// configured chat. When telegram_chat_id is unset, only /start is answered
+	// so an operator can discover the ID; every other message and all callback
+	// queries are rejected. This prevents any Telegram user from driving the bot
+	// (SSH, terminate, restore) on a deployment that forgot to set the allowlist.
+	rawChatID := strings.TrimSpace(mustConfig(s.store, "telegram_chat_id"))
+	configured := rawChatID != ""
+	allowedChat, _ := strconv.ParseInt(rawChatID, 10, 64)
+
+	var senderChat int64
+	if update.CallbackQuery != nil && update.CallbackQuery.Message != nil {
+		senderChat = update.CallbackQuery.Message.Chat.ID
+	} else if update.Message != nil {
+		senderChat = update.Message.Chat.ID
 	}
 
 	bot := telegram.New(token)
+
+	if !configured || allowedChat == 0 || senderChat != allowedChat {
+		if !configured && update.Message != nil && strings.TrimSpace(update.Message.Text) == "/start" {
+			bot.SendMessage(senderChat, fmt.Sprintf("Your chat ID is %d.\nAdd it to Settings → Telegram chat ID to enable bot commands.", senderChat))
+			jsonOK(w, map[string]string{"status": "ok"})
+			return
+		}
+		log.Printf("[telegram] webhook: rejecting update from unauthorized chat %d (allowlist=%q)", senderChat, rawChatID)
+		jsonOK(w, map[string]string{"status": "ignored"})
+		return
+	}
 
 	// Handle callback queries (button clicks)
 	if update.CallbackQuery != nil {
@@ -337,7 +347,7 @@ func (s *Server) handleLimits(w http.ResponseWriter, r *http.Request) {
 		ServiceName string `json:"service_name"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		jsonErr(w, "invalid body: "+err.Error())
+		s.apiErr(w, r, "invalid body: ", err)
 		return
 	}
 	if req.TenantID == 0 {
@@ -355,12 +365,12 @@ func (s *Server) handleLimits(w http.ResponseWriter, r *http.Request) {
 	}
 	client, err := s.clientFor(tenant)
 	if err != nil {
-		jsonErr(w, "oci client: "+err.Error())
+		s.apiErr(w, r, "oci client: ", err)
 		return
 	}
 	limits, err := client.GetLimits(r.Context(), tenant.Region, req.ServiceName)
 	if err != nil {
-		jsonErr(w, "get limits: "+err.Error())
+		s.apiErr(w, r, "get limits: ", err)
 		return
 	}
 	jsonOK(w, map[string]interface{}{
@@ -389,12 +399,12 @@ func (s *Server) handleLimitsServices(w http.ResponseWriter, r *http.Request) {
 	tenant.Region = region
 	client, err := s.clientFor(tenant)
 	if err != nil {
-		jsonErr(w, "oci client: "+err.Error())
+		s.apiErr(w, r, "oci client: ", err)
 		return
 	}
 	services, err := client.ListServices(r.Context())
 	if err != nil {
-		jsonErr(w, "list services: "+err.Error())
+		s.apiErr(w, r, "list services: ", err)
 		return
 	}
 	jsonOK(w, services)
@@ -568,18 +578,18 @@ func (s *Server) handleDingTalkNotify(w http.ResponseWriter, r *http.Request) {
 		Title   string `json:"title"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		jsonErr(w, "invalid body: "+err.Error())
+		s.apiErr(w, r, "invalid body: ", err)
 		return
 	}
 	bot := dingtalk.New(webhookURL)
 	if req.Title != "" {
 		if err := bot.SendMarkdown(req.Title, req.Content); err != nil {
-			jsonErr(w, "dingtalk: "+err.Error())
+			s.apiErr(w, r, "dingtalk: ", err)
 			return
 		}
 	} else {
 		if err := bot.SendText(req.Content); err != nil {
-			jsonErr(w, "dingtalk: "+err.Error())
+			s.apiErr(w, r, "dingtalk: ", err)
 			return
 		}
 	}
@@ -603,7 +613,7 @@ func (s *Server) handleDingTalkTest(w http.ResponseWriter, r *http.Request) {
 	}
 	bot := dingtalk.New(webhookURL)
 	if err := bot.SendText("oci-helper DingTalk notification test"); err != nil {
-		jsonErr(w, "dingtalk test failed: "+err.Error())
+		s.apiErr(w, r, "dingtalk test failed: ", err)
 		return
 	}
 	jsonOK(w, map[string]string{"status": "ok"})
@@ -627,6 +637,10 @@ func (s *Server) handleUpdateCheck(w http.ResponseWriter, r *http.Request) {
 	updateRepo, _ := s.store.GetConfig("update_repo")
 	if updateRepo == "" {
 		jsonOK(w, map[string]string{"error": "update repository not configured"})
+		return
+	}
+	if !validRepoSpec(updateRepo) {
+		jsonOK(w, map[string]string{"error": "update repository must be in owner/repo form"})
 		return
 	}
 	url := fmt.Sprintf("https://api.github.com/repos/%s/releases/latest", updateRepo)
@@ -653,6 +667,34 @@ func (s *Server) handleUpdateCheck(w http.ResponseWriter, r *http.Request) {
 		"html_url":     info.HTMLURL,
 		"body":         info.Body,
 	})
+}
+
+// mustConfig reads a config value, returning "" on error. Convenience for
+// call sites that only need the string.
+func mustConfig(store *db.Store, key string) string {
+	v, _ := store.GetConfig(key)
+	return v
+}
+
+// validRepoSpec accepts only "owner/repo" with GitHub-safe characters so a
+// configured value cannot inject a different host or path into the API URL.
+func validRepoSpec(repo string) bool {
+	parts := strings.Split(repo, "/")
+	if len(parts) != 2 {
+		return false
+	}
+	for _, p := range parts {
+		if p == "" || p == "." || p == ".." {
+			return false
+		}
+		for _, c := range p {
+			if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+				(c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.') {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func (s *Server) handleUpdateNow(w http.ResponseWriter, r *http.Request) {
@@ -725,7 +767,7 @@ func (s *Server) handleCaptchaSend(w http.ResponseWriter, r *http.Request) {
 		Target    string `json:"target"`    // chat_id or webhook override
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		jsonErr(w, "invalid body: "+err.Error())
+		s.apiErr(w, r, "invalid body: ", err)
 		return
 	}
 	if req.Recipient == "" || req.Target == "" {
@@ -764,11 +806,11 @@ func (s *Server) handleCaptchaSend(w http.ResponseWriter, r *http.Request) {
 		// Parse target as chat ID (int64)
 		chatID, err := strconv.ParseInt(req.Target, 10, 64)
 		if err != nil {
-			jsonErr(w, "invalid telegram chat_id: "+err.Error())
+			s.apiErr(w, r, "invalid telegram chat_id: ", err)
 			return
 		}
 		if err := bot.SendMessage(chatID, message); err != nil {
-			jsonErr(w, "telegram send: "+err.Error())
+			s.apiErr(w, r, "telegram send: ", err)
 			return
 		}
 	case "dingtalk":
@@ -779,7 +821,7 @@ func (s *Server) handleCaptchaSend(w http.ResponseWriter, r *http.Request) {
 		}
 		bot := dingtalk.New(webhookURL)
 		if err := bot.SendText(message); err != nil {
-			jsonErr(w, "dingtalk send: "+err.Error())
+			s.apiErr(w, r, "dingtalk send: ", err)
 			return
 		}
 	default:

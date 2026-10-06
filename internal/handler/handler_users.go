@@ -29,7 +29,7 @@ func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		list, err := s.store.ListUsers()
 		if err != nil {
-			jsonErr(w, "list users: "+err.Error())
+			s.apiErr(w, r, "list users: ", err)
 			return
 		}
 		if list == nil {
@@ -45,7 +45,7 @@ func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
 			Role     string `json:"role"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			jsonErr(w, "invalid body: "+err.Error())
+			s.apiErr(w, r, "invalid body: ", err)
 			return
 		}
 		if req.Username == "" || req.Password == "" {
@@ -54,7 +54,7 @@ func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
 		}
 		hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
 		if err != nil {
-			jsonErr(w, "hash password: "+err.Error())
+			s.apiErr(w, r, "hash password: ", err)
 			return
 		}
 		if req.Role == "" {
@@ -67,7 +67,7 @@ func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
 			Email:        req.Email,
 		}
 		if err := s.store.CreateUser(u); err != nil {
-			jsonErr(w, "create user: "+err.Error())
+			s.apiErr(w, r, "create user: ", err)
 			return
 		}
 		s.audit(0, "user:create", req.Username, r)
@@ -106,7 +106,7 @@ func (s *Server) handleUserByID(w http.ResponseWriter, r *http.Request) {
 		if action == "mfa" || action == "mfa-device" {
 			// Clear MFA for user
 			if err := s.store.UpdateUserMFA(id, "", false); err != nil {
-				jsonErr(w, "clear mfa: "+err.Error())
+				s.apiErr(w, r, "clear mfa: ", err)
 				return
 			}
 			s.audit(0, "user:mfa:clear", strconv.FormatInt(id, 10), r)
@@ -114,9 +114,11 @@ func (s *Server) handleUserByID(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if action == "reset-password" {
-			var req struct{ Password string `json:"password"` }
+			var req struct {
+				Password string `json:"password"`
+			}
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-				jsonErr(w, "invalid body: "+err.Error())
+				s.apiErr(w, r, "invalid body: ", err)
 				return
 			}
 			if req.Password == "" {
@@ -125,11 +127,11 @@ func (s *Server) handleUserByID(w http.ResponseWriter, r *http.Request) {
 			}
 			hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
 			if err != nil {
-				jsonErr(w, "hash: "+err.Error())
+				s.apiErr(w, r, "hash: ", err)
 				return
 			}
 			if err := s.store.UpdateUserPassword(id, string(hash)); err != nil {
-				jsonErr(w, "update password: "+err.Error())
+				s.apiErr(w, r, "update password: ", err)
 				return
 			}
 			s.audit(0, "user:password:reset", strconv.FormatInt(id, 10), r)
@@ -155,7 +157,7 @@ func (s *Server) handleUserByID(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			if err := s.store.DeleteUser(id); err != nil {
-				jsonErr(w, "delete user: "+err.Error())
+				s.apiErr(w, r, "delete user: ", err)
 				return
 			}
 			s.audit(0, "user:delete", strconv.FormatInt(id, 10), r)
@@ -174,7 +176,7 @@ func (s *Server) handleUserByID(w http.ResponseWriter, r *http.Request) {
 			}
 			secret := auth.GenerateMFA()
 			if err := s.store.UpdateUserMFA(id, secret, false); err != nil {
-				jsonErr(w, "save mfa secret: "+err.Error())
+				s.apiErr(w, r, "save mfa secret: ", err)
 				return
 			}
 			uri := auth.TOTPURI(secret, u.Username, "oci-helper")
@@ -187,7 +189,7 @@ func (s *Server) handleUserByID(w http.ResponseWriter, r *http.Request) {
 				Code string `json:"code"`
 			}
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-				jsonErr(w, "invalid body: "+err.Error())
+				s.apiErr(w, r, "invalid body: ", err)
 				return
 			}
 			u, err := s.store.GetUserByID(id)
@@ -204,7 +206,7 @@ func (s *Server) handleUserByID(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			if err := s.store.UpdateUserMFA(id, u.MFASecret, true); err != nil {
-				jsonErr(w, "enable mfa: "+err.Error())
+				s.apiErr(w, r, "enable mfa: ", err)
 				return
 			}
 			s.audit(0, "user:mfa:enabled", u.Username, r)
@@ -216,7 +218,7 @@ func (s *Server) handleUserByID(w http.ResponseWriter, r *http.Request) {
 				Code string `json:"code"`
 			}
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-				jsonErr(w, "invalid body: "+err.Error())
+				s.apiErr(w, r, "invalid body: ", err)
 				return
 			}
 			u, err := s.store.GetUserByID(id)
@@ -229,7 +231,7 @@ func (s *Server) handleUserByID(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			if err := s.store.UpdateUserMFA(id, "", false); err != nil {
-				jsonErr(w, "disable mfa: "+err.Error())
+				s.apiErr(w, r, "disable mfa: ", err)
 				return
 			}
 			s.audit(0, "user:mfa:disabled", u.Username, r)

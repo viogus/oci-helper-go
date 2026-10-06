@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"runtime/debug"
 	"time"
 
 	"github.com/oracle/oci-go-sdk/v65/core"
@@ -162,9 +163,17 @@ func (w *Worker) processNext() {
 }
 
 // runWithSem wraps a task runner with semaphore-based concurrency limiting.
+// A panic in the runner is recovered and marks the task failed, so one bad
+// task cannot take down the whole process (it runs in its own goroutine).
 func (w *Worker) runWithSem(t *db.Task, fn func(*db.Task)) {
 	w.batchSem <- struct{}{}
-	defer func() { <-w.batchSem }()
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("[worker] panic in task %d (%s): %v\n%s", t.ID, t.Type, r, debug.Stack())
+			w.store.UpdateTaskStatus(t.ID, "failed", 0, fmt.Sprintf("panic: %v", r))
+		}
+		<-w.batchSem
+	}()
 	fn(t)
 }
 

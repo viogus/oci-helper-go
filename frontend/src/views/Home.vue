@@ -223,7 +223,27 @@ function updateMarkers(tenants, instances) {
     regionGroups[key].instances.push(inst)
   }
 
+  for (const [region, group] of Object.entries(regionGroups)) {
+    // Offset markers slightly so overlapping regions are visible
+    const jitter = (Object.keys(regionGroups).indexOf(region) % 5) * 0.0003
+    const lat = group.coords[0] + jitter
+    const lng = group.coords[1] + jitter
+
+    const dominantState = group.running > 0 ? 'RUNNING' : (group.instances[0]?.state || 'default')
+    const icon = getIcon(dominantState)
+
+    const displayRegion = region.replace('us-', '').replace('eu-', '').replace('ap-', '').replace('me-', '').replace('sa-', '')
+    const label = `${displayRegion}: ${group.count} (${group.running} running)`
+
+    const marker = L.marker([lat, lng], { icon }).addTo(markerLayer)
+    marker.bindTooltip(label, { direction: 'top', offset: [0, -8] })
+  }
+}
+
 // Render city markers from IP geolocation data (glance cities).
+// Must live at module scope: it is called from onMounted below, so nesting it
+// inside updateMarkers would make that call a ReferenceError and leave the map
+// with no markers at all.
 function updateCityMarkers(cities) {
   if (!markerLayer || !cities?.length) return
   markerLayer.clearLayers()
@@ -244,23 +264,6 @@ function updateCityMarkers(cities) {
 
     const marker = L.marker([c.lat, c.lng], { icon }).addTo(markerLayer)
     marker.bindTooltip(tooltip, { direction: 'top', offset: [0, -8] })
-  }
-}
-
-  for (const [region, group] of Object.entries(regionGroups)) {
-    // Offset markers slightly so overlapping regions are visible
-    const jitter = (Object.keys(regionGroups).indexOf(region) % 5) * 0.0003
-    const lat = group.coords[0] + jitter
-    const lng = group.coords[1] + jitter
-
-    const dominantState = group.running > 0 ? 'RUNNING' : (group.instances[0]?.state || 'default')
-    const icon = getIcon(dominantState)
-
-    const displayRegion = region.replace('us-', '').replace('eu-', '').replace('ap-', '').replace('me-', '').replace('sa-', '')
-    const label = `${displayRegion}: ${group.count} (${group.running} running)`
-
-    const marker = L.marker([lat, lng], { icon }).addTo(markerLayer)
-    marker.bindTooltip(label, { direction: 'top', offset: [0, -8] })
   }
 }
 

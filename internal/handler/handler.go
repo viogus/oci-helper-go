@@ -416,12 +416,13 @@ func (s *Server) routes() {
 		// CSP: style-src 'unsafe-inline' is required by Element Plus UI library
 		// which injects inline <style> blocks for dynamic theming. Script is
 		// restricted to 'self' (no 'unsafe-inline' for scripts). img-src covers
-		// the map tile providers used by Home.vue (Carto, OSM, AMap) so the
-		// dashboard map is not blanked by CSP. Leaflet's OSM layer uses the
+		// the map tile providers used by Home.vue (OSM, OSM-DE, AMap, Esri) so
+		// the dashboard map is not blanked by CSP. Leaflet's OSM layer uses the
 		// bare host (no {s} subdomain), so tile.openstreetmap.org is listed
 		// explicitly: a leading-wildcard host-source is not guaranteed to
-		// cover the apex domain.
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://tile.openstreetmap.org https://*.tile.openstreetmap.org https://*.basemaps.cartocdn.com https://*.is.autonavi.com; connect-src 'self' ws: wss:; font-src 'self' data:; frame-src 'self'; object-src 'none'; base-uri 'self'")
+		// cover the apex domain. Re-adding a provider in Home.vue requires
+		// adding its host here too.
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://tile.openstreetmap.org https://*.tile.openstreetmap.org https://tile.openstreetmap.de https://*.is.autonavi.com https://server.arcgisonline.com; connect-src 'self' ws: wss:; font-src 'self' data:; frame-src 'self'; object-src 'none'; base-uri 'self'")
 		// Cache strategy: index.html must be revalidated every time — an old
 		// cached shell references hashed assets that a new deployment has
 		// removed, which makes the SPA render blank after an upgrade.

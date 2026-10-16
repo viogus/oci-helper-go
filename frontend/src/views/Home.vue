@@ -129,39 +129,57 @@ const markerColors = {
 }
 const iconCache = {}
 
-// Multiple tile providers with automatic fallback: Carto (default), then
-// OpenStreetMap, then AMap (高德, reachable from mainland China where
-// Carto/OSM are often blocked). On repeated tile errors we rotate to the
-// next provider so the map is never a blank grey box.
+// Key-less tile providers, tried in order, with automatic fallback on
+// repeated tile errors so the map is never a blank grey box.
+//
+// CARTO is deliberately NOT in this list any more: its basemaps now require an
+// API key (https://carto.com/basemaps/apikey/) and answer key-less requests
+// with HTTP 200 carrying an "API KEY REQUIRED" watermark. Because that is a
+// 200, Leaflet never fires `tileerror`, so the fallback below cannot rescue it
+// and the watermark sticks forever. To use CARTO again, register a key and add
+// back: { name: 'carto', url: 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png?api_key=YOUR_KEY', ... }
+// (and add https://*.basemaps.cartocdn.com to the CSP img-src in handler.go).
 const TILE_PROVIDERS = [
-  { name: 'carto', url: 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', opts: { maxZoom: 19, subdomains: 'abcd' } },
   { name: 'osm', url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png', opts: { maxZoom: 19 } },
-  { name: 'amap', url: 'https://webrd0{s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}', opts: { maxZoom: 18, subdomains: '1234' } },
+  // OSM mirror (FOSSGIS) that also stays reachable from mainland China, where
+  // the main OSM host is blocked.
+  { name: 'osm-de', url: 'https://tile.openstreetmap.de/{z}/{x}/{y}.png', opts: { maxZoom: 19 } },
+  // AMap / 高德, no key required. style=7 is the base map; style=8 is only the
+  // road + label overlay, which renders as an empty tile at low zoom.
+  { name: 'amap', url: 'https://webrd0{s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=7&x={x}&y={y}&z={z}', opts: { maxZoom: 18, subdomains: '1234' } },
+  { name: 'esri', url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}', opts: { maxZoom: 19 } },
 ]
 let tileProviderIdx = 0
 let tileLayer = null
-let tileErrors = 0
+let tileRotationStopped = false
 
 function loadTileLayer() {
   if (tileLayer) {
+    // Detach first: a removed layer can still deliver in-flight tileerror
+    // callbacks, which must not count against the newly loaded provider.
+    tileLayer.off()
     map.removeLayer(tileLayer)
     tileLayer = null
   }
-  if (tileProviderIdx >= TILE_PROVIDERS.length) {
-    tileProviderIdx = 0
-  }
   const p = TILE_PROVIDERS[tileProviderIdx]
-  tileErrors = 0
-  tileLayer = L.tileLayer(p.url, p.opts).addTo(map)
-  tileLayer.on('tileerror', () => {
-    tileErrors++
+  let errors = 0
+  const layer = L.tileLayer(p.url, p.opts)
+  layer.on('tileerror', () => {
+    if (tileRotationStopped || layer !== tileLayer) return
+    errors++
     // A few errors may be transient; 6+ means the provider is unreachable.
-    if (tileErrors >= 6) {
-      console.warn('[home-map] tile provider unreachable, switching: ' + p.name)
-      tileProviderIdx++
-      loadTileLayer()
+    if (errors < 6) return
+    if (tileProviderIdx + 1 >= TILE_PROVIDERS.length) {
+      // Every provider failed once: keep this one instead of rotating forever.
+      tileRotationStopped = true
+      console.warn('[home-map] all tile providers unreachable, keeping ' + p.name)
+      return
     }
+    console.warn('[home-map] tile provider unreachable, switching: ' + p.name)
+    tileProviderIdx++
+    loadTileLayer()
   })
+  tileLayer = layer.addTo(map)
 }
 
 function getIcon(state) {
@@ -188,6 +206,9 @@ function initMap() {
     attributionControl: false,
   })
 
+  // These live at module scope, so reset them for every fresh map instance.
+  tileProviderIdx = 0
+  tileRotationStopped = false
   loadTileLayer()
 
   markerLayer = L.layerGroup().addTo(map)

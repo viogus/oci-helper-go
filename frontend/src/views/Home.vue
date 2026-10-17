@@ -201,7 +201,9 @@ function initMap() {
     center: [20, 0],
     zoom: 2,
     minZoom: 2,
-    maxZoom: 8,
+    // Markers sit at public-IP (city) precision, so allow zooming in far
+    // enough to separate instances inside one city.
+    maxZoom: 10,
     zoomControl: true,
     attributionControl: false,
   })
@@ -288,19 +290,87 @@ function updateCityMarkers(cities) {
   }
 }
 
+// ── Per-instance markers ──────────────────────────────────
+function escapeHtml(v) {
+  return String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
+}
+
+// instanceCoords returns [lat, lng] for an instance: the geolocated position of
+// its public IP when available, otherwise the tenant/instance region.
+function instanceCoords(p, regionByTenant) {
+  if (p.lat && p.lng) return [p.lat, p.lng]
+  const region = (p.region || regionByTenant[p.tenantId] || '').toLowerCase()
+  return ociRegions[region] || null
+}
+
+// Render one marker per instance. Returns false when nothing could be placed,
+// so the caller can fall back to the coarser sources below.
+function updateInstanceMarkers(points, regionByTenant) {
+  if (!markerLayer || !points?.length) return false
+  markerLayer.clearLayers()
+
+  // Instances sharing coordinates (same city, or the same fallback region)
+  // would sit exactly on top of each other; spread the extras on a small ring.
+  const seen = new Map()
+  let drawn = 0
+  for (const p of points) {
+    const coords = instanceCoords(p, regionByTenant)
+    if (!coords) continue
+    const key = coords[0].toFixed(3) + ',' + coords[1].toFixed(3)
+    const idx = seen.get(key) || 0
+    seen.set(key, idx + 1)
+
+    let lat = coords[0]
+    let lng = coords[1]
+    if (idx > 0) {
+      const angle = ((idx - 1) % 8) * (Math.PI / 4)
+      const radius = 0.04 * (1 + Math.floor((idx - 1) / 8))
+      lat += Math.sin(angle) * radius
+      lng += Math.cos(angle) * radius
+    }
+
+    const place = [p.city, p.area, p.country].filter(Boolean).join(', ')
+    const tooltip = [
+      '<b>' + escapeHtml(p.name) + '</b>',
+      escapeHtml([p.state, p.region].filter(Boolean).join(' · ')),
+      escapeHtml([place, p.publicIp].filter(Boolean).join(' · ')),
+    ].filter(Boolean).join('<br>')
+
+    const marker = L.marker([lat, lng], { icon: getIcon(p.state), title: p.name }).addTo(markerLayer)
+    marker.bindTooltip(tooltip, { direction: 'top', offset: [0, -8] })
+    drawn++
+  }
+  return drawn > 0
+}
+
+// renderMapMarkers picks the most precise source available: one point per
+// instance, then geolocated IP-inventory cities, then one point per region.
+function renderMapMarkers(points, cities, tenants, instances, regionByTenant) {
+  if (updateInstanceMarkers(points, regionByTenant)) return
+  if (cities?.length) {
+    updateCityMarkers(cities)
+    return
+  }
+  updateMarkers(tenants, instances)
+}
+
 onMounted(async () => {
-  let tList = [], iList = [], cities = []
+  let tList = [], iList = [], cities = [], mapPoints = [], pending = 0
   try {
-    const [tenants, instances, tasks, glance] = await Promise.all([
+    const [tenants, instances, tasks, glance, mapData] = await Promise.all([
       get('/tenants', { size: 100 }),
       get('/instances', { size: 500 }),
       get('/tasks', { size: 100 }),
       get('/glance'),
+      // Optional: the dashboard still works if the map endpoint is unavailable.
+      get('/instances/map').catch(() => null),
     ])
     tList = tenants?.data || []
     iList = instances?.data || []
     const taList = tasks?.data || []
     cities = glance?.cities || []
+    mapPoints = mapData?.points || []
+    pending = mapData?.pending || 0
 
     stats[0].value = glance?.tenants ?? tList.length
     stats[1].value = glance?.instances ?? iList.length
@@ -317,11 +387,25 @@ onMounted(async () => {
   // Init map after data loaded
   await nextTick()
   initMap()
-  // Prefer IP geolocation cities markers; fall back to region-based markers.
-  if (cities.length > 0) {
-    updateCityMarkers(cities)
-  } else {
-    updateMarkers(tList, iList)
+
+  const regionByTenant = {}
+  for (const t of tList) {
+    if (t.region) regionByTenant[t.id] = t.region.toLowerCase()
+  }
+  renderMapMarkers(mapPoints, cities, tList, iList, regionByTenant)
+
+  // Public IPs are geolocated a few at a time (see handleInstanceMap), so poll
+  // a couple of times: the first markers appear immediately and the rest fill
+  // in without a manual refresh.
+  for (let i = 0; i < 3 && pending > 0; i++) {
+    await new Promise(resolve => setTimeout(resolve, 4000))
+    if (!map) return
+    try {
+      const more = await get('/instances/map')
+      mapPoints = more?.points || mapPoints
+      pending = more?.pending || 0
+      renderMapMarkers(mapPoints, cities, tList, iList, regionByTenant)
+    } catch { return }
   }
 })
 

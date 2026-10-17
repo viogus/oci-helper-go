@@ -66,6 +66,10 @@ type Server struct {
 	mfaCache   mfaCacheEntry
 	mfaCacheMu sync.RWMutex
 
+	// Per-public-IP geolocation for the dashboard world map, keyed by IP.
+	geoCache map[string]geoEntry
+	geoMu    sync.Mutex
+
 	auditCh chan *db.AuditLog
 
 	createTaskRunning sync.Map
@@ -253,6 +257,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/mfa/disable", s.withAdmin(s.handleMFADisable))
 	s.mux.HandleFunc("/api/tenants", s.withAuth(s.handleTenants))
 	s.mux.HandleFunc("/api/instances", s.withAuth(s.handleInstances))
+	s.mux.HandleFunc("/api/instances/map", s.withAuth(s.handleInstanceMap))
 	s.mux.HandleFunc("/api/tasks", s.withAuth(s.handleTasks))
 	s.mux.HandleFunc("/api/audit", s.withAuth(s.handleAudit))
 	s.mux.HandleFunc("/api/ai/chat", s.withAuth(s.handleAIChat))
